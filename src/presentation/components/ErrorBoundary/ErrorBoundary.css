@@ -92,7 +92,7 @@
 .error-boundary__btn--primary:hover {
   background: var(--accent-secondary);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.4);
+  box-shadow: 0 4px 12px rgba(49, 130, 246, 0.4);
 }
 
 .error-boundary__btn--secondary {

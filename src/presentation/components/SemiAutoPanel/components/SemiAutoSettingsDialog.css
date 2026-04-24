@@ -38,7 +38,7 @@
   /* Premium accent glow */
   box-shadow:
     var(--shadow-modal),
-    0 0 0 1px rgba(212, 175, 55, 0.08),
+    0 0 0 1px rgba(49, 130, 246, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
@@ -174,7 +174,7 @@
 .sa-dialog-select:focus {
   border-color: var(--accent-primary);
   background: var(--modal-bg);
-  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.15);
+  box-shadow: 0 0 0 3px rgba(49, 130, 246, 0.15);
 }
 
 .sa-input-suffix {
@@ -329,7 +329,7 @@
 .sa-btn-primary:hover {
   background: var(--accent-secondary);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.35);
+  box-shadow: 0 4px 12px rgba(49, 130, 246, 0.35);
 }
 
 .sa-btn-primary:active {
@@ -676,8 +676,8 @@
 }
 
 .sa-balance-item.negative {
-  background: rgba(227, 26, 56, 0.08);
-  border-color: rgba(227, 26, 56, 0.25);
+  background: rgba(240, 68, 82, 0.08);
+  border-color: rgba(240, 68, 82, 0.25);
 }
 
 .sa-balance-label {

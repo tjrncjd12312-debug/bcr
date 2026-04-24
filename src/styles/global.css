@@ -1,99 +1,108 @@
-/* BCR Predictor - Evolution Art Deco Design System */
-/* Aesthetic: Black + Gold inspired by Evolution Gaming Live Baccarat */
-/* Version: 4.0 - Evolution refresh */
+/* BCR Predictor - Toss-style Minimal Design System */
+/* Aesthetic: Clean Korean fintech — neutral dark, single blue accent */
+/* Version: 5.0 - Toss palette */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  /* ===== Background Hierarchy — Pure Black Art Deco ===== */
-  --bg-base: #0a0a0a;
-  --bg-elevated: #141414;
-  --bg-surface: #1a1a1a;
-  --bg-card: #1e1e1e;
-  --bg-panel: #1e1e1e;
-  --bg-tertiary: #262626;
-  --bg-hover: rgba(212, 175, 55, 0.06);
-  --bg-active: rgba(212, 175, 55, 0.12);
+  /* ===== Background Hierarchy — Clean Neutral Dark ===== */
+  --bg-base: #17171c;
+  --bg-elevated: #1d1d23;
+  --bg-surface: #22222a;
+  --bg-card: #26262f;
+  --bg-panel: #26262f;
+  --bg-tertiary: #2e2e38;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(49, 130, 246, 0.12);
 
-  /* ===== Baccarat Game Colors ===== */
-  --banker-color: #e31a38;
-  --banker-bg: rgba(227, 26, 56, 0.14);
-  --banker-glow: rgba(227, 26, 56, 0.5);
-  --banker-light: #ff5a75;
-  --player-color: #1e6be0;
-  --player-bg: rgba(30, 107, 224, 0.14);
-  --player-glow: rgba(30, 107, 224, 0.5);
-  --player-light: #5a9bff;
+  /* ===== Baccarat Game Colors — Toss palette ===== */
+  --banker-color: #f04452;
+  --banker-bg: rgba(240, 68, 82, 0.14);
+  --banker-glow: rgba(240, 68, 82, 0.45);
+  --banker-light: #ff7785;
+  --player-color: #3182f6;
+  --player-bg: rgba(49, 130, 246, 0.14);
+  --player-glow: rgba(49, 130, 246, 0.45);
+  --player-light: #4593fc;
   --tie-color: #22c55e;
   --tie-bg: rgba(34, 197, 94, 0.14);
 
-  /* ===== Evolution Brand Accent — Warm Gold ===== */
-  --accent-primary: #d4af37;
-  --accent-secondary: #f4ce49;
-  --accent-gold: #d4af37;
-  --accent-gold-bright: #f4ce49;
-  --accent-gold-muted: rgba(212, 175, 55, 0.15);
-  --accent-gold-dim: #8a6d1a;
-  --accent-text: #0a0a0a;
+  /* ===== Brand Accent — Toss Blue ===== */
+  --accent-primary: #3182f6;
+  --accent-secondary: #4593fc;
+  --accent-muted: rgba(49, 130, 246, 0.15);
+  --accent-text: #ffffff;
 
-  /* Legacy aliases — all point at gold */
-  --accent-color: #d4af37;
-  --accent-hover: #f4ce49;
-  --accent-muted: rgba(212, 175, 55, 0.15);
+  /* Legacy aliases — consolidated on Toss blue */
+  --accent-color: #3182f6;
+  --accent-hover: #4593fc;
+  --accent-gold: #3182f6;
+  --accent-gold-bright: #4593fc;
+  --accent-gold-muted: rgba(49, 130, 246, 0.15);
+  --accent-gold-dim: #1b64da;
 
-  /* Deprecated neon aliases — remapped to gold for SemiAuto compat */
-  --neon-blue: #d4af37;
-  --neon-gold: #f4ce49;
+  /* Deprecated aliases — remapped to Toss blue */
+  --neon-blue: #3182f6;
+  --neon-gold: #4593fc;
 
-  /* ===== Variant Accent — No Commission Purple ===== */
+  /* Short-name aliases used across component CSS */
+  --border: rgba(176, 184, 193, 0.14);
+  --gold: #3182f6;
+  --gold-bright: #4593fc;
+  --gold-dim: #1b64da;
+  --gold-muted: rgba(49, 130, 246, 0.15);
+  --brand-red: #f04452;
+  --brand-blue: #3182f6;
+
+  /* ===== Variant Accent — Purple (No Commission) ===== */
   --accent-purple: #8b5cf6;
   --accent-purple-muted: rgba(139, 92, 246, 0.15);
 
-  /* ===== Lightning flash ===== */
-  --lightning: #fff7c2;
-  --shadow-lightning: 0 0 30px rgba(255, 247, 194, 0.4);
+  /* ===== Flash accent (renamed from lightning, kept for compat) ===== */
+  --lightning: #4593fc;
+  --shadow-lightning: 0 0 24px rgba(49, 130, 246, 0.35);
 
-  /* ===== Status Colors — aligned to brand palette ===== */
+  /* ===== Status Colors ===== */
   --status-success: #22c55e;
-  --status-danger: #e31a38;
-  --status-warning: #f4ce49;
-  --status-info: #1e6be0;
-  --status-ready: #d4af37;
-  --status-idle: #6b6b6b;
+  --status-danger: #f04452;
+  --status-warning: #ffb020;
+  --status-info: #3182f6;
+  --status-ready: #3182f6;
+  --status-idle: #6b7684;
   --status-betting: #22c55e;
-  --status-error: #e31a38;
+  --status-error: #f04452;
 
-  /* ===== Text Hierarchy — tuned for pure-black bg ===== */
-  --text-primary: #f5f2ea;
-  --text-secondary: #c4bdac;
-  --text-muted: #948d7f;
-  --text-tertiary: #6b665c;
-  --text-on-accent: #0a0a0a;
+  /* ===== Text Hierarchy — Toss greys ===== */
+  --text-primary: #f2f4f6;
+  --text-secondary: #b0b8c1;
+  --text-muted: #8b95a1;
+  --text-tertiary: #6b7684;
+  --text-on-accent: #ffffff;
 
-  /* ===== Borders ===== */
-  --border-color: rgba(212, 175, 55, 0.18);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-accent: rgba(212, 175, 55, 0.5);
-  --border-banker: rgba(227, 26, 56, 0.35);
-  --border-player: rgba(30, 107, 224, 0.35);
+  /* ===== Borders — subtle neutral ===== */
+  --border-color: rgba(176, 184, 193, 0.14);
+  --border-subtle: rgba(176, 184, 193, 0.08);
+  --border-accent: rgba(49, 130, 246, 0.5);
+  --border-banker: rgba(240, 68, 82, 0.35);
+  --border-player: rgba(49, 130, 246, 0.35);
 
-  /* ===== Shadows ===== */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 20px rgba(212, 175, 55, 0.18);
-  --shadow-glow-banker: 0 0 20px rgba(227, 26, 56, 0.25);
-  --shadow-glow-player: 0 0 20px rgba(30, 107, 224, 0.25);
-  --shadow-glow-accent: 0 0 24px rgba(212, 175, 55, 0.22);
-  --shadow-modal: 0 25px 80px rgba(0, 0, 0, 0.75), 0 10px 30px rgba(0, 0, 0, 0.55);
+  /* ===== Shadows — soft Toss elevation ===== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 0 18px rgba(49, 130, 246, 0.18);
+  --shadow-glow-banker: 0 0 18px rgba(240, 68, 82, 0.22);
+  --shadow-glow-player: 0 0 18px rgba(49, 130, 246, 0.22);
+  --shadow-glow-accent: 0 0 22px rgba(49, 130, 246, 0.2);
+  --shadow-modal: 0 25px 70px rgba(0, 0, 0, 0.65), 0 10px 26px rgba(0, 0, 0, 0.45);
 
   /* ===== Modal/Dialog ===== */
-  --modal-backdrop: rgba(0, 0, 0, 0.85);
-  --modal-bg: #141414;
-  --modal-surface: #1a1a1a;
-  --modal-elevated: #262626;
-  --modal-border: rgba(212, 175, 55, 0.2);
-  --modal-border-accent: rgba(212, 175, 55, 0.5);
+  --modal-backdrop: rgba(0, 0, 0, 0.75);
+  --modal-bg: #1d1d23;
+  --modal-surface: #22222a;
+  --modal-elevated: #2e2e38;
+  --modal-border: rgba(176, 184, 193, 0.12);
+  --modal-border-accent: rgba(49, 130, 246, 0.5);
 
   /* ===== Dimensions ===== */
   --header-height: 52px;
@@ -147,7 +156,7 @@ body {
   background: var(--bg-base);
   /* Subtle dot pattern instead of grid */
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(212, 175, 55, 0.03) 1px, transparent 0);
+    radial-gradient(circle at 1px 1px, rgba(176, 184, 193, 0.04) 1px, transparent 0);
   background-size: 24px 24px;
   color: var(--text-primary);
   font-size: var(--fs-md);
@@ -204,7 +213,7 @@ select,
 .loading-spinner {
   width: 28px;
   height: 28px;
-  border: 2px solid rgba(212, 175, 55, 0.15);
+  border: 2px solid rgba(49, 130, 246, 0.15);
   border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -233,18 +242,18 @@ select,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.15);
+  background: rgba(49, 130, 246, 0.15);
   border-radius: 3px;
   transition: background var(--transition-fast);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 175, 55, 0.25);
+  background: rgba(49, 130, 246, 0.25);
 }
 
 /* Selection */
 ::selection {
-  background: rgba(212, 175, 55, 0.3);
+  background: rgba(49, 130, 246, 0.3);
   color: var(--text-primary);
 }
 
@@ -265,22 +274,22 @@ select,
   justify-content: center;
   gap: 8px;
   padding: 10px 20px;
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-gold-bright));
+  background: var(--accent-primary);
   color: var(--accent-text);
   border: none;
   border-radius: var(--radius-md);
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.6px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   cursor: pointer;
   transition: all var(--transition-fast);
-  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.25);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, var(--accent-gold-bright), var(--accent-primary));
+  background: var(--accent-secondary);
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(212, 175, 55, 0.4);
+  box-shadow: 0 4px 12px rgba(49, 130, 246, 0.3);
 }
 
 .btn-primary:active {

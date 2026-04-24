@@ -421,17 +421,17 @@
 
 .mosaic-martin-fill.level-2,
 .mosaic-martin-fill.level-3 {
-  background: linear-gradient(90deg, var(--status-warning), #d4af37);
+  background: linear-gradient(90deg, var(--status-warning), #3182f6);
 }
 
 .mosaic-martin-fill.level-4,
 .mosaic-martin-fill.level-5 {
-  background: linear-gradient(90deg, var(--status-danger), #e31a38);
+  background: linear-gradient(90deg, var(--status-danger), #f04452);
 }
 
 .mosaic-martin-fill.level-6,
 .mosaic-martin-fill.level-10 {
-  background: linear-gradient(90deg, #e31a38, #7a0d1e);
+  background: linear-gradient(90deg, #f04452, #7a0d1e);
 }
 
 .mosaic-footer-stats {
@@ -609,14 +609,14 @@
       var(--accent-gold-muted) 0%,
       transparent 30%,
       transparent 70%,
-      rgba(212, 175, 55, 0.08) 100%);
+      rgba(49, 130, 246, 0.08) 100%);
   animation: waveUp 2s ease-in-out infinite;
 }
 
 .mosaic-tile.thinking::after {
   bottom: 0;
   background: linear-gradient(0deg,
-      rgba(212, 175, 55, 0.1) 0%,
+      rgba(49, 130, 246, 0.1) 0%,
       transparent 40%);
   animation: waveDown 2.5s ease-in-out infinite;
 }
