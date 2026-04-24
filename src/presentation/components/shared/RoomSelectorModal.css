@@ -1,0 +1,269 @@
+/* RoomSelectorModal Styles - Shared */
+
+.rsm-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--modal-backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: rsm-fade-in 0.2s ease;
+  backdrop-filter: blur(12px);
+}
+
+@keyframes rsm-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.rsm-modal {
+  background: var(--modal-bg);
+  border-radius: var(--radius-xl);
+  width: 90%;
+  max-width: 480px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--modal-border);
+  animation: rsm-slide-up 0.2s ease;
+  box-shadow: var(--shadow-modal);
+}
+
+@keyframes rsm-slide-up {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Header */
+.rsm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--modal-surface);
+}
+
+.rsm-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rsm-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  transition: all var(--transition-fast);
+}
+
+.rsm-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Toolbar */
+.rsm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--modal-bg);
+}
+
+.rsm-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  transition: all var(--transition-fast);
+}
+
+.rsm-search:focus-within {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
+}
+
+.rsm-search svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rsm-search input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.rsm-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.rsm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.rsm-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.rsm-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-accent);
+  color: var(--text-primary);
+}
+
+/* Status */
+.rsm-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 20px;
+  background: var(--bg-elevated);
+  font-size: 12px;
+}
+
+.rsm-count {
+  color: var(--text-secondary);
+}
+
+.rsm-count strong {
+  color: var(--status-success);
+}
+
+.rsm-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.rsm-hint--warning {
+  color: var(--status-warning);
+  font-weight: 500;
+}
+
+/* Room List */
+.rsm-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  min-height: 200px;
+  max-height: 400px;
+}
+
+.rsm-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.rsm-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+}
+
+.rsm-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+.rsm-item.selected {
+  background: var(--tie-bg);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.rsm-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--status-success);
+  cursor: pointer;
+}
+
+.rsm-item-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.rsm-item-games {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+}
+
+/* Footer */
+.rsm-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--modal-surface);
+}
+
+.rsm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.rsm-checkbox input {
+  accent-color: var(--status-success);
+}
+
+.rsm-btn-primary {
+  padding: 8px 20px;
+  background: var(--status-success);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-on-accent);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.2);
+}
+
+.rsm-btn-primary:hover {
+  background: rgba(34, 197, 94, 0.9);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+}

@@ -1,0 +1,426 @@
+/* ═══════════════════════════════════════════════════════════════
+   LIST VIEW (Pro Trader Style)
+   ═══════════════════════════════════════════════════════════════ */
+
+.auto-mode__list-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 24px 24px 24px;
+}
+
+.auto-mode__list-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.auto-mode__list-header>div {
+    padding: 0 8px;
+}
+
+.auto-mode__list-header .sortable {
+    cursor: pointer;
+    transition: var(--transition-fast);
+    user-select: none;
+}
+
+.auto-mode__list-header .sortable:hover {
+    color: var(--text-primary);
+}
+
+.auto-mode__list-body {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 20px;
+}
+
+.auto-mode__list-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-card);
+    transition: var(--transition-smooth);
+    height: 52px;
+}
+
+.auto-mode__list-row:hover {
+    background: var(--bg-hover);
+}
+
+.auto-mode__list-row.disabled {
+    opacity: 0.4;
+    background: transparent;
+}
+
+.auto-mode__list-row.betting {
+    background: var(--accent-primary-bg);
+    border-left: 2px solid var(--accent-gold);
+}
+
+.auto-mode__list-row.flashing {
+    background: var(--status-success-bg);
+}
+
+/* Columns */
+.col-room {
+    width: 160px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin-right: 12px;
+}
+
+.col-status {
+    width: 70px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.col-timer {
+    width: 60px;
+    text-align: center;
+}
+
+.col-game {
+    width: 60px;
+    text-align: right;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.col-stats {
+    width: 60px;
+    text-align: center;
+}
+
+.col-score {
+    width: 80px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+.col-trend {
+    flex: 1;
+    display: flex;
+    justify-content: flex-end;
+    padding-right: 24px;
+}
+
+.col-strategy {
+    width: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding-right: 12px;
+}
+
+.col-predict {
+    width: 140px;
+    display: flex;
+    justify-content: center;
+}
+
+.col-profit {
+    width: 90px;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-weight: 700;
+}
+
+/* Column Details */
+.room-name {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+}
+
+.room-id {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.status-dot.active {
+    background: var(--status-success);
+    box-shadow: var(--shadow-glow-accent);
+}
+
+.status-dot.betting {
+    background: var(--accent-gold);
+    box-shadow: 0 0 5px var(--accent-gold);
+    animation: pulse 1s infinite;
+}
+
+.status-text {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.timer-value {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    padding: 2px 8px;
+    border-radius: var(--radius-xs);
+}
+
+.timer-value.urgent {
+    color: var(--status-danger);
+    background: var(--status-danger-bg);
+}
+
+.timer-value.warning {
+    color: var(--status-warning);
+    background: var(--status-warning-bg);
+}
+
+.timer-value.normal {
+    color: var(--text-secondary);
+}
+
+.score-box {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+    color: var(--text-muted);
+    background: var(--bg-surface);
+    padding: 4px 8px;
+    border-radius: var(--radius-xs);
+}
+
+.score {
+    font-weight: 700;
+}
+
+.score.win {
+    color: var(--text-primary);
+    text-shadow: var(--shadow-glow-accent);
+}
+
+.score.p.win {
+    color: var(--player-color);
+}
+
+.score.b.win {
+    color: var(--banker-color);
+}
+
+.divider {
+    color: var(--text-muted);
+    opacity: 0.3;
+}
+
+.mini-bead-plate {
+    display: flex;
+    gap: 4px;
+}
+
+.bead {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.bead.b {
+    background: var(--banker-color);
+}
+
+.bead.p {
+    background: var(--player-color);
+}
+
+.bead.t {
+    background: var(--tie-color);
+}
+
+.martin-bar-container {
+    width: 100%;
+    height: 4px;
+    background: var(--bg-surface);
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+}
+
+.martin-bar {
+    height: 100%;
+    background: var(--status-success);
+    border-radius: var(--radius-xs);
+    transition: width 0.3s ease;
+}
+
+.martin-bar.danger {
+    background: var(--status-danger);
+}
+
+.martin-bar.w-0 {
+    width: 0%;
+}
+
+.martin-bar.w-20 {
+    width: 20%;
+}
+
+.martin-bar.w-40 {
+    width: 40%;
+}
+
+.martin-bar.w-60 {
+    width: 60%;
+}
+
+.martin-bar.w-80 {
+    width: 80%;
+}
+
+.martin-bar.w-100 {
+    width: 100%;
+}
+
+.martin-text {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.predict-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+}
+
+.predict-badge {
+    padding: 3px 8px;
+    border-radius: var(--radius-xs);
+    font-size: 11px;
+    font-weight: 800;
+    text-align: center;
+}
+
+.predict-badge.banker {
+    background: var(--banker-bg);
+    color: var(--banker-color);
+    border: 1px solid var(--banker-color);
+}
+
+.predict-badge.player {
+    background: var(--player-bg);
+    color: var(--player-color);
+    border: 1px solid var(--player-color);
+}
+
+.predict-badge.pass {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+}
+
+.predict-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 9px;
+    padding: 0 4px;
+}
+
+.bet-amt {
+    color: var(--accent-gold);
+    font-weight: 700;
+    font-family: var(--font-mono);
+}
+
+.pattern-tag {
+    color: var(--text-muted);
+    font-size: 8px;
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.win-rate {
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}
+
+.predict-none {
+    color: var(--text-muted);
+    font-size: 11px;
+    opacity: 0.3;
+}
+
+.profit-value {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.profit-value.plus {
+    color: var(--status-success);
+}
+
+.profit-value.minus {
+    color: var(--status-danger);
+}
+
+/* Empty State override */
+.auto-mode__list-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Scrollbar styling for list body */
+.auto-mode__list-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.auto-mode__list-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.auto-mode__list-body::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: var(--radius-xs);
+}
+
+.auto-mode__list-body::-webkit-scrollbar-thumb:hover {
+    background: var(--border-accent);
+}
+
+.auto-mode__header-btn.active {
+    background: var(--accent-primary-bg);
+    color: var(--accent-gold);
+    border-color: var(--accent-gold);
+    box-shadow: var(--shadow-glow-accent);
+}

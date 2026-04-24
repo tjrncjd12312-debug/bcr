@@ -1,0 +1,687 @@
+/* AutoModeMosaic.css - Enhanced Trading Terminal Style v2.1 (Clean Arch & Animated) */
+
+/* ═══════════════════════════════════════════════════════════════
+   MOSAIC VIEW (High-Density Trading Dashboard)
+   ═══════════════════════════════════════════════════════════════ */
+
+.auto-mode__mosaic-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  align-content: start;
+  /* Custom Scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.auto-mode__mosaic-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.auto-mode__mosaic-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.auto-mode__mosaic-container::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-xs);
+}
+
+.auto-mode__mosaic-container::-webkit-scrollbar-thumb:hover {
+  background: var(--border-accent);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TILE COMPONENT
+   ═══════════════════════════════════════════════════════════════ */
+
+.mosaic-tile {
+  height: 100px;
+  background: linear-gradient(180deg,
+      var(--bg-surface) 0%,
+      var(--bg-card) 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  display: grid;
+  grid-template-rows: 18px 1fr 18px 14px;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  transition: var(--transition-smooth);
+}
+
+.mosaic-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-color);
+  z-index: 20;
+}
+
+.mosaic-tile:active {
+  transform: translateY(-1px);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STATUS ANIMATIONS & EFFECTS
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 1. Static Glass Idle Effect (No Animation) */
+.mosaic-tile.idle {
+  background: linear-gradient(180deg,
+      var(--bg-elevated) 0%,
+      var(--bg-card) 100%);
+  border-color: var(--border-subtle);
+  opacity: 0.8;
+  /* Subtle inner shadow for depth */
+  box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.2);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CORE STATUS STYLES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* BETTING (Active) */
+.mosaic-tile.betting {
+  border-color: var(--accent-gold);
+  box-shadow:
+    0 0 0 1px var(--accent-gold),
+    0 0 12px var(--accent-gold-muted);
+}
+
+/* WIN/LOSS/PASS */
+.mosaic-tile.hot {
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.03));
+  border-color: var(--status-success);
+}
+
+.mosaic-tile.cold {
+  background: linear-gradient(180deg, rgba(244, 67, 54, 0.1), rgba(244, 67, 54, 0.03));
+  border-color: var(--status-danger);
+}
+
+.mosaic-tile.pass {
+  background: var(--bg-surface);
+  border-style: dashed;
+  border-color: var(--border-subtle);
+}
+
+.mosaic-tile.resting {
+  opacity: 0.5;
+  filter: grayscale(40%);
+}
+
+.mosaic-tile.danger {
+  border-color: var(--status-danger);
+  box-shadow: 0 0 10px rgba(244, 67, 54, 0.3);
+}
+
+.mosaic-tile.selected {
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 0 2px var(--accent-gold);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   HEADER ROW
+   ═══════════════════════════════════════════════════════════════ */
+
+.mosaic-header {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 5px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+  z-index: 5;
+  /* Ensure header is above scan line */
+}
+
+/* Status Dot */
+.mosaic-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mosaic-status-dot.idle {
+  background: var(--text-muted);
+}
+
+.mosaic-status-dot.betting {
+  background: var(--accent-gold);
+  box-shadow: 0 0 6px var(--accent-gold);
+}
+
+.mosaic-status-dot.hot {
+  background: var(--status-success);
+  box-shadow: 0 0 5px var(--status-success);
+}
+
+.mosaic-status-dot.cold {
+  background: var(--status-danger);
+  box-shadow: 0 0 5px var(--status-danger);
+}
+
+.mosaic-status-dot.resting {
+  background: var(--text-muted);
+  opacity: 0.4;
+}
+
+.mosaic-name {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-gold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mosaic-timer-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  min-width: 18px;
+  text-align: center;
+}
+
+.mosaic-timer-badge.warning {
+  color: var(--status-warning);
+  background: rgba(255, 152, 0, 0.15);
+}
+
+.mosaic-timer-badge.urgent {
+  color: var(--status-danger);
+  background: rgba(244, 67, 54, 0.2);
+  font-weight: 800;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN ROW
+   ═══════════════════════════════════════════════════════════════ */
+
+.mosaic-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  gap: 6px;
+  position: relative;
+  z-index: 5;
+}
+
+.mosaic-prediction-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+.mosaic-prediction-badge.banker {
+  background: linear-gradient(135deg, var(--banker-color), var(--banker-light));
+  color: white;
+  box-shadow: 0 2px 6px var(--banker-glow);
+}
+
+.mosaic-prediction-badge.player {
+  background: linear-gradient(135deg, var(--player-color), var(--player-light));
+  color: white;
+  box-shadow: 0 2px 6px var(--player-glow);
+}
+
+.mosaic-prediction-badge.empty {
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 11px;
+  border: 1px dashed var(--border-subtle);
+}
+
+.mosaic-center-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mosaic-status-text {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.mosaic-status-text.betting {
+  color: var(--accent-gold);
+  text-shadow: 0 0 6px var(--accent-gold-muted);
+}
+
+.mosaic-status-text.win {
+  color: var(--status-success);
+}
+
+.mosaic-status-text.loss {
+  color: var(--status-danger);
+}
+
+.mosaic-status-text.pass {
+  color: var(--text-muted);
+}
+
+.mosaic-status-text.rest {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mosaic-status-text.idle {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 1px;
+  opacity: 0.5;
+}
+
+.mosaic-bet-amount {
+  font-size: 9px;
+  color: var(--accent-gold);
+  font-weight: 600;
+}
+
+.mosaic-result-profit {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.mosaic-result-profit.positive {
+  color: var(--status-success);
+}
+
+.mosaic-result-profit.negative {
+  color: var(--status-danger);
+}
+
+.mosaic-martin-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.mosaic-martin-badge.warning {
+  color: var(--status-warning);
+  background: rgba(255, 152, 0, 0.15);
+}
+
+.mosaic-martin-badge.danger {
+  color: var(--status-danger);
+  background: rgba(244, 67, 54, 0.15);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   INFO & FOOTER ROWS
+   ═══════════════════════════════════════════════════════════════ */
+
+.mosaic-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  gap: 6px;
+  position: relative;
+  z-index: 5;
+}
+
+.mosaic-session-profit {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.mosaic-session-profit.positive {
+  color: var(--status-success);
+}
+
+.mosaic-session-profit.negative {
+  color: var(--status-danger);
+}
+
+.mosaic-ox-results {
+  display: flex;
+  gap: 2px;
+}
+
+.mosaic-ox {
+  font-size: 9px;
+  font-weight: 800;
+  width: 12px;
+  text-align: center;
+}
+
+.mosaic-ox.win {
+  color: var(--status-success);
+}
+
+.mosaic-ox.loss {
+  color: var(--status-danger);
+}
+
+.mosaic-ox-empty {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.mosaic-footer {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  border-top: 1px solid var(--border-subtle);
+  position: relative;
+  z-index: 5;
+}
+
+.mosaic-martin-gauge {
+  flex: 1;
+  height: 3px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.mosaic-martin-fill {
+  height: 100%;
+  border-radius: var(--radius-xs);
+  transition: width 0.3s ease, background 0.3s;
+}
+
+.mosaic-martin-fill.level-0,
+.mosaic-martin-fill.level-1 {
+  background: linear-gradient(90deg, var(--accent-gold), #651fff);
+}
+
+.mosaic-martin-fill.level-2,
+.mosaic-martin-fill.level-3 {
+  background: linear-gradient(90deg, var(--status-warning), #ea580c);
+}
+
+.mosaic-martin-fill.level-4,
+.mosaic-martin-fill.level-5 {
+  background: linear-gradient(90deg, var(--status-danger), #dc2626);
+}
+
+.mosaic-martin-fill.level-6,
+.mosaic-martin-fill.level-10 {
+  background: linear-gradient(90deg, #dc2626, #991b1b);
+}
+
+.mosaic-footer-stats {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mosaic-win-rate {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.mosaic-win-rate.good {
+  color: var(--status-success);
+}
+
+.mosaic-win-rate.bad {
+  color: var(--status-danger);
+}
+
+.mosaic-game-count {
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOOLTIP
+   ═══════════════════════════════════════════════════════════════ */
+
+.mosaic-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  min-width: 140px;
+  opacity: 0;
+  visibility: hidden;
+  transition: var(--transition-fast);
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+}
+
+.mosaic-tile:hover .mosaic-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.mosaic-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--bg-card);
+}
+
+.mosaic-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0;
+  font-size: 10px;
+}
+
+.mosaic-tooltip-row+.mosaic-tooltip-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.mosaic-tooltip-label {
+  color: var(--text-muted);
+}
+
+.mosaic-tooltip-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.mosaic-tooltip-value.positive {
+  color: var(--status-success);
+}
+
+.mosaic-tooltip-value.negative {
+  color: var(--status-danger);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (min-width: 1400px) {
+  .auto-mode__mosaic-container {
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 10px;
+  }
+
+  .mosaic-tile {
+    height: 110px;
+  }
+
+  .mosaic-prediction-badge {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 800px) {
+  .auto-mode__mosaic-container {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .mosaic-tile {
+    height: 90px;
+  }
+
+  .mosaic-prediction-badge {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+  }
+
+  .mosaic-name {
+    font-size: 9px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   THINKING STATE ANIMATION
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Thinking status text */
+.mosaic-status-text.thinking {
+  color: var(--accent-gold);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  min-width: 50px;
+  text-align: center;
+  text-transform: none;
+}
+
+/* Thinking tile effect - wave animation */
+.mosaic-tile.thinking {
+  border-color: var(--accent-gold-muted);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Wave effect - 3 wave layers */
+.mosaic-tile.thinking::before,
+.mosaic-tile.thinking::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 100%;
+  pointer-events: none;
+}
+
+.mosaic-tile.thinking::before {
+  top: 0;
+  background: linear-gradient(180deg,
+      var(--accent-gold-muted) 0%,
+      transparent 30%,
+      transparent 70%,
+      rgba(20, 184, 166, 0.08) 100%);
+  animation: waveUp 2s ease-in-out infinite;
+}
+
+.mosaic-tile.thinking::after {
+  bottom: 0;
+  background: linear-gradient(0deg,
+      rgba(20, 184, 166, 0.1) 0%,
+      transparent 40%);
+  animation: waveDown 2.5s ease-in-out infinite;
+}
+
+@keyframes waveUp {
+
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.6;
+  }
+
+  50% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+@keyframes waveDown {
+
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+
+  50% {
+    transform: translateY(3px);
+    opacity: 0.8;
+  }
+}
+
+.mosaic-profit {
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.mosaic-profit.positive {
+  color: var(--status-success);
+}
+
+.mosaic-profit.negative {
+  color: var(--status-danger);
+}
+
+/* Game Count */
+.mosaic-game-count {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* Footer Stats (Win Rate + Game Count) */
+.mosaic-footer-stats {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* Game Count in Footer */
+.mosaic-footer-stats .mosaic-game-count {
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}

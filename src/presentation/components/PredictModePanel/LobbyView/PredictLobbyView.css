@@ -1,0 +1,386 @@
+/* Smart Lobby - Mode 4 - Optimized Layout V2 */
+
+.predict-panel .predict-content.lobby {
+  background: var(--bg-base) !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: block !important;
+  width: 100% !important;
+}
+
+.lobby-v3-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)) !important;
+  gap: 16px !important;
+  padding: 20px !important;
+  overflow-y: auto !important;
+  height: 100% !important;
+  background: var(--bg-base) !important;
+  align-content: start !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.lobby-v3-card {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-lg) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  transition: var(--transition-smooth) !important;
+  cursor: pointer !important;
+  box-shadow: var(--shadow-md) !important;
+  position: relative !important;
+  min-height: 380px !important;
+  text-align: left !important;
+}
+
+.lobby-v3-card:hover {
+  transform: translateY(-2px) !important;
+  border-color: var(--accent-primary) !important;
+  background: var(--bg-hover) !important;
+}
+
+.lobby-v3-card.is-selected {
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 1px var(--accent-primary), var(--shadow-glow) !important;
+  background: linear-gradient(180deg, var(--accent-muted) 0%, var(--bg-card) 100%) !important;
+}
+
+.lobby-v3-card__header {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  padding: 12px 16px !important;
+  background: var(--bg-hover) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  flex-shrink: 0 !important;
+}
+
+.lobby-v3-card__info {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+
+.lobby-v3-card__name-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.lobby-v3-card__name {
+  font-size: var(--fs-base) !important;
+  font-weight: 800 !important;
+  color: var(--text-primary) !important;
+  max-width: 180px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.lobby-v3-card__badges {
+  display: flex !important;
+  gap: 6px !important;
+}
+
+.v-badge {
+  font-size: var(--fs-xs) !important;
+  font-weight: 800 !important;
+  padding: 2px 8px !important;
+  border-radius: var(--radius-xs) !important;
+}
+
+.v-badge.win-rate {
+  background: var(--tie-bg);
+  color: var(--tie-color);
+  border: 1px solid var(--tie-color);
+}
+
+.v-badge.martin {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.v-badge.martin.active {
+  background: var(--banker-bg);
+  color: var(--banker-color);
+  border: 1px solid var(--border-banker);
+}
+
+.v-badge.prediction {
+  min-width: 18px !important;
+  height: 18px !important;
+  width: auto !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 50% !important;
+  font-size: var(--fs-xs) !important;
+  color: var(--text-primary) !important;
+}
+
+.v-badge.prediction.b {
+  background: var(--banker-color);
+}
+
+.v-badge.prediction.p {
+  background: var(--player-color);
+}
+
+.lobby-v3-card__enter-btn {
+  background: var(--accent-primary) !important;
+  color: var(--bg-base) !important;
+  border: none !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 4px 12px !important;
+  font-size: var(--fs-xs) !important;
+  font-weight: 800 !important;
+  cursor: pointer !important;
+  text-transform: uppercase !important;
+}
+
+.lobby-v3-card__main-road {
+  background: var(--bg-surface) !important;
+  padding: 10px 16px !important;
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 110px !important;
+}
+
+.lobby-v3-card__road-header {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  margin-bottom: 4px !important;
+  flex-shrink: 0 !important;
+}
+
+.lobby-v3-card__road-title {
+  font-size: var(--fs-xs) !important;
+  font-weight: 800 !important;
+  color: var(--text-muted) !important;
+  text-transform: uppercase !important;
+}
+
+.lobby-v3-card__road-toggle {
+  display: flex !important;
+  background: var(--bg-elevated) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 2px !important;
+}
+
+.lobby-v3-card__road-toggle button {
+  border: none !important;
+  background: transparent !important;
+  color: var(--text-tertiary) !important;
+  font-size: var(--fs-xs) !important;
+  padding: 2px 8px !important;
+  cursor: pointer !important;
+  border-radius: var(--radius-xs) !important;
+}
+
+.lobby-v3-card__road-toggle button.active {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.lobby-v3-card__fixed-3line {
+  border-top: 1px solid var(--border-subtle) !important;
+  padding: 10px 16px !important;
+  flex: 1 !important;
+  background: var(--bg-elevated) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  min-height: 80px !important;
+}
+
+/* 3매 영역 스크롤바 스타일 */
+.lobby-v3-card__fixed-3line::-webkit-scrollbar {
+  height: 4px;
+}
+
+.lobby-v3-card__fixed-3line::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-xs);
+}
+
+.lobby-v3-card__fixed-3line::-webkit-scrollbar-track {
+  background: var(--bg-hover);
+}
+
+.lobby-v3-card__3line-title {
+  font-size: var(--fs-xs) !important;
+  font-weight: 800 !important;
+  color: var(--text-muted) !important;
+  text-transform: uppercase !important;
+  margin-bottom: 6px !important;
+  flex-shrink: 0 !important;
+}
+
+/* Roadmap Component Scaling */
+.lobby-v3-card__road-content {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  position: relative !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  padding: 4px 0 !important;
+  height: auto !important;
+  min-height: 120px !important;
+  max-height: none !important;
+  flex: 1 !important;
+  flex-shrink: 0 !important;
+}
+
+/* 6매/원매 스크롤바 스타일 */
+.lobby-v3-card__road-content::-webkit-scrollbar {
+  height: 4px;
+}
+
+.lobby-v3-card__road-content::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-xs);
+}
+
+.lobby-v3-card__road-content::-webkit-scrollbar-track {
+  background: var(--bg-hover);
+}
+
+.lobby-v3-card__road-content .bead-plate,
+.lobby-v3-card__road-content .big-road {
+  width: auto !important;
+  height: 100% !important;
+  flex-shrink: 0 !important;
+  min-width: max-content !important;
+}
+
+/* 원매(BigRoad) / 6매(BeadPlate) 그리드 */
+.lobby-v3-card__road-content .road-grid-container {
+  max-width: none !important;
+  height: 100% !important;
+}
+
+/* 로드맵 셀 크기 고정 */
+.lobby-v3-card__road-content .road-cell {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
+}
+
+.lobby-v3-card__road-content .road-marker {
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  font-size: var(--fs-xs) !important;
+}
+
+/* 로드맵 그리드 gap 조정 */
+.lobby-v3-card__road-content .road-grid {
+  gap: 2px !important;
+}
+
+.lobby-v3-card__road-content .road-col {
+  gap: 2px !important;
+}
+
+.lobby-v3-card .three-row-ox-grid {
+  margin-top: 2px;
+}
+
+/* 로비 카드 내 3매 크기 */
+.lobby-v3-card .three-row-ox-grid__column {
+  width: 22px !important;
+  min-width: 22px !important;
+}
+
+.lobby-v3-card .three-row-ox-grid__cell {
+  width: 20px !important;
+  height: 20px !important;
+  min-width: 20px !important;
+  min-height: 20px !important;
+  font-size: var(--fs-sm) !important;
+  font-weight: 700 !important;
+}
+
+.lobby-v3-card .three-row-ox-grid__result {
+  width: 22px !important;
+  height: 16px !important;
+  min-width: 22px !important;
+  font-size: var(--fs-xs) !important;
+  font-weight: 600 !important;
+}
+
+/* Hide bulky stats in lobby grid */
+.lobby-v3-card .three-row-ox-grid__stats {
+  display: none !important;
+}
+
+/* Prediction Blinking Animation */
+@keyframes lobby-blinking-v2 {
+  0% {
+    opacity: 1;
+    filter: brightness(1.2);
+  }
+
+  50% {
+    opacity: 0.5;
+    filter: brightness(0.8);
+  }
+
+  100% {
+    opacity: 1;
+    filter: brightness(1.2);
+  }
+}
+
+.lobby-v3-card .three-row-ox-grid__cell--blinking {
+  animation: lobby-blinking-v2 1s infinite ease-in-out !important;
+}
+
+.predict-lobby-wrapper {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  width: 100% !important;
+  background: var(--bg-base) !important;
+}
+
+/* Make grid fill the remaining space */
+.lobby-v3-grid {
+  flex: 1 !important;
+  height: auto !important;
+}
+
+/* Ensure Top3 Rankings looks good in Lobby */
+.predict-lobby-wrapper .top3-rankings {
+  margin-bottom: 0 !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  flex-shrink: 0 !important;
+  background: var(--bg-elevated) !important;
+}
+
+.v-badge.prediction.pass {
+  background: var(--accent-primary) !important;
+  color: var(--bg-base) !important;
+  padding: 0 6px !important;
+  border-radius: var(--radius-xs) !important;
+}
+
+/* ThreeRowOXGrid PASS blink */
+.lobby-v3-card .three-row-ox-grid__cell--skip.three-row-ox-grid__cell--blinking {
+  color: var(--accent-primary) !important;
+  font-size: var(--fs-xs) !important;
+  font-weight: 800 !important;
+  border: 1px dashed var(--accent-primary) !important;
+  background: var(--accent-muted) !important;
+}

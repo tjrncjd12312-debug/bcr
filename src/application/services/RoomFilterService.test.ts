@@ -1,0 +1,250 @@
+// RoomFilterService Unit Tests
+import { describe, it, expect, beforeEach } from 'vitest'
+import { RoomFilterService } from './RoomFilterService'
+import CustomPatternService from './CustomPatternService'
+import type { Room, RoadResult, Winner } from '../../domain/entities'
+
+// Helper to create RoadResult array from winner string
+function createHistory(pattern: string): RoadResult[] {
+  return pattern.split('').map(char => ({
+    winner: char as Winner,
+    isPlayerPair: false,
+    isBankerPair: false,
+  }))
+}
+
+// Helper to create a mock room
+function createRoom(id: string, history: RoadResult[]): Room {
+  return {
+    id,
+    name: `Room ${id}`,
+    koreanName: `방 ${id}`,
+    history,
+    gameCount: history.length,
+  }
+}
+
+describe('RoomFilterService', () => {
+  beforeEach(() => {
+    // Reset filters before each test
+    RoomFilterService.clearFilters()
+    CustomPatternService.clear()
+  })
+
+  describe('detectPattern', () => {
+    it('should detect alternating pattern (퐁당퐁당)', () => {
+      const history = createHistory('BPBPBPBP')
+      const pattern = RoomFilterService.detectPattern(history)
+
+      expect(pattern).not.toBeNull()
+      expect(pattern?.type).toBe('alternating')
+      expect(pattern?.length).toBeGreaterThanOrEqual(4)
+    })
+
+    it('should detect streak pattern (장줄)', () => {
+      const history = createHistory('BBBBB')
+      const pattern = RoomFilterService.detectPattern(history)
+
+      expect(pattern).not.toBeNull()
+      expect(pattern?.type).toBe('streak')
+      expect(pattern?.length).toBeGreaterThanOrEqual(4)
+    })
+
+    it('should return mixed for no clear pattern', () => {
+      const history = createHistory('BBPBBPB')
+      const pattern = RoomFilterService.detectPattern(history)
+
+      expect(pattern).not.toBeNull()
+      expect(pattern?.type).toBe('mixed')
+    })
+
+    it('should handle empty history', () => {
+      const pattern = RoomFilterService.detectPattern([])
+      expect(pattern).toBeNull()
+    })
+
+    it('should handle history with only one result', () => {
+      const history = createHistory('B')
+      const pattern = RoomFilterService.detectPattern(history)
+      expect(pattern).toBeNull()
+    })
+
+    it('should handle ties in history', () => {
+      const history = createHistory('BTBTBTBT')
+      const pattern = RoomFilterService.detectPattern(history)
+
+      expect(pattern).not.toBeNull()
+      // Ties are skipped in pattern detection
+    })
+  })
+
+  describe('filter management', () => {
+    it('should start with no active filters', () => {
+      const filters = RoomFilterService.getActiveFilters()
+      expect(filters).toHaveLength(0)
+    })
+
+    it('should toggle filter on', () => {
+      RoomFilterService.toggleFilter('alternating')
+      const filters = RoomFilterService.getActiveFilters()
+
+      expect(filters).toContain('alternating')
+    })
+
+    it('should toggle filter off', () => {
+      RoomFilterService.toggleFilter('alternating')
+      RoomFilterService.toggleFilter('alternating')
+      const filters = RoomFilterService.getActiveFilters()
+
+      expect(filters).not.toContain('alternating')
+    })
+
+    it('should set multiple filters', () => {
+      RoomFilterService.setFilters(['alternating', 'long_streak'])
+      const filters = RoomFilterService.getActiveFilters()
+
+      expect(filters).toContain('alternating')
+      expect(filters).toContain('long_streak')
+      expect(filters).toHaveLength(2)
+    })
+
+    it('should clear all filters', () => {
+      RoomFilterService.setFilters(['alternating', 'long_streak'])
+      RoomFilterService.clearFilters()
+      const filters = RoomFilterService.getActiveFilters()
+
+      expect(filters).toHaveLength(0)
+    })
+  })
+
+  describe('matchesFilter', () => {
+    it('should match alternating pattern filter', () => {
+      const room = createRoom('1', createHistory('BPBPBPBP'))
+      const matches = RoomFilterService.matchesFilter(room, null, 'alternating')
+
+      expect(matches).toBe(true)
+    })
+
+    it('should match long_streak filter', () => {
+      const room = createRoom('1', createHistory('BBBBB'))
+      const matches = RoomFilterService.matchesFilter(room, null, 'long_streak')
+
+      expect(matches).toBe(true)
+    })
+
+    it('should not match alternating for streak pattern', () => {
+      const room = createRoom('1', createHistory('BBBBB'))
+      const matches = RoomFilterService.matchesFilter(room, null, 'alternating')
+
+      expect(matches).toBe(false)
+    })
+
+    it('should match losing_streak with prediction state', () => {
+      const room = createRoom('1', createHistory('BBBBB'))
+      const predictionState: any = {
+        roomId: 'test-room',
+        roomName: 'Test Room',
+        lastPrediction: null,
+        stats: {
+          total: 0,
+          correct: 0,
+          winRate: 0,
+          consecutiveWins: 0,
+          consecutiveLosses: 5, // 5 losses
+          maxConsecutiveWins: 0,
+          maxConsecutiveLosses: 5,
+        },
+        pattern: null,
+        isFiltered: false,
+        predictionCount: 0,
+        history: [], // ✅ Fix TS Error
+      }
+
+      const matches = RoomFilterService.matchesFilter(room, predictionState, 'losing_streak')
+      expect(matches).toBe(true)
+    })
+
+    it('should match winning_streak with 3+ wins', () => {
+      const room = createRoom('1', createHistory('BPBPBPBP'))
+      const predictionState: any = {
+        roomId: 'test-room',
+        roomName: 'Test Room',
+        lastPrediction: null,
+        stats: {
+          total: 0,
+          correct: 0,
+          winRate: 0,
+          consecutiveWins: 3, // 3 wins
+          consecutiveLosses: 0,
+          maxConsecutiveWins: 3,
+          maxConsecutiveLosses: 0,
+        },
+        pattern: null,
+        isFiltered: false,
+        predictionCount: 0,
+        predictionHistory: [], // Old prop - keeping for safety
+        history: [], // ✅ Fix TS Error
+      }
+
+      const matches = RoomFilterService.matchesFilter(room, predictionState, 'winning_streak')
+      expect(matches).toBe(true)
+    })
+  })
+
+  describe('filter change callback', () => {
+    it('should emit filter change on toggle', () => {
+      let emittedFilters: string[] = []
+      const unsubscribe = RoomFilterService.onFilterChange((filters) => {
+        emittedFilters = filters
+      })
+
+      RoomFilterService.toggleFilter('alternating')
+
+      expect(emittedFilters).toContain('alternating')
+
+      unsubscribe()
+    })
+
+    it('should unsubscribe correctly', () => {
+      let callCount = 0
+      const unsubscribe = RoomFilterService.onFilterChange(() => {
+        callCount++
+      })
+
+      RoomFilterService.toggleFilter('alternating')
+      expect(callCount).toBe(1)
+
+      unsubscribe()
+
+      RoomFilterService.toggleFilter('long_streak')
+      expect(callCount).toBe(1) // Should not increase
+    })
+  })
+
+  describe('custom patterns', () => {
+    it('should match custom pattern only when recent results match exactly', () => {
+      const pattern = CustomPatternService.addPattern({
+        name: 'Tail BPB',
+        sequence: 'BPB',
+        enabled: true,
+      })
+
+      const roomMatches = createRoom('1', createHistory('BPBPP'))
+      const roomMismatch = createRoom('2', createHistory('BBPBP'))
+
+      expect(RoomFilterService.matchesFilter(roomMatches, null, `custom:${pattern.id}`)).toBe(true)
+      expect(RoomFilterService.matchesFilter(roomMismatch, null, `custom:${pattern.id}`)).toBe(false)
+    })
+
+    it('should hide disabled custom patterns from available filters', () => {
+      const enabled = CustomPatternService.addPattern({ name: 'Enabled', sequence: 'BP', enabled: true })
+      const disabled = CustomPatternService.addPattern({ name: 'Disabled', sequence: 'PP', enabled: false })
+
+      const filters = RoomFilterService.getAvailableFilters()
+      const types = filters.map(f => f.type)
+
+      expect(types).toContain(`custom:${enabled.id}`)
+      expect(types).not.toContain(`custom:${disabled.id}`)
+    })
+  })
+})

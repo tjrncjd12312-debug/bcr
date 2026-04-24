@@ -1,0 +1,39 @@
+{
+  "name": "bcr-predictor",
+  "version": "1.0.0",
+  "description": "BCR Multi-Room Baccarat Predictor - Desktop Edition",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.12",
+    "chart.js": "^4.5.1",
+    "lucide-react": "^0.560.0",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/cli": "^2.9.4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^18.2.64",
+    "@types/react-dom": "^18.2.21",
+    "@vitejs/plugin-react": "^4.2.1",
+    "@vitest/coverage-v8": "^4.0.14",
+    "jsdom": "^27.2.0",
+    "terser": "^5.44.1",
+    "typescript": "^5.4.2",
+    "vite": "^5.1.6",
+    "vitest": "^4.0.14"
+  }
+}

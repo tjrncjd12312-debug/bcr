@@ -1,0 +1,81 @@
+[package]
+name = "bcr-predictor"
+version = "1.3.4"
+description = "BCR Multi-Room Baccarat Predictor"
+authors = ["BCR Team"]
+edition = "2021"
+
+[lib]
+name = "bcr_predictor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+# Tauri 2.0
+tauri = { version = "2.1", features = [] }
+tauri-plugin-shell = "2.0"
+tauri-plugin-opener = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async Runtime
+tokio = { version = "1.36", features = ["full"] }
+futures = "0.3"
+
+# WebSocket - rustls for cross-platform TLS (Windows Schannel rejects some certs)
+tokio-tungstenite = { version = "0.24" }
+futures-util = "0.3"
+url = "2.5"
+
+# HTTP Client with Chrome TLS fingerprint impersonation (BoringSSL)
+# Used for Evolution multiwidget to bypass Akamai bot detection
+rquest = { version = "5.1", features = ["websocket"] }
+rquest-util = "2.2"
+
+# HTTP Client (for non-impersonation requests)
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+
+# Async trait
+async-trait = "0.1"
+
+# Error Handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Base64 encoding
+base64 = "0.22"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1.19"
+parking_lot = "0.12"
+rand = "0.8"
+urlencoding = "2.1"
+
+
+# Database (for local storage)
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "z"          # 최대 크기 최적화 (분석 어렵게)
+strip = "symbols"        # 모든 심볼 제거
+debug = false            # 디버그 정보 완전 제거
+debug-assertions = false # 디버그 어설션 제거
+overflow-checks = false  # 오버플로우 체크 제거 (성능+난독화)
+incremental = false      # 증분 컴파일 비활성화
