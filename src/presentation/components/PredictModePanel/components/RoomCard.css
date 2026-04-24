@@ -33,16 +33,16 @@
 
 .room-card:hover {
   background: var(--bg-elevated);
-  border-color: rgba(20, 184, 166, 0.35);
+  border-color: rgba(212, 175, 55, 0.35);
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(20, 184, 166, 0.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(212, 175, 55, 0.15);
 }
 
 .room-card.selected {
   border-color: var(--gold);
   border-width: 2px;
-  background: linear-gradient(180deg, rgba(20, 184, 166, 0.1) 0%, var(--bg-card) 100%);
-  box-shadow: 0 0 0 1px var(--gold), 0 8px 24px rgba(20, 184, 166, 0.2);
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.1) 0%, var(--bg-card) 100%);
+  box-shadow: 0 0 0 1px var(--gold), 0 8px 24px rgba(212, 175, 55, 0.2);
 }
 
 .room-card.predict-b {
@@ -50,7 +50,7 @@
 }
 
 .room-card.predict-b:hover {
-  box-shadow: 0 0 0 1px var(--red-dim), 0 12px 28px rgba(239, 68, 68, 0.2);
+  box-shadow: 0 0 0 1px var(--red-dim), 0 12px 28px rgba(227, 26, 56, 0.2);
 }
 
 .room-card.predict-p {
@@ -58,7 +58,7 @@
 }
 
 .room-card.predict-p:hover {
-  box-shadow: 0 0 0 1px var(--blue-dim), 0 12px 28px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 1px var(--blue-dim), 0 12px 28px rgba(30, 107, 224, 0.2);
 }
 
 .room-card.flashing {
@@ -145,7 +145,7 @@
 
 .room-card__provider.pragmatic {
   background: rgba(255, 152, 0, 0.15);
-  color: var(--status-warning, #ff9800);
+  color: var(--status-warning, #f4ce49);
 }
 
 .live-indicator {
@@ -221,12 +221,12 @@
 
 .room-card__prediction-large.b {
   color: var(--red-bright);
-  text-shadow: 0 2px 20px rgba(239, 68, 68, 0.4);
+  text-shadow: 0 2px 20px rgba(227, 26, 56, 0.4);
 }
 
 .room-card__prediction-large.p {
   color: var(--blue-bright);
-  text-shadow: 0 2px 20px rgba(59, 130, 246, 0.4);
+  text-shadow: 0 2px 20px rgba(30, 107, 224, 0.4);
 }
 
 .room-card__prediction-large.analyzing {
@@ -336,13 +336,13 @@
   background: var(--gold-bright);
   color: #000;
   margin-left: auto;
-  box-shadow: 0 0 12px rgba(20, 184, 166, 0.4);
+  box-shadow: 0 0 12px rgba(212, 175, 55, 0.4);
 }
 
 .room-card__martin-badge.danger {
   background: var(--red-bright);
   color: #fff;
-  box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 15px rgba(227, 26, 56, 0.5);
   animation: dangerPulse 1s ease-in-out infinite;
 }
 
@@ -367,7 +367,7 @@
   border-radius: 10px;
   background: rgba(255, 152, 0, 0.12);
   border: 1px solid rgba(255, 152, 0, 0.25);
-  color: var(--status-warning, #ff9800);
+  color: var(--status-warning, #f4ce49);
   font-family: var(--font-mono);
   flex-shrink: 0;
   white-space: nowrap;
@@ -434,7 +434,7 @@
 .room-card__result.incorrect {
   background: var(--red);
   color: #fff;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+  box-shadow: 0 4px 12px rgba(227, 26, 56, 0.4);
 }
 
 @keyframes resultPop {

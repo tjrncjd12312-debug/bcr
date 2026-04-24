@@ -16,7 +16,7 @@
   --red: var(--status-danger);
   --red-muted: rgba(244, 67, 54, 0.15);
   --blue: var(--player-color);
-  --blue-muted: rgba(59, 130, 246, 0.15);
+  --blue-muted: rgba(30, 107, 224, 0.15);
   --green: var(--status-success);
   --green-muted: rgba(34, 197, 94, 0.15);
 
@@ -632,7 +632,7 @@
 .auto-mode__header-btn--start:hover:not(:disabled),
 .auto-mode__header-btn--primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.3);
+  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.3);
   color: var(--bg-deep);
   background: linear-gradient(135deg, var(--gold) 0%, var(--accent-gold) 100%);
 }
@@ -932,7 +932,7 @@
   height: 160px;
   min-height: 160px;
   border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
-  background: var(--bg-base, #080b10);
+  background: var(--bg-base, #0a0a0a);
 }
 
 .auto-mode__bottom-log {
@@ -985,11 +985,11 @@
 }
 
 .auto-mode__bottom-log-result.win {
-  color: var(--green, var(--status-success, #4ade80));
+  color: var(--green, var(--status-success, #22c55e));
 }
 
 .auto-mode__bottom-log-result.loss {
-  color: var(--red, var(--status-danger, #ff4b4b));
+  color: var(--red, var(--status-danger, #e31a38));
 }
 
 .auto-mode__bottom-log-empty {
@@ -1033,11 +1033,11 @@
 }
 
 .auto-mode__bottom-summary-item .summary-value.positive {
-  color: var(--green, var(--status-success, #4ade80));
+  color: var(--green, var(--status-success, #22c55e));
 }
 
 .auto-mode__bottom-summary-item .summary-value.negative {
-  color: var(--red, var(--status-danger, #ff4b4b));
+  color: var(--red, var(--status-danger, #e31a38));
 }
 
 .auto-mode__bottom-summary-item .summary-value.accent {
@@ -1112,7 +1112,7 @@
 
 .auto-mode__sort-direction.asc:hover {
   color: var(--player-light);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(30, 107, 224, 0.1);
 }
 
 .auto-mode__sort-direction.desc {
@@ -1178,7 +1178,7 @@
 
 .auto-mode__score-item.player .auto-mode__score-value {
   color: var(--blue);
-  text-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+  text-shadow: 0 0 15px rgba(30, 107, 224, 0.4);
 }
 
 .auto-mode__score-item.banker .auto-mode__score-value {
@@ -1467,7 +1467,7 @@
 /* Betting Active State - Border Glow */
 .auto-mode__room-card.betting {
   border-color: var(--gold);
-  box-shadow: 0 0 0 1px var(--gold), 0 0 16px rgba(20, 184, 166, 0.2);
+  box-shadow: 0 0 0 1px var(--gold), 0 0 16px rgba(212, 175, 55, 0.2);
 }
 
 /* Result Flash Animation */
@@ -1949,8 +1949,8 @@
 .history-header-icon {
   width: 28px;
   height: 28px;
-  background: rgba(20, 184, 166, 0.1);
-  border: 1px solid rgba(20, 184, 166, 0.2);
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.2);
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -1996,15 +1996,15 @@
 }
 
 .auto-mode__history-filter-toggle.active {
-  background: rgba(20, 184, 166, 0.1);
-  border-color: rgba(20, 184, 166, 0.3);
+  background: rgba(212, 175, 55, 0.1);
+  border-color: rgba(212, 175, 55, 0.3);
   color: var(--gold);
 }
 
 .auto-mode__history-filter-toggle.has-filter {
   color: var(--gold);
-  border-color: rgba(20, 184, 166, 0.4);
-  box-shadow: 0 0 10px rgba(20, 184, 166, 0.1);
+  border-color: rgba(212, 175, 55, 0.4);
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.1);
 }
 
 /* Filter Panel */
@@ -2308,7 +2308,7 @@
 
 .card-type-tag.bet {
   color: var(--blue);
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(30, 107, 224, 0.1);
 }
 
 .card-room-name {
@@ -2365,7 +2365,7 @@
 }
 
 .card-stat-item.cumulative .value {
-  color: rgba(20, 184, 166, 0.8);
+  color: rgba(212, 175, 55, 0.8);
 }
 
 .card-stat-item.cumulative .value.win {
@@ -2407,8 +2407,8 @@
 }
 
 .score-badge.player {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, var(--player-bg) 100%);
-  border-color: rgba(59, 130, 246, 0.2);
+  background: linear-gradient(135deg, rgba(30, 107, 224, 0.1) 0%, var(--player-bg) 100%);
+  border-color: rgba(30, 107, 224, 0.2);
 }
 
 .score-badge.banker {
@@ -2417,13 +2417,13 @@
 }
 
 .score-badge.winner {
-  box-shadow: 0 0 12px rgba(20, 184, 166, 0.3);
+  box-shadow: 0 0 12px rgba(212, 175, 55, 0.3);
 }
 
 .score-badge.player.winner {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(59, 130, 246, 0.15) 100%);
-  border-color: rgba(59, 130, 246, 0.5);
-  box-shadow: 0 0 16px rgba(59, 130, 246, 0.4);
+  background: linear-gradient(135deg, rgba(30, 107, 224, 0.25) 0%, rgba(30, 107, 224, 0.15) 100%);
+  border-color: rgba(30, 107, 224, 0.5);
+  box-shadow: 0 0 16px rgba(30, 107, 224, 0.4);
 }
 
 .score-badge.banker.winner {
@@ -2442,7 +2442,7 @@
 }
 
 .score-badge.player .score-label {
-  color: rgba(59, 130, 246, 0.8);
+  color: rgba(30, 107, 224, 0.8);
 }
 
 .score-badge.banker .score-label {
@@ -2462,7 +2462,7 @@
 }
 
 .score-badge.player .score-value {
-  color: rgba(59, 130, 246, 0.9);
+  color: rgba(30, 107, 224, 0.9);
 }
 
 .score-badge.banker .score-value {
@@ -2471,7 +2471,7 @@
 
 .score-badge.player.winner .score-value {
   color: var(--player-color);
-  text-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+  text-shadow: 0 0 10px rgba(30, 107, 224, 0.5);
 }
 
 .score-badge.banker.winner .score-value {
@@ -2673,7 +2673,7 @@
 .auto-mode__streak-badge.p {
   background: rgba(75, 125, 255, 0.15);
   border-color: rgba(75, 125, 255, 0.3);
-  color: #4b7dff;
+  color: #1e6be0;
   box-shadow: 0 0 10px rgba(75, 125, 255, 0.2);
 }
 
@@ -2851,7 +2851,7 @@
 }
 
 .auto-mode__room-card.betting {
-  box-shadow: 0 0 30px rgba(20, 184, 166, 0.1);
+  box-shadow: 0 0 30px rgba(212, 175, 55, 0.1);
   transform: translateY(-4px) scale(1.02);
 }
 
@@ -2956,7 +2956,7 @@
 }
 
 .auto-mode__room-card-footer-pred.player {
-  color: var(--blue, #42a5f5);
+  color: var(--blue, #5a9bff);
 }
 
 .auto-mode__room-card-footer-pred.idle {
@@ -3346,9 +3346,9 @@
 }
 
 .result-dot.player {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(30, 107, 224, 0.2);
   color: var(--blue);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  border: 1px solid rgba(30, 107, 224, 0.4);
 }
 
 .result-dot.tie {
@@ -3472,7 +3472,7 @@
 .auto-mode__empty-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid rgba(20, 184, 166, 0.2);
+  border: 3px solid rgba(212, 175, 55, 0.2);
   border-top-color: var(--gold);
   border-radius: 50%;
   animation: spin 1s linear infinite;

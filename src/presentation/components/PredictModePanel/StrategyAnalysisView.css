@@ -664,7 +664,7 @@
 }
 
 .group-result.loss {
-    background: linear-gradient(135deg, var(--banker-bg) 0%, rgba(239, 68, 68, 0.4) 100%);
+    background: linear-gradient(135deg, var(--banker-bg) 0%, rgba(227, 26, 56, 0.4) 100%);
     color: var(--banker-light);
     border: 1px solid var(--banker-light);
     box-shadow: 0 0 15px var(--banker-glow), inset 0 0 10px var(--banker-glow);
@@ -740,7 +740,7 @@
     }
 
     50% {
-        background: rgba(20, 184, 166, 0.25);
+        background: rgba(212, 175, 55, 0.25);
     }
 }
 

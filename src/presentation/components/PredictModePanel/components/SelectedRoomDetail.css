@@ -22,11 +22,11 @@
 }
 
 .detail-hero.predict-b {
-  background: linear-gradient(180deg, rgba(239, 68, 68, 0.12) 0%, transparent 100%);
+  background: linear-gradient(180deg, rgba(227, 26, 56, 0.12) 0%, transparent 100%);
 }
 
 .detail-hero.predict-p {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.12) 0%, transparent 100%);
+  background: linear-gradient(180deg, rgba(30, 107, 224, 0.12) 0%, transparent 100%);
 }
 
 .detail-header {
@@ -85,12 +85,12 @@
 
 .detail-prediction__value.b {
   color: var(--red-bright);
-  text-shadow: 0 0 20px rgba(239, 68, 68, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+  text-shadow: 0 0 20px rgba(227, 26, 56, 0.4), 0 0 40px rgba(227, 26, 56, 0.2);
 }
 
 .detail-prediction__value.p {
   color: var(--blue-bright);
-  text-shadow: 0 0 20px rgba(59, 130, 246, 0.4), 0 0 40px rgba(59, 130, 246, 0.2);
+  text-shadow: 0 0 20px rgba(30, 107, 224, 0.4), 0 0 40px rgba(30, 107, 224, 0.2);
 }
 
 .detail-prediction__value.analyzing {
@@ -261,17 +261,17 @@
   background: linear-gradient(135deg, var(--gold-bright) 0%, var(--gold-dim) 100%);
   border: none;
   border-radius: 10px;
-  color: var(--bg-base, #080b10);
+  color: var(--bg-base, #0a0a0a);
   font-size: 14px;
   font-weight: 800;
   cursor: pointer;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 16px rgba(20, 184, 166, 0.3);
+  box-shadow: 0 4px 16px rgba(212, 175, 55, 0.3);
 }
 
 .detail-enter-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(20, 184, 166, 0.45);
+  box-shadow: 0 8px 24px rgba(212, 175, 55, 0.45);
   filter: brightness(1.1);
 }
 
@@ -280,7 +280,7 @@
   padding: 8px 16px;
   font-size: 13px;
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.25);
+  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.25);
   margin: 0;
 }
 

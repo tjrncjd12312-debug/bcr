@@ -17,7 +17,7 @@
   user-select: none;
   position: relative;
   border: 1px solid var(--border-subtle);
-  box-shadow: 0 0 0 1px rgba(20, 184, 166, 0.06);
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.06);
 }
 
 /* Custom Scrollbar for Windows Feel */
@@ -178,12 +178,12 @@
 }
 
 .sa-compact-btn.sound-toggle.on {
-  color: var(--accent-primary, #14B8A6);
-  background: rgba(20, 184, 166, 0.12);
+  color: var(--accent-primary, #d4af37);
+  background: rgba(212, 175, 55, 0.12);
 }
 
 .sa-compact-btn.sound-toggle.on:hover {
-  background: rgba(20, 184, 166, 0.2);
+  background: rgba(212, 175, 55, 0.2);
 }
 
 .sa-compact-btn.sound-toggle.off {
@@ -202,13 +202,13 @@
 }
 
 .sa-fs-btn.sound-toggle.on {
-  color: var(--accent-primary, #14B8A6);
-  background: rgba(20, 184, 166, 0.12);
-  border-color: rgba(20, 184, 166, 0.3);
+  color: var(--accent-primary, #d4af37);
+  background: rgba(212, 175, 55, 0.12);
+  border-color: rgba(212, 175, 55, 0.3);
 }
 
 .sa-fs-btn.sound-toggle.on:hover {
-  background: rgba(20, 184, 166, 0.2);
+  background: rgba(212, 175, 55, 0.2);
 }
 
 .sa-fs-btn.sound-toggle.off {
@@ -512,8 +512,8 @@
 
 .sa-compact-pred-circle.skip {
   background: rgba(255, 159, 10, 0.15);
-  color: #ff9f0a;
-  border: 3px solid #ff9f0a;
+  color: #f4ce49;
+  border: 3px solid #f4ce49;
   box-shadow: 0 0 24px rgba(255, 159, 10, 0.3);
   font-size: 16px;
 }
@@ -976,17 +976,17 @@
 }
 
 .sa-notification.win {
-  background: #30d158;
+  background: #22c55e;
   color: #000;
 }
 
 .sa-notification.loss {
-  background: #ff453a;
+  background: #e31a38;
   color: #fff;
 }
 
 .sa-notification.info {
-  background: #0a84ff;
+  background: #d4af37;
   color: #fff;
 }
 
@@ -1031,7 +1031,7 @@
 }
 
 .sa-mini-status.active {
-  background: #30d158;
+  background: #22c55e;
   color: #000;
 }
 
@@ -1048,20 +1048,20 @@
 
 .sa-mini-pred.b {
   background: rgba(255, 69, 58, 0.2);
-  color: #ff453a;
+  color: #e31a38;
   border: 1px solid rgba(255, 69, 58, 0.4);
 }
 
 .sa-mini-pred.p {
   background: rgba(10, 132, 255, 0.2);
-  color: #0a84ff;
+  color: #d4af37;
   border: 1px solid rgba(10, 132, 255, 0.4);
 }
 
 .sa-mini-martin {
   font-size: 10px;
   font-weight: 600;
-  color: #ff9f0a;
+  color: #f4ce49;
 }
 
 /* Expanded View */
@@ -1142,7 +1142,7 @@
 }
 
 .sa-toggle.active {
-  background: #ff453a;
+  background: #e31a38;
   color: #fff;
 }
 
@@ -1201,14 +1201,14 @@
 
 .sa-pred-circle.b {
   background: rgba(255, 69, 58, 0.2);
-  color: #ff453a;
-  border: 2px solid #ff453a;
+  color: #e31a38;
+  border: 2px solid #e31a38;
 }
 
 .sa-pred-circle.p {
   background: rgba(10, 132, 255, 0.2);
-  color: #0a84ff;
-  border: 2px solid #0a84ff;
+  color: #d4af37;
+  border: 2px solid #d4af37;
 }
 
 .sa-pred-label {
@@ -1245,14 +1245,14 @@
 
 .sa-timer-fill {
   height: 100%;
-  background: #30d158;
+  background: #22c55e;
   transition: width 0.3s linear;
 }
 
 .sa-timer-text {
   font-size: 10px;
   font-weight: 600;
-  color: #30d158;
+  color: #22c55e;
   min-width: 24px;
   text-align: right;
 }
@@ -1285,11 +1285,11 @@
 }
 
 .sa-stat-value.warning {
-  color: #ff9f0a;
+  color: #f4ce49;
 }
 
 .sa-stat-value.success {
-  color: #30d158;
+  color: #22c55e;
 }
 
 /* Quick Room Selection */
@@ -1359,7 +1359,7 @@
 
 .sa-setting-row input[type="number"]:focus {
   outline: none;
-  border-color: #0a84ff;
+  border-color: #d4af37;
 }
 
 .sa-setting-hint {
@@ -1378,7 +1378,7 @@
 .sa-setting-row input[type="checkbox"] {
   width: 14px;
   height: 14px;
-  accent-color: #30d158;
+  accent-color: #22c55e;
 }
 
 .sa-btn-reset {
@@ -1386,7 +1386,7 @@
   background: rgba(255, 69, 58, 0.2);
   border: none;
   border-radius: 6px;
-  color: #ff453a;
+  color: #e31a38;
   font-size: 10px;
   font-weight: 500;
   cursor: pointer;
@@ -1622,14 +1622,14 @@
 }
 
 .sa-fs-pred-big.b {
-  background: linear-gradient(135deg, #ff3b30, #ff9500);
+  background: linear-gradient(135deg, #e31a38, #f4ce49);
   color: #fff;
   box-shadow: 0 20px 50px rgba(255, 59, 48, 0.3);
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .sa-fs-pred-big.p {
-  background: linear-gradient(135deg, #007aff, #5ac8fa);
+  background: linear-gradient(135deg, #d4af37, #5a9bff);
   color: #fff;
   box-shadow: 0 20px 50px rgba(0, 122, 255, 0.3);
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
@@ -2126,7 +2126,7 @@
 
 .sa-compact-log.loss {
   border-left: 3px solid var(--red);
-  background: linear-gradient(90deg, rgba(239, 68, 68, 0.05) 0%, transparent 100%);
+  background: linear-gradient(90deg, rgba(227, 26, 56, 0.05) 0%, transparent 100%);
 }
 
 .sa-compact-log.prediction {

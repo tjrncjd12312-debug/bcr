@@ -155,7 +155,7 @@
 }
 
 .result-tag.loss {
-  background: rgba(239, 68, 68, 0.12);
+  background: rgba(227, 26, 56, 0.12);
   color: var(--red-bright);
 }
 
@@ -219,9 +219,9 @@
   font-weight: 700;
   padding: 3px 6px;
   border-radius: 6px;
-  background: rgba(20, 184, 166, 0.15);
-  border: 1px solid rgba(20, 184, 166, 0.25);
-  color: var(--accent-gold, #14B8A6);
+  background: rgba(212, 175, 55, 0.15);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  color: var(--accent-gold, #d4af37);
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: nowrap;
