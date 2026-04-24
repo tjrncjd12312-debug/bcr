@@ -179,14 +179,20 @@
 }
 
 .predict-header__rooms-count {
-  color: var(--gold-bright);
+  color: #ffffff;
   font-weight: 800;
   font-size: 13px;
 }
 
 .predict-header__rooms-total {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11px;
+  font-weight: 600;
+}
+
+.predict-header__rooms.has-selection .predict-header__rooms-count,
+.predict-header__rooms.has-selection .predict-header__rooms-total {
+  color: #ffffff;
 }
 
 /* Filter Dropdown */
