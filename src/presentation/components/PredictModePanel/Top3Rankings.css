@@ -192,128 +192,131 @@
   height: 14px;
 }
 
-/* Rank 1 - Gold */
+/* Rank 1 — Gold (brand primary) */
 .top3-card--rank1 {
-  background: linear-gradient(135deg, var(--accent-gold-muted) 0%, rgba(13, 148, 136, 0.06) 100%);
-  border: 1px solid rgba(212, 175, 55, 0.4);
-  box-shadow: 0 0 12px rgba(212, 175, 55, 0.1), inset 0 1px 0 rgba(212, 175, 55, 0.1);
+  background: var(--bg-card);
+  border: 1px solid rgba(212, 175, 55, 0.5);
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.15) inset, 0 2px 10px rgba(212, 175, 55, 0.12);
 }
 
 .top3-card--rank1:hover {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.18) 0%, rgba(13, 148, 136, 0.1) 100%);
-  border-color: rgba(212, 175, 55, 0.6);
-  box-shadow: 0 4px 20px rgba(212, 175, 55, 0.2);
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.25) inset, 0 4px 20px rgba(212, 175, 55, 0.28);
 }
 
 .top3-card--rank1 .top3-card__rank {
-  background: linear-gradient(135deg, var(--accent-gold) 0%, #f4ce49 100%);
+  background: linear-gradient(135deg, var(--accent-gold) 0%, var(--accent-gold-bright) 100%);
   color: var(--accent-text);
-  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.4);
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.45);
 }
 
 .top3-card--rank1 .top3-card__recent {
-  color: var(--accent-gold);
-  text-shadow: 0 0 8px rgba(212, 175, 55, 0.5);
+  color: var(--accent-gold-bright);
+  text-shadow: 0 0 6px rgba(244, 206, 73, 0.35);
 }
 
-/* Rank 2 - Silver */
+/* Rank 2 — Silver */
 .top3-card--rank2 {
-  background: linear-gradient(135deg, rgba(192, 192, 192, 0.1) 0%, rgba(160, 160, 160, 0.05) 100%);
-  border: 1px solid rgba(192, 192, 192, 0.3);
+  background: var(--bg-card);
+  border: 1px solid rgba(196, 189, 172, 0.35);
 }
 
 .top3-card--rank2:hover {
-  background: linear-gradient(135deg, rgba(192, 192, 192, 0.15) 0%, rgba(160, 160, 160, 0.08) 100%);
-  border-color: rgba(192, 192, 192, 0.5);
+  border-color: rgba(196, 189, 172, 0.65);
+  box-shadow: 0 4px 14px rgba(196, 189, 172, 0.15);
 }
 
 .top3-card--rank2 .top3-card__rank {
-  background: linear-gradient(135deg, #c4bdac 0%, #c4bdac 100%);
+  background: linear-gradient(135deg, #d6d0c0 0%, #a8a093 100%);
   color: var(--accent-text);
-  box-shadow: 0 2px 6px rgba(192, 192, 192, 0.3);
+  box-shadow: 0 2px 6px rgba(196, 189, 172, 0.35);
 }
 
-/* Rank 3 - Bronze */
+.top3-card--rank2 .top3-card__recent {
+  color: #d6d0c0;
+}
+
+/* Rank 3 — Bronze */
 .top3-card--rank3 {
-  background: linear-gradient(135deg, rgba(205, 127, 50, 0.1) 0%, rgba(180, 110, 40, 0.05) 100%);
-  border: 1px solid rgba(205, 127, 50, 0.3);
+  background: var(--bg-card);
+  border: 1px solid rgba(138, 109, 26, 0.55);
 }
 
 .top3-card--rank3:hover {
-  background: linear-gradient(135deg, rgba(205, 127, 50, 0.15) 0%, rgba(180, 110, 40, 0.08) 100%);
-  border-color: rgba(205, 127, 50, 0.5);
+  border-color: var(--accent-gold-dim);
+  box-shadow: 0 4px 14px rgba(138, 109, 26, 0.3);
 }
 
 .top3-card--rank3 .top3-card__rank {
-  background: linear-gradient(135deg, #8a6d1a 0%, #8a6d1a 100%);
+  background: linear-gradient(135deg, #b89030 0%, #8a6d1a 100%);
   color: var(--accent-text);
-  box-shadow: 0 2px 6px rgba(205, 127, 50, 0.3);
+  box-shadow: 0 2px 6px rgba(138, 109, 26, 0.4);
 }
 
-/* Rank 4 - Teal */
+.top3-card--rank3 .top3-card__recent {
+  color: #b89030;
+}
+
+/* Rank 4 — Purple (No Commission variant) */
 .top3-card--rank4 {
-  background: linear-gradient(135deg, rgba(0, 188, 212, 0.10) 0%, rgba(0, 151, 167, 0.05) 100%);
-  border: 1px solid rgba(0, 188, 212, 0.35);
+  background: var(--bg-card);
+  border: 1px solid rgba(139, 92, 246, 0.4);
 }
 
 .top3-card--rank4:hover {
-  background: linear-gradient(135deg, rgba(0, 188, 212, 0.16) 0%, rgba(0, 151, 167, 0.10) 100%);
-  border-color: rgba(0, 188, 212, 0.55);
+  border-color: var(--accent-purple);
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.25);
 }
 
 .top3-card--rank4 .top3-card__rank {
-  background: linear-gradient(135deg, #d4af37 0%, #d4af37 100%);
-  color: var(--accent-text);
-  box-shadow: 0 2px 6px rgba(0, 188, 212, 0.35);
+  background: linear-gradient(135deg, var(--accent-purple) 0%, #6d28d9 100%);
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(139, 92, 246, 0.4);
 }
 
 .top3-card--rank4 .top3-card__recent {
-  color: #d4af37;
-  text-shadow: 0 0 8px rgba(0, 188, 212, 0.5);
+  color: #b794f6;
 }
 
-/* Rank 5 - Purple */
+/* Rank 5 — Emerald */
 .top3-card--rank5 {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.10) 0%, rgba(212, 175, 55, 0.05) 100%);
-  border: 1px solid var(--border-accent);
+  background: var(--bg-card);
+  border: 1px solid rgba(34, 197, 94, 0.4);
 }
 
 .top3-card--rank5:hover {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.16) 0%, rgba(212, 175, 55, 0.10) 100%);
-  border-color: var(--accent-primary);
+  border-color: var(--tie-color);
+  box-shadow: 0 4px 14px rgba(34, 197, 94, 0.22);
 }
 
 .top3-card--rank5 .top3-card__rank {
-  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-glow);
+  background: linear-gradient(135deg, var(--tie-color) 0%, #16a34a 100%);
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(34, 197, 94, 0.4);
 }
 
 .top3-card--rank5 .top3-card__recent {
-  color: var(--accent-secondary);
-  text-shadow: 0 0 8px rgba(212, 175, 55, 0.5);
+  color: #4ade80;
 }
 
-/* Rank 6 - Slate */
+/* Rank 6 — Slate */
 .top3-card--rank6 {
-  background: linear-gradient(135deg, rgba(96, 125, 139, 0.10) 0%, rgba(69, 90, 100, 0.05) 100%);
-  border: 1px solid rgba(96, 125, 139, 0.35);
+  background: var(--bg-card);
+  border: 1px solid rgba(148, 141, 127, 0.3);
 }
 
 .top3-card--rank6:hover {
-  background: linear-gradient(135deg, rgba(96, 125, 139, 0.16) 0%, rgba(69, 90, 100, 0.10) 100%);
-  border-color: rgba(96, 125, 139, 0.55);
+  border-color: rgba(148, 141, 127, 0.55);
 }
 
 .top3-card--rank6 .top3-card__rank {
   background: linear-gradient(135deg, #948d7f 0%, #5a544a 100%);
   color: var(--text-primary);
-  box-shadow: 0 2px 6px rgba(96, 125, 139, 0.35);
+  box-shadow: 0 2px 6px rgba(148, 141, 127, 0.3);
 }
 
 .top3-card--rank6 .top3-card__recent {
-  color: #a8a093;
-  text-shadow: 0 0 8px rgba(96, 125, 139, 0.5);
+  color: #c4bdac;
 }
 
 /* ===== Out of Rank - 순위 밖 (미리보기 중인 방) ===== */
