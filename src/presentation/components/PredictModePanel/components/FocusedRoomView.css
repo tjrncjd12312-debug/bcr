@@ -35,10 +35,10 @@
   --status-danger: var(--status-danger, #e31a38);
   --status-warning: var(--status-warning, #f4ce49);
 
-  --text-primary: var(--text-primary, #f0f6fc);
-  --text-secondary: var(--text-secondary, #8b949e);
-  --text-muted: var(--text-muted, #6e7681);
-  --text-subtle: var(--text-tertiary, #484f58);
+  --text-primary: var(--text-primary, #f5f2ea);
+  --text-secondary: var(--text-secondary, #b8b0a0);
+  --text-muted: var(--text-muted, #8a8376);
+  --text-subtle: var(--text-tertiary, #5a544a);
 
   --border-subtle: var(--border-subtle, rgba(240,246,252,0.04));
   --border-default: var(--border-color, rgba(240,246,252,0.1));
@@ -492,7 +492,7 @@
   background: var(--win-bg-layer2, rgba(255, 255, 255, 0.05));
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
   cursor: pointer;
   transition: all 0.2s ease;
   flex-shrink: 0;
@@ -501,7 +501,7 @@
 .focused-room-v2__sound-toggle:hover {
   background: var(--win-bg-layer3, rgba(255, 255, 255, 0.08));
   border-color: var(--border-hover, rgba(255, 255, 255, 0.12));
-  color: var(--text-secondary, #8b949e);
+  color: var(--text-secondary, #b8b0a0);
   transform: scale(1.05);
 }
 
@@ -521,7 +521,7 @@
 }
 
 .focused-room-v2__sound-toggle.off {
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
   opacity: 0.6;
 }
 

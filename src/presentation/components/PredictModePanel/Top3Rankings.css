@@ -228,7 +228,7 @@
 }
 
 .top3-card--rank2 .top3-card__rank {
-  background: linear-gradient(135deg, #c0c0c0 0%, #a8a8a8 100%);
+  background: linear-gradient(135deg, #c4bdac 0%, #c4bdac 100%);
   color: var(--accent-text);
   box-shadow: 0 2px 6px rgba(192, 192, 192, 0.3);
 }
@@ -306,13 +306,13 @@
 }
 
 .top3-card--rank6 .top3-card__rank {
-  background: linear-gradient(135deg, #607d8b 0%, #455a64 100%);
+  background: linear-gradient(135deg, #948d7f 0%, #5a544a 100%);
   color: var(--text-primary);
   box-shadow: 0 2px 6px rgba(96, 125, 139, 0.35);
 }
 
 .top3-card--rank6 .top3-card__recent {
-  color: #90a4ae;
+  color: #a8a093;
   text-shadow: 0 0 8px rgba(96, 125, 139, 0.5);
 }
 

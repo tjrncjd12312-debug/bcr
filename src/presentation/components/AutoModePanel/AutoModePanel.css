@@ -945,7 +945,7 @@
 .auto-mode__bottom-summary-title {
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary, #8b949e);
+  color: var(--text-secondary, #b8b0a0);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 8px;
@@ -958,19 +958,19 @@
   padding: 3px 0;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
 }
 
 .auto-mode__bottom-log-time {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: 10px;
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
   flex-shrink: 0;
   min-width: 44px;
 }
 
 .auto-mode__bottom-log-room {
-  color: var(--text-primary, #e6edf3);
+  color: var(--text-primary, #f5f2ea);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -993,7 +993,7 @@
 }
 
 .auto-mode__bottom-log-empty {
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
   font-size: 11px;
   font-style: italic;
   padding: 12px 0;
@@ -1021,7 +1021,7 @@
 
 .auto-mode__bottom-summary-item .summary-label {
   font-size: 10px;
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
@@ -1029,7 +1029,7 @@
 .auto-mode__bottom-summary-item .summary-value {
   font-size: 14px;
   font-weight: 700;
-  color: var(--text-primary, #e6edf3);
+  color: var(--text-primary, #f5f2ea);
 }
 
 .auto-mode__bottom-summary-item .summary-value.positive {

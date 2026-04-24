@@ -41,6 +41,7 @@ coverage/
 .omc/
 .omx/
 .superpowers/
+.forge/
 
 # Local plans / scratch
 PLAN.md

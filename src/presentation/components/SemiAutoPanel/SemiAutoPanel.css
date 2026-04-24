@@ -187,7 +187,7 @@
 }
 
 .sa-compact-btn.sound-toggle.off {
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted, #948d7f);
   opacity: 0.6;
 }
 
@@ -212,7 +212,7 @@
 }
 
 .sa-fs-btn.sound-toggle.off {
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted, #948d7f);
   opacity: 0.6;
 }
 
@@ -1637,7 +1637,7 @@
 
 .sa-fs-pred-big.empty {
   background: var(--sa-shadow-color);
-  color: #c7c7cc;
+  color: #c4bdac;
   border: 4px dashed var(--sa-border-color);
 }
 

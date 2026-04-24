@@ -45,10 +45,10 @@
   --green-muted: var(--tie-bg, rgba(34,197,94,0.12));
 
   /* Text hierarchy from design system */
-  --text-primary: var(--text-primary, #f0f6fc);
-  --text-secondary: var(--text-secondary, #8b949e);
-  --text-muted: var(--text-muted, #6e7681);
-  --text-tertiary: var(--text-tertiary, #484f58);
+  --text-primary: var(--text-primary, #f5f2ea);
+  --text-secondary: var(--text-secondary, #b8b0a0);
+  --text-muted: var(--text-muted, #8a8376);
+  --text-tertiary: var(--text-tertiary, #5a544a);
 
   /* Borders from design system */
   --border: var(--border-color, rgba(240,246,252,0.1));
@@ -1032,9 +1032,9 @@
   --green: var(--tie-color, #22c55e);
   --green-bright: var(--tie-color, #22c55e);
   --green-muted: var(--tie-bg, rgba(34,197,94,0.12));
-  --text-primary: var(--text-primary, #f0f6fc);
-  --text-secondary: var(--text-secondary, #8b949e);
-  --text-muted: var(--text-muted, #6e7681);
+  --text-primary: var(--text-primary, #f5f2ea);
+  --text-secondary: var(--text-secondary, #b8b0a0);
+  --text-muted: var(--text-muted, #8a8376);
   --border: var(--border-color, rgba(240,246,252,0.1));
   --font-main: var(--font-sans, 'Inter', -apple-system, sans-serif);
 
@@ -2329,7 +2329,7 @@
 
 .shoe-reset-overlay__subtext {
   font-size: 12px;
-  color: var(--text-muted, #6e7681);
+  color: var(--text-muted, #8a8376);
   text-align: center;
 }
 
@@ -2357,7 +2357,7 @@
 
 .shoe-reset-overlay__progress-text {
   font-size: 11px;
-  color: var(--text-secondary, #8b949e);
+  color: var(--text-secondary, #b8b0a0);
   min-width: 32px;
 }
 

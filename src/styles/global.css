@@ -63,11 +63,11 @@
   --status-betting: #22c55e;
   --status-error: #e31a38;
 
-  /* ===== Text Hierarchy ===== */
-  --text-primary: #e8e4d6;
-  --text-secondary: #a8a093;
-  --text-muted: #7a7367;
-  --text-tertiary: #524d45;
+  /* ===== Text Hierarchy — tuned for pure-black bg ===== */
+  --text-primary: #f5f2ea;
+  --text-secondary: #c4bdac;
+  --text-muted: #948d7f;
+  --text-tertiary: #6b665c;
   --text-on-accent: #0a0a0a;
 
   /* ===== Borders ===== */
