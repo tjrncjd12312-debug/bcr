@@ -50,3 +50,6 @@ plan.md
 # Installers / binaries
 *.exe
 key
+
+# Git worktrees
+.worktrees/
