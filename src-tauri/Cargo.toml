@@ -64,6 +64,13 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+# Enable tokio test-util (tokio::time::pause / advance) for unit tests
+tokio = { version = "1.36", features = ["full", "test-util"] }
+
+[[bench]]
+name = "message_parser_bench"
+harness = false
 
 [features]
 default = ["custom-protocol"]

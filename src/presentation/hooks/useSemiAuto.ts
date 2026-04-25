@@ -1,7 +1,7 @@
 // useSemiAuto Hook - React hook for semi-automatic mode
 // Clean Architecture: Presentation Layer hook that uses Application Layer services
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Room, Prediction, BettingPhaseEvent } from '../../domain/entities'
 import type { ISoundPort } from '../../domain/interfaces'
 import SemiAutoService, { type SemiAutoState, type SemiAutoSettings, type BetLogEvent } from '../../application/services/SemiAutoService'
@@ -177,81 +177,145 @@ export function useSemiAuto(): UseSemiAutoResult {
   }, [])
 
   // Sound functions (abstracted through ISoundPort)
-  const sound = {
-    init: useCallback(async () => {
-      await getSoundPort().init()
-    }, [getSoundPort]),
-    preload: useCallback(() => {
-      getSoundPort().preload()
-    }, [getSoundPort]),
-    playPrediction: useCallback((prediction: 'B' | 'P' | null) => {
-      getSoundPort().playPrediction(prediction)
-    }, [getSoundPort]),
-    playMove: useCallback(() => {
-      getSoundPort().playMove()
-    }, [getSoundPort]),
-    playData: useCallback(() => {
-      getSoundPort().playData()
-    }, [getSoundPort]),
-    playTie: useCallback(() => {
-      getSoundPort().playTie()
-    }, [getSoundPort]),
-  }
+  const soundInit = useCallback(async () => {
+    await getSoundPort().init()
+  }, [getSoundPort])
+  const soundPreload = useCallback(() => {
+    getSoundPort().preload()
+  }, [getSoundPort])
+  const soundPlayPrediction = useCallback((prediction: 'B' | 'P' | null) => {
+    getSoundPort().playPrediction(prediction)
+  }, [getSoundPort])
+  const soundPlayMove = useCallback(() => {
+    getSoundPort().playMove()
+  }, [getSoundPort])
+  const soundPlayData = useCallback(() => {
+    getSoundPort().playData()
+  }, [getSoundPort])
+  const soundPlayTie = useCallback(() => {
+    getSoundPort().playTie()
+  }, [getSoundPort])
 
-  return {
-    enabled: state.settings.enabled,
-    settings: state.settings,
-    currentRoom: state.currentRoomId && state.currentRoomName
-      ? { id: state.currentRoomId, name: state.currentRoomName, provider: state.currentRoomProvider || undefined }
-      : null,
-    lastPrediction: state.lastPrediction,
-    waitingForResult: state.waitingForResult,
-    waitingForPrediction: state.waitingForPrediction,
-    isFirstRound: state.isFirstRound,
-    predictionMadeForRound: state.predictionMadeForRound,
-    martin: state.martin,
-    displayMartin: state.displayMartin,
-    winCount: state.winCount,
-    totalWins: state.totalWins,
-    totalLosses: state.totalLosses,
-    totalBetAmount: state.totalBetAmount,
-    cumulativeProfit: state.cumulativeProfit,
-    maxProfit: state.maxProfit,
-    maxLoss: state.maxLoss,
-    statusMessage: state.statusMessage,
-    realBalance: state.realBalance,
-    // Navigation
-    isNavigating: state.isNavigating,
-    // Betting timer
-    bettingTimer: state.bettingTimer,
-    // ✅ DEBUG: 디버깅용
-    lastEventRoomId: state.lastEventRoomId,
-    lastEventType: state.lastEventType,
-    roomHistoryLength: state.roomHistory.length,
-    bettingPhaseCount: state.bettingPhaseCount,
-    lastBlockReason: state.lastBlockReason,
-    // Actions
-    toggle,
-    updateSettings,
-    enterRoom,
-    navigateToRoom,
-    exitRoom,
-    updateAvailableRooms,
-    setSelectedRoomIds,
-    autoSelectBestRoom,
-    onBettingPhase,
-    onGameResult,
-    resetStats,
-    clearPreviousRooms,
-    onPrediction,
-    onResult,
-    onRoomChange,
-    onAutoEnterRoom,
-    onNavigateRoom,
-    onBetLog,
-    // Sound
-    sound,
-  }
+  const sound = useMemo(
+    () => ({
+      init: soundInit,
+      preload: soundPreload,
+      playPrediction: soundPlayPrediction,
+      playMove: soundPlayMove,
+      playData: soundPlayData,
+      playTie: soundPlayTie,
+    }),
+    [soundInit, soundPreload, soundPlayPrediction, soundPlayMove, soundPlayData, soundPlayTie]
+  )
+
+  const currentRoom = useMemo(
+    () =>
+      state.currentRoomId && state.currentRoomName
+        ? { id: state.currentRoomId, name: state.currentRoomName, provider: state.currentRoomProvider || undefined }
+        : null,
+    [state.currentRoomId, state.currentRoomName, state.currentRoomProvider]
+  )
+
+  return useMemo(
+    () => ({
+      enabled: state.settings.enabled,
+      settings: state.settings,
+      currentRoom,
+      lastPrediction: state.lastPrediction,
+      waitingForResult: state.waitingForResult,
+      waitingForPrediction: state.waitingForPrediction,
+      isFirstRound: state.isFirstRound,
+      predictionMadeForRound: state.predictionMadeForRound,
+      martin: state.martin,
+      displayMartin: state.displayMartin,
+      winCount: state.winCount,
+      totalWins: state.totalWins,
+      totalLosses: state.totalLosses,
+      totalBetAmount: state.totalBetAmount,
+      cumulativeProfit: state.cumulativeProfit,
+      maxProfit: state.maxProfit,
+      maxLoss: state.maxLoss,
+      statusMessage: state.statusMessage,
+      realBalance: state.realBalance,
+      // Navigation
+      isNavigating: state.isNavigating,
+      // Betting timer
+      bettingTimer: state.bettingTimer,
+      // ✅ DEBUG: 디버깅용
+      lastEventRoomId: state.lastEventRoomId,
+      lastEventType: state.lastEventType,
+      roomHistoryLength: state.roomHistory.length,
+      bettingPhaseCount: state.bettingPhaseCount,
+      lastBlockReason: state.lastBlockReason,
+      // Actions
+      toggle,
+      updateSettings,
+      enterRoom,
+      navigateToRoom,
+      exitRoom,
+      updateAvailableRooms,
+      setSelectedRoomIds,
+      autoSelectBestRoom,
+      onBettingPhase,
+      onGameResult,
+      resetStats,
+      clearPreviousRooms,
+      onPrediction,
+      onResult,
+      onRoomChange,
+      onAutoEnterRoom,
+      onNavigateRoom,
+      onBetLog,
+      // Sound
+      sound,
+    }),
+    [
+      state.settings,
+      currentRoom,
+      state.lastPrediction,
+      state.waitingForResult,
+      state.waitingForPrediction,
+      state.isFirstRound,
+      state.predictionMadeForRound,
+      state.martin,
+      state.displayMartin,
+      state.winCount,
+      state.totalWins,
+      state.totalLosses,
+      state.totalBetAmount,
+      state.cumulativeProfit,
+      state.maxProfit,
+      state.maxLoss,
+      state.statusMessage,
+      state.realBalance,
+      state.isNavigating,
+      state.bettingTimer,
+      state.lastEventRoomId,
+      state.lastEventType,
+      state.roomHistory.length,
+      state.bettingPhaseCount,
+      state.lastBlockReason,
+      toggle,
+      updateSettings,
+      enterRoom,
+      navigateToRoom,
+      exitRoom,
+      updateAvailableRooms,
+      setSelectedRoomIds,
+      autoSelectBestRoom,
+      onBettingPhase,
+      onGameResult,
+      resetStats,
+      clearPreviousRooms,
+      onPrediction,
+      onResult,
+      onRoomChange,
+      onAutoEnterRoom,
+      onNavigateRoom,
+      onBetLog,
+      sound,
+    ]
+  )
 }
 
 export default useSemiAuto

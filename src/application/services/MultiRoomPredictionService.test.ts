@@ -120,4 +120,159 @@ describe('MultiRoomPredictionService', () => {
 
     expect(virtualBetting.resolveBet).toHaveBeenCalledWith('room1', 'Room 1', 'B', 'T')
   })
+
+  // ─────────────── Characterization tests (M1 baseline) ───────────────
+  // Pin current observable behaviour so later lanes (F1 memoization,
+  // F3 history eviction) can refactor without silently breaking flows.
+  // Every assertion below describes the state of the code as of the
+  // baseline PR — failing any of these is a regression signal.
+
+  it('dispose is idempotent — safe to call before and after work', async () => {
+    expect(() => MultiRoomPredictionService.dispose()).not.toThrow()
+
+    const room: Room = {
+      id: 'roomA',
+      name: 'Room A',
+      koreanName: 'Room A',
+      history: [
+        { winner: 'B', isPlayerPair: false, isBankerPair: false },
+        { winner: 'P', isPlayerPair: false, isBankerPair: false },
+      ],
+      gameCount: 2,
+      remainingSeconds: 12,
+    }
+    adapter.setRoom(room)
+    await MultiRoomPredictionService.requestPrediction(room)
+
+    expect(() => MultiRoomPredictionService.dispose()).not.toThrow()
+    expect(() => MultiRoomPredictionService.dispose()).not.toThrow()
+  })
+
+  it('tolerates onGameResult for a room without an outstanding prediction', async () => {
+    const room: Room = {
+      id: 'orphan',
+      name: 'Orphan',
+      koreanName: 'Orphan',
+      history: [
+        { winner: 'B', isPlayerPair: false, isBankerPair: false },
+      ],
+      gameCount: 1,
+      remainingSeconds: 12,
+    }
+    adapter.setRoom(room)
+
+    await expect(
+      MultiRoomPredictionService.onGameResult({ roomId: 'orphan', winner: 'B' }, room),
+    ).resolves.not.toThrow()
+  })
+
+  describe('syncActiveRooms eviction (Lane F3)', () => {
+    async function seedRooms(count: number): Promise<Room[]> {
+      const rooms: Room[] = []
+      for (let i = 0; i < count; i++) {
+        const r: Room = {
+          id: `room${i}`,
+          name: `Room ${i}`,
+          koreanName: `Room ${i}`,
+          history: Array.from({ length: 10 }, (_, j) => ({
+            winner: (['B', 'P', 'T'] as const)[j % 3],
+            isPlayerPair: false,
+            isBankerPair: false,
+          })),
+          gameCount: 10,
+          remainingSeconds: 12,
+        }
+        adapter.setRoom(r)
+        await MultiRoomPredictionService.requestPrediction(r)
+        rooms.push(r)
+      }
+      return rooms
+    }
+
+    it('evicts room state for rooms outside the active set', async () => {
+      await seedRooms(5)
+      const allStates = MultiRoomPredictionService.getAllRoomStates()
+      expect(allStates.size).toBe(5)
+
+      MultiRoomPredictionService.syncActiveRooms(new Set(['room1', 'room2']))
+
+      const remaining = MultiRoomPredictionService.getAllRoomStates()
+      expect(remaining.size).toBe(2)
+      expect(remaining.has('room1')).toBe(true)
+      expect(remaining.has('room2')).toBe(true)
+      expect(remaining.has('room0')).toBe(false)
+      expect(remaining.has('room3')).toBe(false)
+      expect(remaining.has('room4')).toBe(false)
+    })
+
+    it('is idempotent — calling twice with the same set is a no-op', async () => {
+      await seedRooms(3)
+
+      const stateChanges = vi.fn()
+      const unsub = MultiRoomPredictionService.onStateChange(stateChanges)
+
+      MultiRoomPredictionService.syncActiveRooms(new Set(['room0']))
+      const firstCallCount = stateChanges.mock.calls.length
+
+      MultiRoomPredictionService.syncActiveRooms(new Set(['room0']))
+      const secondCallCount = stateChanges.mock.calls.length
+
+      expect(secondCallCount).toBe(firstCallCount)
+      expect(MultiRoomPredictionService.getAllRoomStates().size).toBe(1)
+
+      unsub()
+    })
+
+    it('clears everything when the active set is empty', async () => {
+      await seedRooms(4)
+      expect(MultiRoomPredictionService.getAllRoomStates().size).toBe(4)
+
+      MultiRoomPredictionService.syncActiveRooms(new Set())
+
+      expect(MultiRoomPredictionService.getAllRoomStates().size).toBe(0)
+    })
+
+    it('emits a state change only when at least one entry is evicted', async () => {
+      await seedRooms(2)
+
+      const stateChanges = vi.fn()
+      const unsub = MultiRoomPredictionService.onStateChange(stateChanges)
+
+      // All active -> no eviction -> no extra emit
+      const before = stateChanges.mock.calls.length
+      MultiRoomPredictionService.syncActiveRooms(new Set(['room0', 'room1']))
+      expect(stateChanges.mock.calls.length).toBe(before)
+
+      // Drop one -> eviction -> emit
+      MultiRoomPredictionService.syncActiveRooms(new Set(['room0']))
+      expect(stateChanges.mock.calls.length).toBeGreaterThan(before)
+
+      unsub()
+    })
+  })
+
+  it('handles concurrent predictions across multiple rooms', async () => {
+    const rooms: Room[] = []
+    for (let i = 0; i < 5; i++) {
+      const r: Room = {
+        id: `room${i}`,
+        name: `Room ${i}`,
+        koreanName: `Room ${i}`,
+        history: Array.from({ length: 10 }, (_, j) => ({
+          winner: (['B', 'P', 'T'] as const)[j % 3],
+          isPlayerPair: false,
+          isBankerPair: false,
+        })),
+        gameCount: 10,
+        remainingSeconds: 12,
+      }
+      adapter.setRoom(r)
+      rooms.push(r)
+    }
+
+    const results = await Promise.all(
+      rooms.map(r => MultiRoomPredictionService.requestPrediction(r)),
+    )
+    expect(results).toHaveLength(5)
+  })
 })

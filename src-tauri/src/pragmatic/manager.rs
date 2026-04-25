@@ -6,6 +6,7 @@ use tracing::{info, warn};
 use url::Url;
 
 use super::client::PragmaticClient;
+use crate::presentation::task_registry::TaskRegistry;
 
 // Global state managed by Tauri
 pub struct PragmaticManagerState {
@@ -24,6 +25,9 @@ pub struct PragmaticConnectionManager {
     clients: HashMap<String, PragmaticClient>,
     // Active session info (captured from the first valid connection)
     active_session: Option<PragmaticSession>,
+    /// Lane R2: Tracks the per-room WebSocket spawn so reconnects/teardown
+    /// don't leak `JoinHandle`s. Keyed by `pragmatic:{room_id}`.
+    task_registry: Arc<TaskRegistry>,
 }
 
 impl PragmaticConnectionManager {
@@ -31,6 +35,7 @@ impl PragmaticConnectionManager {
         Self {
             clients: HashMap::new(),
             active_session: None,
+            task_registry: Arc::new(TaskRegistry::new()),
         }
     }
 
@@ -112,8 +117,15 @@ impl PragmaticConnectionManager {
             return Ok(());
         }
 
+        // TODO(R4): the manager-wide lock is held across this `await`. R4 will
+        // narrow the lock scope; R2 only adds the task-handle registry.
         let mut client = PragmaticClient::new(room_id.clone());
-        client.connect(app_handle, ws_url).await?;
+        let handle = client.connect(app_handle, ws_url).await?;
+
+        // Lane R2: record the spawned task so the manager can abort it on
+        // disconnect, even if the client's broadcast shutdown is missed.
+        let registry_key = format!("pragmatic:{}", room_id);
+        self.task_registry.insert(registry_key, handle);
 
         self.clients.insert(room_id, client);
         Ok(())
@@ -137,6 +149,10 @@ impl PragmaticConnectionManager {
             info!("🔌 Disconnecting room: {}", room_id);
             client.disconnect().await;
         }
+        // Lane R2: abort the spawned task for this specific room. Safe to call
+        // even when no handle is registered (returns false).
+        let registry_key = format!("pragmatic:{}", room_id);
+        self.task_registry.abort(&registry_key);
     }
 
     pub async fn disconnect_all(&mut self) {
@@ -145,6 +161,10 @@ impl PragmaticConnectionManager {
             client.disconnect().await;
         }
         self.active_session = None;
+        // Lane R2 safety net: abort every still-tracked task. The per-client
+        // broadcast shutdown is the primary cancellation path; this catches
+        // tasks that never observed the broadcast.
+        self.task_registry.abort_all();
     }
 
     // Helper to construct a URL for a newly discovered room using saved session

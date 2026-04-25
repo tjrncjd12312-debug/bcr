@@ -1,6 +1,6 @@
 // useRoomFilters Hook - Room filtering state management
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { RoomFilterType, RoomFilter, Room, RoomPredictionState } from '../../domain/entities'
 import RoomFilterService from '../../application/services/RoomFilterService'
 
@@ -78,16 +78,28 @@ export function useRoomFilters(): UseRoomFiltersResult {
     return RoomFilterService.matchesFilter(room, predictionState, filterType)
   }, [])
 
-  return {
-    availableFilters,
-    activeFilters,
-    toggleFilter,
-    setFilters,
-    clearFilters,
-    filterRooms,
-    getMatchingFilters,
-    matchesFilter,
-  }
+  return useMemo(
+    () => ({
+      availableFilters,
+      activeFilters,
+      toggleFilter,
+      setFilters,
+      clearFilters,
+      filterRooms,
+      getMatchingFilters,
+      matchesFilter,
+    }),
+    [
+      availableFilters,
+      activeFilters,
+      toggleFilter,
+      setFilters,
+      clearFilters,
+      filterRooms,
+      getMatchingFilters,
+      matchesFilter,
+    ]
+  )
 }
 
 export default useRoomFilters

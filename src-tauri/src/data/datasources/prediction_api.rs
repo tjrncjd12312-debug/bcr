@@ -7,6 +7,7 @@
 
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -93,6 +94,65 @@ pub struct V2PredictionRequest {
     /// 🆕 v3.7.0: 클라이언트 타입
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_type: Option<String>,
+}
+
+impl V2PredictionRequest {
+    /// Lane R3 (perf-plan): 공유 히스토리 스냅샷(`Arc<Vec<GameRound>>`) 로부터
+    /// 요청을 생성한다.
+    ///
+    /// # 계약
+    /// - `history` 는 `EvolutionDataManager` 가 저장한 불변 스냅샷의 `Arc::clone` 이어야 한다.
+    /// - 공개 `V2PredictionRequest::history` 필드 타입(`Vec<GameRound>`, serde 직렬화
+    ///   대상)은 동결이므로, 이 생성자는 JSON 직렬화 직전 단 1회 소유 Vec으로
+    ///   전환한다(*boundary clone*, 정당함).
+    /// - `auto_mode`/`martin_level`/`min_confidence`/`user_*`/`bet_amount` 등
+    ///   커맨드 레이어에서 추가로 주입되는 필드는 `None`으로 초기화되며, 호출자가
+    ///   필요에 따라 필드 접근으로 설정한다.
+    ///
+    /// # 왜 `&Arc<Vec<_>>`가 아닌 `Arc<Vec<_>>`를 받는가
+    /// 소유권 이동으로 호출자 측의 Arc를 `drop` 시점까지 정확히 1회만 bump한다.
+    /// 호출자가 스냅샷을 계속 보유해야 하면 미리 `Arc::clone` 해서 넘기면 된다.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_shared(
+        room_id: String,
+        room_name: String,
+        game_id: Option<String>,
+        game_number: Option<String>,
+        history: Arc<Vec<GameRound>>,
+        last_game_cards: Option<CardInfo>,
+        betting_stats: Option<BettingStats>,
+        shoe_stats: Option<ShoeStats>,
+        bet_type: Option<String>,
+    ) -> Self {
+        // Boundary clone: Arc<Vec<GameRound>> -> Vec<GameRound>.
+        // refcount == 1 이면 내부 Vec을 옮기고(그 경우 복제 0회),
+        // refcount > 1 이면 Vec을 1회 복제한다. R3의 목적은
+        // "핫패스에서의 메시지당 복제 제거" 이며, 이 지점은 HTTP 직렬화 직전의
+        // 1회성 경계 복제이므로 허용된다(plan.md §3 Lane R3 참고).
+        let history: Vec<GameRound> =
+            Arc::try_unwrap(history).unwrap_or_else(|arc| (*arc).clone());
+
+        Self {
+            room_id,
+            room_name,
+            game_id,
+            game_number,
+            history,
+            last_game_cards,
+            betting_stats,
+            shoe_stats,
+            bet_type,
+            martin_level: None,
+            min_confidence: None,
+            auto_mode: None,
+            user_id: None,
+            username: None,
+            session_id: None,
+            current_balance: None,
+            bet_amount: None,
+            client_type: None,
+        }
+    }
 }
 
 /// 게임 라운드 정보
@@ -1156,5 +1216,71 @@ mod tests {
         assert!(json.contains("\"roomName\":\"테스트 방\""));
         // Optional fields should not be present when None
         assert!(!json.contains("\"gameId\""));
+    }
+
+    /// Lane R3: `from_shared`는 Arc에서 소유 Vec로 단 1회 경계 복제만 수행한다.
+    /// 호출자가 Arc의 마지막 보유자인 경우 복제 없이 inner Vec이 이동되어야 한다.
+    #[test]
+    fn test_from_shared_unique_arc_moves_vec_without_clone() {
+        let history = Arc::new(vec![GameRound {
+            winner: "Banker".to_string(),
+            player_score: Some(5),
+            banker_score: Some(7),
+            natural: None,
+            player_pair: None,
+            banker_pair: None,
+        }]);
+        // Arc refcount == 1 이므로 try_unwrap 성공 → Vec 복제 없이 move
+        assert_eq!(Arc::strong_count(&history), 1);
+
+        let request = V2PredictionRequest::from_shared(
+            "rid".to_string(),
+            "rname".to_string(),
+            None,
+            None,
+            history,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(request.history.len(), 1);
+        assert_eq!(request.history[0].winner, "Banker");
+    }
+
+    /// Lane R3: 공유 중인 Arc(refcount > 1)일 때는 Vec을 1회 복제한다.
+    /// 원본 Arc는 변하지 않고 유지되어야 한다 (snapshot 불변성).
+    #[test]
+    fn test_from_shared_shared_arc_clones_vec_once() {
+        let history = Arc::new(vec![
+            GameRound {
+                winner: "Player".to_string(),
+                player_score: None,
+                banker_score: None,
+                natural: None,
+                player_pair: None,
+                banker_pair: None,
+            };
+            100
+        ]);
+        let retained = Arc::clone(&history);
+        assert_eq!(Arc::strong_count(&history), 2);
+
+        let request = V2PredictionRequest::from_shared(
+            "rid".to_string(),
+            "rname".to_string(),
+            None,
+            None,
+            history,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(request.history.len(), 100);
+        // 원본 Arc(retained)는 여전히 100개를 보유
+        assert_eq!(retained.len(), 100);
+        // from_shared 호출 후 retained만 남아 refcount == 1
+        assert_eq!(Arc::strong_count(&retained), 1);
     }
 }

@@ -1,6 +1,6 @@
 // useMultiRoomPrediction Hook - Multi-room prediction state management
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type {
   MultiRoomPredictionState,
   RoomPredictionState,
@@ -92,22 +92,40 @@ export function useMultiRoomPrediction(): UseMultiRoomPredictionResult {
     return MultiRoomPredictionService.onResult(callback)
   }, [])
 
-  return {
-    autoMode: state.autoMode,
-    globalStats: state.globalStats,
-    roomStates: state.roomStates,
-    setAutoMode,
-    toggleAutoMode,
-    setFocusedRoomId,
-    setPredictModeActive,
-    requestPrediction,
-    onGameResult,
-    onBettingPhase,
-    resetStats,
-    clearAllHistories,
-    onPrediction,
-    onResult,
-  }
+  return useMemo(
+    () => ({
+      autoMode: state.autoMode,
+      globalStats: state.globalStats,
+      roomStates: state.roomStates,
+      setAutoMode,
+      toggleAutoMode,
+      setFocusedRoomId,
+      setPredictModeActive,
+      requestPrediction,
+      onGameResult,
+      onBettingPhase,
+      resetStats,
+      clearAllHistories,
+      onPrediction,
+      onResult,
+    }),
+    [
+      state.autoMode,
+      state.globalStats,
+      state.roomStates,
+      setAutoMode,
+      toggleAutoMode,
+      setFocusedRoomId,
+      setPredictModeActive,
+      requestPrediction,
+      onGameResult,
+      onBettingPhase,
+      resetStats,
+      clearAllHistories,
+      onPrediction,
+      onResult,
+    ]
+  )
 }
 
 export default useMultiRoomPrediction

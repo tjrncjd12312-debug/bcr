@@ -855,6 +855,75 @@ class MultiRoomPredictionServiceImpl {
   }
 
   /**
+   * 🧹 Lane F3 (perf-plan): Evict per-room state for rooms that are no longer active.
+   *
+   * Call this after the active room set (subscribed/visible rooms) changes so the
+   * service's internal Maps do not grow unbounded as users navigate between rooms
+   * or disconnect/reconnect. Only entries whose key is NOT in `activeRoomIds`
+   * are removed.
+   *
+   * Maps cleaned:
+   *  - fullHistories
+   *  - pendingPredictions
+   *  - dirtyRooms
+   *  - state.roomStates
+   *  - clearTimers (timeouts are cleared before deletion)
+   *
+   * Idempotent: repeated calls with the same set are no-ops. When nothing is
+   * evicted no state-change callback is emitted, avoiding spurious re-renders.
+   *
+   * Public API addition — non-breaking. Existing method names and shapes are
+   * preserved.
+   */
+  syncActiveRooms(activeRoomIds: Set<string>): void {
+    let evicted = 0
+
+    this.fullHistories.forEach((_, id) => {
+      if (!activeRoomIds.has(id)) {
+        this.fullHistories.delete(id)
+        evicted++
+      }
+    })
+
+    this.pendingPredictions.forEach((_, id) => {
+      if (!activeRoomIds.has(id)) {
+        this.pendingPredictions.delete(id)
+        evicted++
+      }
+    })
+
+    this.dirtyRooms.forEach((id) => {
+      if (!activeRoomIds.has(id)) {
+        this.dirtyRooms.delete(id)
+        evicted++
+      }
+    })
+
+    this.state.roomStates.forEach((_, id) => {
+      if (!activeRoomIds.has(id)) {
+        this.state.roomStates.delete(id)
+        evicted++
+      }
+    })
+
+    this.clearTimers.forEach((timer, id) => {
+      if (!activeRoomIds.has(id)) {
+        clearTimeout(timer)
+        this.pendingTimers.delete(timer)
+        this.clearTimers.delete(id)
+        evicted++
+      }
+    })
+
+    if (evicted > 0) {
+      // Invalidate memoized state and notify subscribers so UI can drop stale rows.
+      this._topLevelDirty = true
+      this._lastEmittedState = null
+      this.emitStateChange(true)
+    }
+  }
+
+  /**
    * Clear all pending timers (memory leak prevention)
    */
   clearPendingTimers(): void {

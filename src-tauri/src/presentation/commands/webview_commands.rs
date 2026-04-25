@@ -9,6 +9,7 @@ use crate::evolution::multi_client::{
 };
 use crate::pragmatic::manager::PragmaticManagerState;
 use crate::pragmatic::{normalizer as pragmatic_normalizer, parser as pragmatic_parser};
+use crate::presentation::task_registry::TaskRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -34,6 +35,16 @@ static LOBBY_PAGE_ID: Mutex<Option<String>> = Mutex::new(None);
 
 /// Flag to signal CDP monitoring should stop (set when Evolution session is captured)
 static CDP_SHOULD_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Lane R2 (perf-plan): registry for the long-running CDP polling task. The
+/// existing `CDP_SHOULD_STOP` atomic is the cooperative cancellation path; the
+/// registry is the safety net so `stop_cdp_monitoring` and `restart_cdp_monitoring`
+/// can hard-abort a stuck poller (e.g. blocked on an HTTP read) instead of
+/// leaking the `JoinHandle`. Defense in depth, not a replacement.
+static CDP_TASK_REGISTRY: Lazy<TaskRegistry> = Lazy::new(TaskRegistry::new);
+
+/// Stable key under which the CDP polling task is registered.
+const CDP_MONITOR_KEY: &str = "cdp:monitor";
 
 /// Multiwidget connection status - prevents duplicate connection attempts
 static MULTIWIDGET_CONNECTED: std::sync::atomic::AtomicBool =
@@ -906,8 +917,10 @@ pub async fn start_cdp_monitoring(
 
     let app_handle = app.clone();
 
-    // Spawn async task to poll for pages and monitor them
-    tokio::spawn(async move {
+    // Spawn async task to poll for pages and monitor them.
+    // Lane R2: capture the JoinHandle and store it in CDP_TASK_REGISTRY so
+    // stop/restart can hard-abort it as a safety net on top of CDP_SHOULD_STOP.
+    let cdp_handle = tokio::spawn(async move {
         // Wait a bit for Chrome to fully initialize
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
@@ -1131,6 +1144,12 @@ pub async fn start_cdp_monitoring(
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
     });
+
+    // Lane R2: register the polling task. If a previous CDP monitor task is
+    // still alive (e.g. start_cdp_monitoring was called twice without an
+    // explicit stop), `insert` aborts the prior handle before installing the
+    // new one — guaranteeing idempotency and zero JoinHandle leaks.
+    CDP_TASK_REGISTRY.insert(CDP_MONITOR_KEY, cdp_handle);
 
     Ok(true)
 }
@@ -4236,6 +4255,10 @@ pub async fn stop_cdp_monitoring() -> Result<(), String> {
         "🛑 Stopping CDP monitoring - Evolution session captured, switching to direct room sockets"
     );
     CDP_SHOULD_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+    // Lane R2: belt-and-suspenders abort. The atomic flag is the primary
+    // cooperative cancellation; aborting via the registry is the safety net
+    // for a poller stuck in a syscall (e.g. blocked HTTP read).
+    CDP_TASK_REGISTRY.abort(CDP_MONITOR_KEY);
     Ok(())
 }
 
@@ -4243,6 +4266,9 @@ pub async fn stop_cdp_monitoring() -> Result<(), String> {
 #[tauri::command]
 pub async fn restart_cdp_monitoring() -> Result<(), String> {
     info!("🔄 Restarting CDP monitoring - Rust connection disconnected");
+    // Lane R2: abort any lingering CDP monitor task before resetting flags.
+    // Without this, a stale task from a prior session could race the new one.
+    CDP_TASK_REGISTRY.abort(CDP_MONITOR_KEY);
     // Reset flags to allow reconnection
     CDP_SHOULD_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
     MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);

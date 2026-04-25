@@ -1,6 +1,6 @@
 // useVirtualBetting Hook - Virtual betting state management
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type {
   VirtualBettingState,
   VirtualBetSettings,
@@ -98,31 +98,55 @@ export function useVirtualBetting(): UseVirtualBettingResult {
     return VirtualBettingService.onBetLog(callback)
   }, [])
 
-  return {
-    enabled: state.enabled,
-    settings: state.settings,
-    globalBalance: state.globalBalance,
-    roomStates: state.roomStates,
-    recentLogs: state.betHistory.slice(-50),
-    // Extended statistics
-    totalBetAmount: state.totalBetAmount,
-    totalWinnings: state.totalWinnings,
-    totalNetProfit: state.totalNetProfit,
-    totalBetCount: state.totalBetCount,
-    // Pending bet tracking
-    pendingBetAmount: state.pendingBetAmount,
-    pendingBetCount: state.pendingBetCount,
-    // Actions
-    enable,
-    disable,
-    toggle,
-    updateSettings,
-    reset,
-    formatCurrency,
-    getMartingaleLevelText,
-    getProfitClass,
-    onBetLog,
-  }
+  return useMemo(
+    () => ({
+      enabled: state.enabled,
+      settings: state.settings,
+      globalBalance: state.globalBalance,
+      roomStates: state.roomStates,
+      recentLogs: state.betHistory.slice(-50),
+      // Extended statistics
+      totalBetAmount: state.totalBetAmount,
+      totalWinnings: state.totalWinnings,
+      totalNetProfit: state.totalNetProfit,
+      totalBetCount: state.totalBetCount,
+      // Pending bet tracking
+      pendingBetAmount: state.pendingBetAmount,
+      pendingBetCount: state.pendingBetCount,
+      // Actions
+      enable,
+      disable,
+      toggle,
+      updateSettings,
+      reset,
+      formatCurrency,
+      getMartingaleLevelText,
+      getProfitClass,
+      onBetLog,
+    }),
+    [
+      state.enabled,
+      state.settings,
+      state.globalBalance,
+      state.roomStates,
+      state.betHistory,
+      state.totalBetAmount,
+      state.totalWinnings,
+      state.totalNetProfit,
+      state.totalBetCount,
+      state.pendingBetAmount,
+      state.pendingBetCount,
+      enable,
+      disable,
+      toggle,
+      updateSettings,
+      reset,
+      formatCurrency,
+      getMartingaleLevelText,
+      getProfitClass,
+      onBetLog,
+    ]
+  )
 }
 
 export default useVirtualBetting

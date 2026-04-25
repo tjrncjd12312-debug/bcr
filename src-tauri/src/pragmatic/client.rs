@@ -2,6 +2,7 @@
 // use tokio::sync::Mutex;
 use futures_util::{SinkExt, StreamExt};
 use tauri::{AppHandle, Emitter};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
 use url::Url;
@@ -32,7 +33,15 @@ impl PragmaticClient {
         self.is_connected
     }
 
-    pub async fn connect(&mut self, app_handle: AppHandle, ws_url: String) -> Result<(), String> {
+    /// Connect and return the spawned task handle so the caller (the manager)
+    /// can register it in its `TaskRegistry`. Lane R2 (perf-plan): without
+    /// returning the handle, the JoinHandle was previously dropped at the
+    /// `tokio::spawn` site, leaking the task on disconnect.
+    pub async fn connect(
+        &mut self,
+        app_handle: AppHandle,
+        ws_url: String,
+    ) -> Result<JoinHandle<()>, String> {
         if self.is_connected {
             self.disconnect().await;
         }
@@ -56,7 +65,7 @@ impl PragmaticClient {
         let app_handle_clone = app_handle.clone();
         let room_id_clone = self.room_id.clone();
 
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             match connect_async(url_string).await {
                 Ok((ws_stream, _)) => {
                     info!("[{}] ✅ Pragmatic WebSocket Connected", room_id_clone);
@@ -121,7 +130,7 @@ impl PragmaticClient {
         });
 
         self.is_connected = true;
-        Ok(())
+        Ok(join_handle)
     }
 
     pub async fn send_message(&self, message: String) -> Result<(), String> {

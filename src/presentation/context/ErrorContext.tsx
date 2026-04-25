@@ -5,6 +5,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   type ReactNode,
 } from 'react'
@@ -44,6 +45,11 @@ const ErrorContext = createContext<ErrorContextValue | null>(null)
 
 // Toast ID counter
 let toastIdCounter = 0
+
+// 🧹 Lane F3 (perf-plan): cap toast queue to avoid unbounded growth under
+// bursty error scenarios. When the queue is full the oldest toast is evicted
+// and any associated auto-hide timer is cleared.
+const MAX_TOAST_QUEUE = 20
 
 // Provider component
 interface ErrorProviderProps {
@@ -88,7 +94,21 @@ export function ErrorProvider({ children }: ErrorProviderProps): JSX.Element {
       const id = ++toastIdCounter
       const toast: Toast = { id, message, severity, duration }
 
-      setToasts((prev) => [...prev, toast])
+      setToasts((prev) => {
+        if (prev.length < MAX_TOAST_QUEUE) {
+          return [...prev, toast]
+        }
+        // Evict oldest toast (FIFO) and clear its timer if any. Lane F3.
+        const oldest = prev[0]
+        if (oldest) {
+          const oldTimer = toastTimersRef.current.get(oldest.id)
+          if (oldTimer) {
+            clearTimeout(oldTimer)
+            toastTimersRef.current.delete(oldest.id)
+          }
+        }
+        return [...prev.slice(1), toast]
+      })
 
       // Auto-hide toast with cleanup tracking
       if (duration > 0) {
@@ -151,20 +171,36 @@ export function ErrorProvider({ children }: ErrorProviderProps): JSX.Element {
     [showToast]
   )
 
-  const value: ErrorContextValue = {
-    errors,
-    addError,
-    clearError,
-    clearAllErrors,
-    toasts,
-    showToast,
-    hideToast,
-    showError,
-    showWarning,
-    showInfo,
-    showSuccess,
-    showDanger,
-  }
+  const value = useMemo<ErrorContextValue>(
+    () => ({
+      errors,
+      addError,
+      clearError,
+      clearAllErrors,
+      toasts,
+      showToast,
+      hideToast,
+      showError,
+      showWarning,
+      showInfo,
+      showSuccess,
+      showDanger,
+    }),
+    [
+      errors,
+      addError,
+      clearError,
+      clearAllErrors,
+      toasts,
+      showToast,
+      hideToast,
+      showError,
+      showWarning,
+      showInfo,
+      showSuccess,
+      showDanger,
+    ]
+  )
 
   return <ErrorContext.Provider value={value}>{children}</ErrorContext.Provider>
 }

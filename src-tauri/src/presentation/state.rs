@@ -11,9 +11,11 @@ use crate::data::datasources::{
     EvolutionDataManager, LocalStorage, LocalStorageConfig, PredictionApiConfig,
 };
 use crate::data::repositories::{PredictionRepositoryImpl, RoomRepositoryImpl, UserRepositoryImpl};
+use crate::presentation::event_aggregator::EventAggregator;
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tauri::AppHandle;
 use tracing::info;
 
 /// Application state managed by Tauri
@@ -46,6 +48,13 @@ pub struct AppState {
 
     /// Evolution 데이터 매니저 (V2 API용)
     pub evolution_data: Arc<EvolutionDataManager>,
+
+    /// Event aggregator for batched Tauri event emission (Lane R1).
+    ///
+    /// `None` until `install_event_aggregator()` is called from Tauri
+    /// `setup()`, because the aggregator needs an `AppHandle` which is not
+    /// available during `AppState::new()`.
+    pub event_aggregator: Option<Arc<EventAggregator>>,
 }
 
 impl AppState {
@@ -99,7 +108,17 @@ impl AppState {
             local_storage,
             site_url: RwLock::new(None),
             evolution_data,
+            event_aggregator: None,
         })
+    }
+
+    /// Install the event aggregator once a Tauri `AppHandle` is available
+    /// (from `setup()`). No-op if already installed. Lane R1 infrastructure.
+    pub fn install_event_aggregator(&mut self, handle: AppHandle) {
+        if self.event_aggregator.is_none() {
+            self.event_aggregator = Some(Arc::new(EventAggregator::new(handle)));
+            info!("📦 Event aggregator installed (Lane R1)");
+        }
     }
 
     /// Update API server URL

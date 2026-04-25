@@ -8,11 +8,22 @@ use crate::data::datasources::prediction_api::{
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 // ==================== 방별 게임 데이터 ====================
 
 /// 방별 게임 상태
+///
+/// Lane R3 (perf-plan): `history` 필드는 `Arc<Vec<GameRound>>`로 보관됩니다.
+/// Evolution WebSocket hot path에서 메시지당 발생하던 Vec 전체 복제를
+/// refcount 증가(O(1))로 대체하기 위해 *internal storage* 레벨에서 Arc로
+/// 감쌌습니다. 이 Arc는 **불변(snapshot) 취급**이며, 히스토리 갱신은 항상
+/// 새 `Arc::new(Vec<..>)`으로 교체합니다(`Arc::make_mut` 금지 — 공유 중인
+/// 스냅샷의 내부를 변경하면 이전 consumer가 보는 데이터가 오염됩니다).
+/// 공개 Tauri 커맨드 시그니처와 `V2PredictionRequest`의 필드 타입은
+/// 동결되어 있으므로, JSON 직렬화 시점에 단 1회 `(*arc).clone()`으로
+/// 소유 Vec을 생성합니다(boundary clone; 허용).
 #[derive(Debug, Clone, Default)]
 pub struct RoomGameData {
     /// 방 ID
@@ -23,8 +34,9 @@ pub struct RoomGameData {
     pub game_id: Option<String>,
     /// 게임 번호
     pub game_number: Option<String>,
-    /// 히스토리 (V2 형식)
-    pub history: Vec<GameRound>,
+    /// 히스토리 (V2 형식, 공유 스냅샷).
+    /// R3: `Arc<Vec<GameRound>>`로 저장해 핫패스 복제를 제거.
+    pub history: Arc<Vec<GameRound>>,
     /// 슈 상태
     pub shoe_stats: Option<ShoeStats>,
     /// 현재 베팅 쏠림
@@ -48,53 +60,37 @@ impl RoomGameData {
     }
 
     /// V2 예측 요청 생성
+    ///
+    /// R3: `self.history`는 `Arc<Vec<GameRound>>`이며, 공개 `V2PredictionRequest`
+    /// 의 `history: Vec<GameRound>` 필드(동결)에 맞추기 위해 `from_shared` 경로로
+    /// 위임한다. 내부적으로 Arc를 1회만 소유 Vec으로 풀어낸다(boundary clone).
     pub fn to_v2_request(&self) -> V2PredictionRequest {
-        V2PredictionRequest {
-            room_id: self.room_id.clone(),
-            room_name: self.room_name.clone(),
-            game_id: self.game_id.clone(),
-            game_number: self.game_number.clone(),
-            history: self.history.clone(),
-            last_game_cards: self.last_game_cards.clone(),
-            betting_stats: self.betting_stats.clone(),
-            shoe_stats: self.shoe_stats.clone(),
-            bet_type: None, // 커맨드에서 설정
-            martin_level: None, // 커맨드에서 설정
-            min_confidence: None, // 커맨드에서 설정
-            auto_mode: None, // 커맨드에서 설정
-            // 🆕 v3.7.0: 사용자 추적 (커맨드에서 설정)
-            user_id: None,
-            username: None,
-            session_id: None,
-            current_balance: None,
-            bet_amount: None,
-            client_type: None,
-        }
+        V2PredictionRequest::from_shared(
+            self.room_id.clone(),
+            self.room_name.clone(),
+            self.game_id.clone(),
+            self.game_number.clone(),
+            Arc::clone(&self.history),
+            self.last_game_cards.clone(),
+            self.betting_stats.clone(),
+            self.shoe_stats.clone(),
+            None,
+        )
     }
 
     /// V2 예측 요청 생성 (베팅 타입 포함)
     pub fn to_v2_request_with_bet_type(&self, bet_type: Option<String>) -> V2PredictionRequest {
-        V2PredictionRequest {
-            room_id: self.room_id.clone(),
-            room_name: self.room_name.clone(),
-            game_id: self.game_id.clone(),
-            game_number: self.game_number.clone(),
-            history: self.history.clone(),
-            last_game_cards: self.last_game_cards.clone(),
-            betting_stats: self.betting_stats.clone(),
-            shoe_stats: self.shoe_stats.clone(),
+        V2PredictionRequest::from_shared(
+            self.room_id.clone(),
+            self.room_name.clone(),
+            self.game_id.clone(),
+            self.game_number.clone(),
+            Arc::clone(&self.history),
+            self.last_game_cards.clone(),
+            self.betting_stats.clone(),
+            self.shoe_stats.clone(),
             bet_type,
-            martin_level: None, // 커맨드에서 설정
-            min_confidence: None, // 커맨드에서 설정
-            auto_mode: None, // 커맨드에서 설정
-            // 🆕 v3.7.0: 사용자 추적 (커맨드에서 설정)
-            user_id: None,
-            username: None,
-            session_id: None,
-            current_balance: None,
-            bet_amount: None,
-            client_type: None,
-        }
+        )
     }
 
     /// 슈 체인지 감지
@@ -117,8 +113,12 @@ impl RoomGameData {
     }
 
     /// 데이터 리셋 (새 슈)
+    ///
+    /// R3: 기존 공유 스냅샷(Arc)을 새 빈 Arc로 교체한다. 이전 Arc를
+    /// 참조 중인 consumer가 있다면 그들은 이전 스냅샷을 계속 보고,
+    /// 새 소비자는 빈 히스토리를 본다(immutable snapshot semantics).
     pub fn reset_for_new_shoe(&mut self) {
-        self.history.clear();
+        self.history = Arc::new(Vec::new());
         self.shoe_stats = None;
         self.last_game_cards = None;
         self.betting_stats = None;
@@ -218,24 +218,27 @@ impl EvolutionDataManager {
         // 히스토리 업데이트
         if let Some(history) = history_v2 {
             let prev_len = room.history.len();
-            room.history = history.iter().filter_map(|r| parse_game_round(r)).collect();
+            // R3: 새 Vec을 빌드해 Arc로 감싼다. 이전 Arc는 마지막 consumer가
+            // drop하면 자연 해제된다(refcount). 이전 스냅샷을 잡고 있던 소비자가
+            // 있다면 계속 이전 데이터를 본다 — immutable snapshot 계약.
+            let new_history: Vec<GameRound> =
+                history.iter().filter_map(parse_game_round).collect();
+            let new_len = new_history.len();
+            room.history = Arc::new(new_history);
 
             // 슈 체인지 감지
-            if room.history.len() < prev_len && prev_len > 10 {
+            if new_len < prev_len && prev_len > 10 {
                 info!(
                     "🔄 슈 체인지 감지: {} ({}게임 → {}게임)",
-                    room.room_name,
-                    prev_len,
-                    room.history.len()
+                    room.room_name, prev_len, new_len
                 );
                 shoe_changed = true;
             }
 
-            room.prev_history_length = room.history.len();
+            room.prev_history_length = new_len;
             debug!(
                 "📊 {} 히스토리 업데이트: {}게임",
-                room.room_name,
-                room.history.len()
+                room.room_name, new_len
             );
         }
 
@@ -492,14 +495,15 @@ mod tests {
     #[test]
     fn test_room_game_data_to_v2_request() {
         let mut room = RoomGameData::new("test-room".to_string(), "테스트방".to_string());
-        room.history.push(GameRound {
+        // R3: history는 Arc<Vec<GameRound>> — 초기에는 빈 Arc.
+        room.history = Arc::new(vec![GameRound {
             winner: "Banker".to_string(),
             player_score: Some(5),
             banker_score: Some(7),
             natural: None,
             player_pair: None,
             banker_pair: None,
-        });
+        }]);
 
         let request = room.to_v2_request();
         assert_eq!(request.room_id, "test-room");
@@ -510,22 +514,80 @@ mod tests {
     fn test_shoe_change_detection() {
         let mut room = RoomGameData::new("test".to_string(), "테스트".to_string());
 
-        // 히스토리 추가
-        for _ in 0..20 {
-            room.history.push(GameRound {
+        // 히스토리 추가 (Arc로 새로 생성해 할당)
+        let full: Vec<GameRound> = (0..20)
+            .map(|_| GameRound {
                 winner: "Banker".to_string(),
                 player_score: None,
                 banker_score: None,
                 natural: None,
                 player_pair: None,
                 banker_pair: None,
-            });
-        }
+            })
+            .collect();
+        room.history = Arc::new(full);
         room.prev_history_length = 20;
 
-        // 히스토리 감소 (새 슈)
-        room.history = room.history[..5].to_vec();
+        // 히스토리 감소 (새 슈) — R3: 새 Arc로 교체
+        let truncated = room.history[..5].to_vec();
+        room.history = Arc::new(truncated);
 
         assert!(room.detect_shoe_change());
+    }
+
+    /// R3: 저장된 history를 두 번 읽었을 때 같은 Arc(스냅샷)을 가리키는지 검증.
+    /// `Arc::ptr_eq`가 true → Vec 복제 없이 refcount 증가로 공유됨을 증명.
+    #[test]
+    fn test_history_storage_is_shared_arc_snapshot() {
+        let manager = EvolutionDataManager::new();
+        let table_id = "arc-test-room";
+
+        // 100개 이상 히스토리를 주입
+        let history_json: Vec<serde_json::Value> = (0..100)
+            .map(|i| {
+                serde_json::json!({
+                    "winner": if i % 2 == 0 { "Banker" } else { "Player" },
+                    "playerScore": 5,
+                    "bankerScore": 7
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "stats": {"gameCount": 100, "playerWins": 50, "bankerWins": 50},
+            "history_v2": history_json
+        });
+        manager.handle_shoe_state(table_id, &payload);
+
+        // 두 번 읽기 — get_room_data는 RoomGameData를 clone 하지만
+        // `history`는 Arc이므로 refcount만 증가해야 한다.
+        let snapshot_a = manager.get_room_data(table_id).expect("room exists");
+        let snapshot_b = manager.get_room_data(table_id).expect("room exists");
+
+        assert_eq!(snapshot_a.history.len(), 100);
+        assert!(
+            Arc::ptr_eq(&snapshot_a.history, &snapshot_b.history),
+            "두 스냅샷은 동일 Arc를 공유해야 함 (Vec 복제 없음)"
+        );
+
+        // 새 히스토리를 주입하면 이전 스냅샷은 여전히 이전 데이터를 본다(불변 snapshot).
+        let new_history_json: Vec<serde_json::Value> = (0..50)
+            .map(|_| serde_json::json!({"winner": "Tie"}))
+            .collect();
+        let payload2 = serde_json::json!({
+            "history_v2": new_history_json
+        });
+        manager.handle_shoe_state(table_id, &payload2);
+
+        // 이전 스냅샷은 원본(100개) 유지, 새 스냅샷은 50개.
+        assert_eq!(snapshot_a.history.len(), 100);
+        assert_eq!(snapshot_b.history.len(), 100);
+        let snapshot_c = manager.get_room_data(table_id).expect("room exists");
+        assert_eq!(snapshot_c.history.len(), 50);
+
+        // 이전 Arc와 새 Arc는 서로 다른 인스턴스여야 한다.
+        assert!(
+            !Arc::ptr_eq(&snapshot_a.history, &snapshot_c.history),
+            "새 히스토리는 새 Arc여야 함"
+        );
     }
 }

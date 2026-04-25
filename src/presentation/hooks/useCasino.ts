@@ -2,7 +2,7 @@
 // Clean Architecture: Presentation -> Application (via DI container)
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { listen } from '@tauri-apps/api/event'
+import { listen, type EventCallback, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import type { Room, GameResultEvent, BettingPhaseEvent, AppMode, Winner, RoadResult } from '../../domain/entities'
 import type { ICasinoAdapter } from '../../domain/interfaces'
@@ -10,6 +10,7 @@ import { wsToHttpBaseUrl } from '../../domain/utils/converters'
 import { useService } from '../context'
 import { useError } from '../context'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
+import MultiRoomPredictionService from '../../application/services/MultiRoomPredictionService'
 
 // ==================== Pragmatic Types ====================
 interface NormalizedPragmaticRoom {
@@ -45,6 +46,33 @@ const PRAGMATIC_ROOM_PREFIX = 'pragmatic:'
 
 /** Pragmatic tableId → 한국어 이름 캐시 (게임 결과 등에서 수집) */
 const pragmaticTableNameCache = new Map<string, string>()
+
+// 🧹 Lane F3 (perf-plan): bound pragmaticTableNameCache with a tiny LRU so it
+// doesn't grow without limit as the user navigates casino lobbies. Map
+// preserves insertion order, so we treat that as recency and re-insert on
+// read/write.
+const PRAGMATIC_TABLE_NAME_CACHE_CAP = 500
+function cacheSet(id: string, name: string): void {
+  if (
+    pragmaticTableNameCache.size >= PRAGMATIC_TABLE_NAME_CACHE_CAP &&
+    !pragmaticTableNameCache.has(id)
+  ) {
+    const firstKey = pragmaticTableNameCache.keys().next().value
+    if (firstKey !== undefined) {
+      pragmaticTableNameCache.delete(firstKey)
+    }
+  }
+  pragmaticTableNameCache.delete(id) // re-insert for recency
+  pragmaticTableNameCache.set(id, name)
+}
+function cacheGet(id: string): string | undefined {
+  const v = pragmaticTableNameCache.get(id)
+  if (v !== undefined) {
+    pragmaticTableNameCache.delete(id)
+    pragmaticTableNameCache.set(id, v)
+  }
+  return v
+}
 
 /** Winner 값 정규화 */
 function normalizeWinner(value: string): Winner {
@@ -146,6 +174,16 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   const bettingPhaseCallbacksRef = useRef<Set<(event: BettingPhaseEvent) => void>>(new Set())
   const gameResultCallbacksRef = useRef<Set<(event: GameResultEvent) => void>>(new Set())
 
+  // F2: Synchronous listener tracking with group tagging.
+  // Replaces the legacy `listeners: Promise<UnlistenFn>[]` cleanup pattern that
+  // race-leaked unlisten fns when the effect unmounted before the listen()
+  // promise resolved, and kept adapter-specific listeners alive during swaps.
+  type ListenerGroup = 'global' | 'evolution' | 'pragmatic'
+  const listenersRef = useRef<Array<{ group: ListenerGroup; unlisten: UnlistenFn }>>([])
+  // Track pending listen() promises so unmount can wait/cancel before they resolve.
+  const pendingListenRegistrationsRef = useRef<Set<Promise<void>>>(new Set())
+  const listenersMountedRef = useRef<boolean>(true)
+
   useEffect(() => {
     appModeRef.current = appMode
   }, [appMode])
@@ -215,6 +253,13 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
 
     setRooms(updatedRooms)
     setRoomDataVersion(v => v + 1)
+
+    // 🧹 Lane F3 (perf-plan): prune MultiRoomPredictionService entries for
+    // rooms that are no longer active so its internal Maps don't grow
+    // unbounded across reconnects/navigation.
+    const activeIds = new Set<string>()
+    updatedRooms.forEach((_, id) => activeIds.add(id))
+    MultiRoomPredictionService.syncActiveRooms(activeIds)
   }, [])
 
   useEffect(() => {
@@ -313,23 +358,46 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
 
   // Multi-socket Evolution events (no CDP)
   useEffect(() => {
-    const listeners: Promise<() => void>[] = []
+    listenersMountedRef.current = true
+
+    // F2: Synchronous tracked listen. Pushes the unlisten fn into listenersRef
+    // as soon as listen() resolves. If the effect already tore down before the
+    // promise resolves, immediately invoke the unlisten so no listener leaks.
+    const trackedListen = <T,>(
+      event: string,
+      handler: EventCallback<T>,
+      group: ListenerGroup = 'global'
+    ): Promise<void> => {
+      const registration = listen<T>(event, handler).then(
+        (unlisten) => {
+          if (!listenersMountedRef.current) {
+            // Effect already cleaned up before this listener registered — unlisten immediately.
+            try { unlisten() } catch { /* ignore */ }
+            return
+          }
+          listenersRef.current.push({ group, unlisten })
+        },
+        () => { /* ignore registration errors; no listener registered */ }
+      )
+      pendingListenRegistrationsRef.current.add(registration)
+      registration.finally(() => {
+        pendingListenRegistrationsRef.current.delete(registration)
+      })
+      return registration
+    }
 
     // CDP 연결 실패 시 다시 재연결 가능하도록 idle 전환
-    listeners.push(
-      listen<{ error: string }>('cdp-connection-failed', (event) => {
-        setStatus('idle')
-        messageCountRef.current = 0
-        setMessageCount(0)
-        showWarning('브라우저 감시에 실패했습니다: ' + (event.payload?.error || '알 수 없는 오류'))
-      })
-    )
+    trackedListen<{ error: string }>('cdp-connection-failed', (event) => {
+      setStatus('idle')
+      messageCountRef.current = 0
+      setMessageCount(0)
+      showWarning('브라우저 감시에 실패했습니다: ' + (event.payload?.error || '알 수 없는 오류'))
+    }, 'global')
 
     // Browser captures Evolution WebSocket URL -> auto-connect multi-socket
-    listeners.push(
-      listen<{ wsUrl: string; isEvolution: boolean; isPragmatic?: boolean; cookies?: string; isLobby?: boolean; isMultiwidget?: boolean }>(
-        'evolution-websocket-captured',
-        async (event) => {
+    trackedListen<{ wsUrl: string; isEvolution: boolean; isPragmatic?: boolean; cookies?: string; isLobby?: boolean; isMultiwidget?: boolean }>(
+      'evolution-websocket-captured',
+      async (event) => {
           if (!event.payload.isEvolution) return
           const wsUrl = event.payload.wsUrl
           if (!wsUrl) return
@@ -360,64 +428,54 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           }
 
           // Non-multiwidget Evolution socket - skip
-        }
-      )
-    )
+        },
+      'evolution')
 
     // Rust CDP detected multiwidget and is auto-connecting
-    listeners.push(
-      listen<{ wsUrl: string; autoConnecting: boolean }>(
-        'evolution-multiwidget-detected',
-        (event) => {
-          // 🔒 처음 연결시에만 URL 설정, 이후 덮어쓰기 방지
-          if (!evolutionBaseUrlLockedRef.current) {
-            const baseUrl = wsToHttpBaseUrl(event.payload.wsUrl)
-            if (baseUrl) {
-              setEvolutionBaseUrl(baseUrl)
-              evolutionBaseUrlRef.current = baseUrl
-              evolutionBaseUrlLockedRef.current = true // 🔒 잠금
-            }
+    trackedListen<{ wsUrl: string; autoConnecting: boolean }>(
+      'evolution-multiwidget-detected',
+      (event) => {
+        // 🔒 처음 연결시에만 URL 설정, 이후 덮어쓰기 방지
+        if (!evolutionBaseUrlLockedRef.current) {
+          const baseUrl = wsToHttpBaseUrl(event.payload.wsUrl)
+          if (baseUrl) {
+            setEvolutionBaseUrl(baseUrl)
+            evolutionBaseUrlRef.current = baseUrl
+            evolutionBaseUrlLockedRef.current = true // 🔒 잠금
           }
-          setProvider('evolution')
-          setActiveAdapter(evolutionAdapter)
-          setStatus('launching') // Rust is connecting
         }
-      )
-    )
-
-    listeners.push(
-      listen('evolution_multi_connected', () => {
-        setStatus('connected')
-        messageCountRef.current = 0
-        setMessageCount(0)
         setProvider('evolution')
-        setRoomsReady(false)  // 연결 시 roomsReady 초기화 (구독 완료 대기)
-        // Keep CDP running so real multiwidget socket can still be captured later
-      })
-    )
+        setActiveAdapter(evolutionAdapter)
+        setStatus('launching') // Rust is connecting
+      },
+      'evolution')
+
+    trackedListen('evolution_multi_connected', () => {
+      setStatus('connected')
+      messageCountRef.current = 0
+      setMessageCount(0)
+      setProvider('evolution')
+      setRoomsReady(false)  // 연결 시 roomsReady 초기화 (구독 완료 대기)
+      // Keep CDP running so real multiwidget socket can still be captured later
+    }, 'evolution')
 
     // 🔒 중계사이트 base URL 캡처 이벤트 - 이 URL은 덮어쓰지 않음
-    listeners.push(
-      listen<{ baseUrl: string; pageUrl?: string }>('evolution-base-url-captured', (event) => {
-        const { baseUrl } = event.payload
-        if (baseUrl) {
-          setEvolutionBaseUrl(baseUrl)
-          evolutionBaseUrlRef.current = baseUrl
-          evolutionBaseUrlLockedRef.current = true // 🔒 잠금 - 이후 덮어쓰기 방지
-        }
-      })
-    )
+    trackedListen<{ baseUrl: string; pageUrl?: string }>('evolution-base-url-captured', (event) => {
+      const { baseUrl } = event.payload
+      if (baseUrl) {
+        setEvolutionBaseUrl(baseUrl)
+        evolutionBaseUrlRef.current = baseUrl
+        evolutionBaseUrlLockedRef.current = true // 🔒 잠금 - 이후 덮어쓰기 방지
+      }
+    }, 'evolution')
 
     // 🎯 멀티소켓 방 구독 완료 이벤트 - AutoMode에서 이 신호를 받아야 방 렌더링
-    listeners.push(
-      listen<{ roomCount: number; totalAvailable: number }>('evolution_multi_rooms_ready', (event) => {
-        setRoomsReady(true)
-        showInfo(`${event.payload.roomCount}개 방 구독 완료`)
-      })
-    )
+    trackedListen<{ roomCount: number; totalAvailable: number }>('evolution_multi_rooms_ready', (event) => {
+      setRoomsReady(true)
+      showInfo(`${event.payload.roomCount}개 방 구독 완료`)
+    }, 'evolution')
 
-    listeners.push(
-      listen<{ reason?: string; type?: string }>('evolution_multi_disconnected', (event) => {
+    trackedListen<{ reason?: string; type?: string }>('evolution_multi_disconnected', (event) => {
         setStatus('idle')
         setProvider(null)
         setEvolutionBaseUrl(null)
@@ -455,53 +513,46 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           console.log('[useCasino] 📊 Multiwidget disconnected in auto mode:', reason)
           showWarning('멀티소켓 연결이 끊어졌습니다.')
         }
-      })
-    )
+      },
+      'evolution')
 
-    listeners.push(
-      listen('evolution_multi_error', (event) => {
-        setStatus('error')
-        showError('CONNECTION_FAILED', 'Evolution 소켓 오류', (event as any)?.payload?.error || '연결 오류')
-      })
-    )
+    trackedListen('evolution_multi_error', (event) => {
+      setStatus('error')
+      showError('CONNECTION_FAILED', 'Evolution 소켓 오류', (event as any)?.payload?.error || '연결 오류')
+    }, 'evolution')
 
     // CDP에서 테이블 설정 캡처 (CLIENT_UNAVAILABLE_CHIPS_HIDDEN, CLIENT_BET_CHIP)
-    listeners.push(
-      listen<Record<string, unknown>>('evolution-table-config', (event) => {
-        EvolutionAdapter.updateTableConfigFromCDP(event.payload)
-      })
-    )
+    trackedListen<Record<string, unknown>>('evolution-table-config', (event) => {
+      EvolutionAdapter.updateTableConfigFromCDP(event.payload)
+    }, 'evolution')
 
     // 🔥 멀티소켓: 모든 게임 데이터의 단일 소스
-    listeners.push(
-      listen<{ tableId?: string; eventType: string; data: any }>('evolution_multi_event', (event) => {
-        const now = Date.now()
-        messageCountRef.current += 1
-        if (now - lastMessageCountUpdateRef.current > MESSAGE_COUNT_UPDATE_INTERVAL) {
-          lastMessageCountUpdateRef.current = now
-          setMessageCount(messageCountRef.current)
-        }
+    trackedListen<{ tableId?: string; eventType: string; data: any }>('evolution_multi_event', (event) => {
+      const now = Date.now()
+      messageCountRef.current += 1
+      if (now - lastMessageCountUpdateRef.current > MESSAGE_COUNT_UPDATE_INTERVAL) {
+        lastMessageCountUpdateRef.current = now
+        setMessageCount(messageCountRef.current)
+      }
 
-        if ('processMessage' in activeAdapter) {
-          try {
-            const raw = JSON.stringify(event.payload.data)
-              ; (activeAdapter as { processMessage: (raw: string, tableId?: string) => void })
-                .processMessage(raw, event.payload.tableId || undefined)
-          } catch (e) {
-            console.warn('[useCasino] Failed to process multi event', e)
-          }
+      if ('processMessage' in activeAdapter) {
+        try {
+          const raw = JSON.stringify(event.payload.data)
+            ; (activeAdapter as { processMessage: (raw: string, tableId?: string) => void })
+              .processMessage(raw, event.payload.tableId || undefined)
+        } catch (e) {
+          console.warn('[useCasino] Failed to process multi event', e)
         }
+      }
 
-        // Ensure provider/status reflect incoming data
-        setProvider((prev) => prev || 'evolution')
-        setStatus((prev) => (prev === 'connected' ? prev : 'connected'))
-      })
-    )
+      // Ensure provider/status reflect incoming data
+      setProvider((prev) => prev || 'evolution')
+      setStatus((prev) => (prev === 'connected' ? prev : 'connected'))
+    }, 'evolution')
 
     // ==================== 🎲 PRAGMATIC PLAY Events ====================
     // Pragmatic raw 메시지 로깅 (디버깅용)
-    listeners.push(
-      listen<{ pageId?: string; roomId?: string; url?: string; message: string }>('pragmatic_raw_message', (event) => {
+    trackedListen<{ pageId?: string; roomId?: string; url?: string; message: string }>('pragmatic_raw_message', (event) => {
         const payload = event.payload
         try {
           const parsed = JSON.parse(payload.message)
@@ -509,7 +560,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           if (parsed.tableId && parsed.tableName) {
             const trimmedName = parsed.tableName?.trim()
             if (trimmedName && trimmedName !== '-' && trimmedName.toUpperCase() !== 'N/A') {
-              pragmaticTableNameCache.set(parsed.tableId, trimmedName)
+              cacheSet(parsed.tableId, trimmedName)
 
               // 이미 방이 존재하면 이름 업데이트
               const roomId = `${PRAGMATIC_ROOM_PREFIX}${parsed.tableId}`
@@ -525,12 +576,10 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         } catch {
           // JSON 파싱 실패 무시
         }
-      })
-    )
+      }, 'pragmatic')
 
     // Pragmatic 이벤트를 Evolution과 동시에 수신하여 rooms Map에 병합
-    listeners.push(
-      listen<PragmaticCasinoEvent>('pragmatic_event', (event) => {
+    trackedListen<PragmaticCasinoEvent>('pragmatic_event', (event) => {
         const pragmaticEvent = event.payload
 
         try {
@@ -553,10 +602,10 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
                 let displayName: string
                 if (isFallbackName) {
                   // Fallback 이름이면 캐시 우선 사용
-                  displayName = pragmaticTableNameCache.get(nr.id) || rawName || `Baccarat ${nr.id}`
+                  displayName = cacheGet(nr.id) || rawName || `Baccarat ${nr.id}`
                 } else {
                   // 유효한 이름이면 캐시에 저장하고 사용
-                  pragmaticTableNameCache.set(nr.id, rawName)
+                  cacheSet(nr.id, rawName)
                   displayName = rawName
                 }
 
@@ -591,7 +640,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
               // tableName이 있으면 캐시에 저장
               const tableName = data.table_name?.trim()
               if (tableName && tableName !== '-' && tableName.toUpperCase() !== 'N/A') {
-                pragmaticTableNameCache.set(data.room_id, tableName)
+                cacheSet(data.room_id, tableName)
               }
 
               // Update room history
@@ -604,7 +653,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
               }, ...history]
 
               // 이름 우선순위: data.table_name → 캐시 → 기존 → 기본값
-              const displayName = tableName || pragmaticTableNameCache.get(data.room_id) || existing?.name || `Baccarat ${data.room_id}`
+              const displayName = tableName || cacheGet(data.room_id) || existing?.name || `Baccarat ${data.room_id}`
 
               const room: Room = existing ? {
                 ...existing,
@@ -698,36 +747,71 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         } catch (error) {
           console.error('[useCasino] Error handling Pragmatic event:', error)
         }
-      })
-    )
+      }, 'pragmatic')
 
     // Pragmatic 연결 상태 이벤트
-    listeners.push(
-      listen('pragmatic_connected', () => {
-        if (status !== 'connected') {
-          setStatus('connected')
-          messageCountRef.current = 0
-          setMessageCount(0)
-        }
-      })
-    )
+    trackedListen('pragmatic_connected', () => {
+      if (status !== 'connected') {
+        setStatus('connected')
+        messageCountRef.current = 0
+        setMessageCount(0)
+      }
+    }, 'pragmatic')
 
-    listeners.push(
-      listen('pragmatic_disconnected', () => {
-        // Pragmatic만 끊어져도 Evolution이 있으면 connected 유지
-      })
-    )
+    trackedListen('pragmatic_disconnected', () => {
+      // Pragmatic만 끊어져도 Evolution이 있으면 connected 유지
+    }, 'pragmatic')
 
     return () => {
-      listeners.forEach((p) => {
-        p.then((unlisten) => {
-          if (typeof unlisten === 'function') {
-            unlisten()
-          }
-        }).catch(() => { })
+      // F2: Synchronous cleanup — no `.then()` chain, no race.
+      // Mark unmounted first so any still-pending listen() registration that
+      // resolves after this tick will unlisten itself immediately.
+      listenersMountedRef.current = false
+      const snapshot = listenersRef.current
+      listenersRef.current = []
+      snapshot.forEach(({ unlisten }) => {
+        try { unlisten() } catch { /* ignore */ }
       })
     }
   }, [showError])
+
+  // F2: Adapter-swap teardown.
+  // When the active adapter changes (Evolution ↔ Pragmatic), tear down any
+  // listeners tagged with the *abandoned* adapter's group plus any stale
+  // consumer callbacks that were registered against it. The consumer
+  // `onGameResult` / `onBettingPhase` closures are memoised on `activeAdapter`,
+  // so downstream effects re-subscribe automatically after the swap — clearing
+  // the callback refs here prevents double-dispatch via leftover closures.
+  const previousAdapterTypeRef = useRef<ICasinoAdapter['type'] | null>(null)
+  useEffect(() => {
+    const prevType = previousAdapterTypeRef.current
+    const nextType = activeAdapter.type
+    if (prevType !== null && prevType !== nextType) {
+      // Adapter actually swapped — scope listener teardown to the abandoned group.
+      const abandonedGroup: ListenerGroup | null =
+        prevType === 'evolution' ? 'evolution'
+        : prevType === 'pragmatic' ? 'pragmatic'
+        : null
+      if (abandonedGroup) {
+        const kept: typeof listenersRef.current = []
+        listenersRef.current.forEach((entry) => {
+          if (entry.group === abandonedGroup) {
+            try { entry.unlisten() } catch { /* ignore */ }
+          } else {
+            kept.push(entry)
+          }
+        })
+        listenersRef.current = kept
+      }
+      // Clear consumer callback refs so stale closures from the previous adapter
+      // don't double-fire. Consumers with `onGameResult` / `onBettingPhase` in
+      // their effect deps will re-register because those refs are memoised on
+      // `activeAdapter`.
+      gameResultCallbacksRef.current.clear()
+      bettingPhaseCallbacksRef.current.clear()
+    }
+    previousAdapterTypeRef.current = nextType
+  }, [activeAdapter])
 
   const connectMultiSocket = useCallback(async (override?: Partial<MultiSocketConfig>) => {
     const next = { ...multiConfig, ...(override || {}) }

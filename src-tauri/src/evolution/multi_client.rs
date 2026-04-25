@@ -18,11 +18,13 @@ use super::events::{DisconnectReason, EvolutionEvent, EventSender, TableSummary}
 use super::message_parser::{IncomingMessage, MessageParser, TableInfo};
 use super::protocol::ProtocolSequence;
 use super::table_filter::TableFilter;
+use crate::presentation::task_registry::TaskRegistry;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use rquest::Message as RquestMessage;
 use rquest_util::Emulation;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
@@ -59,6 +61,13 @@ pub struct EvolutionMultiSocket {
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
     msg_tx: Option<tokio::sync::mpsc::Sender<String>>,
     event_tx: Option<EventSender>,
+    /// Internal registry of background tasks spawned by `connect()`.
+    ///
+    /// Lane R2 (perf-plan): without this, repeated `connect()` calls without an
+    /// intervening `disconnect()` (or a `disconnect()` that races a
+    /// shutdown-deaf task) would leak `JoinHandle`s. The registry is a safety
+    /// net layered on top of the existing `shutdown_tx` broadcast channel.
+    task_registry: Arc<TaskRegistry>,
 }
 
 /// 글로벌 싱글턴 멀티위젯 클라이언트
@@ -72,6 +81,7 @@ impl EvolutionMultiSocket {
             shutdown_tx: None,
             msg_tx: None,
             event_tx: None,
+            task_registry: Arc::new(TaskRegistry::new()),
         }
     }
 
@@ -108,6 +118,18 @@ impl EvolutionMultiSocket {
         if self.is_connected() {
             info!("[Evolution-Multi] 🔄 Disconnecting existing connection first...");
             self.disconnect().await;
+        }
+
+        // Lane R2 idempotency safety net: even if `is_connected()` returned
+        // false (e.g. the state machine moved to Disconnected after a network
+        // error) the registry might still hold a not-yet-cleaned task. Make
+        // sure no stale spawn leaks into a fresh connect cycle.
+        if self.task_registry.len() > 0 {
+            warn!(
+                "[Evolution-Multi] ⚠️ Stale tasks detected on connect ({} pending), aborting first",
+                self.task_registry.len()
+            );
+            self.task_registry.abort_all();
         }
 
         // 상태 전이: Disconnected -> Connecting
@@ -163,7 +185,7 @@ impl EvolutionMultiSocket {
         let is_multiwidget_clone = is_multiwidget;
         let referer_without_hash = referer.split('#').next().unwrap_or(&referer).to_string();
 
-        tokio::spawn(async move {
+        let connection_handle = tokio::spawn(async move {
             Self::connection_task(
                 ws_url_clone,
                 is_multiwidget_clone,
@@ -177,6 +199,12 @@ impl EvolutionMultiSocket {
             )
             .await;
         });
+
+        // Register the connection task so `disconnect()` can abort it as a
+        // safety net if the broadcast shutdown is missed (e.g. a task stuck on
+        // a syscall that never reaches the next `.await`).
+        self.task_registry
+            .insert("evolution_multi:connection_task", connection_handle);
 
         info!("[Evolution-Multi] 🎯 Connection initiated (async)");
         Ok(())
@@ -496,6 +524,7 @@ impl EvolutionMultiSocket {
     }
 
     /// 수신 메시지 처리 - 테이블 목록 반환 시 Some
+    #[tracing::instrument(skip_all, level = "debug", fields(msg_len = text.len()))]
     async fn handle_incoming_message(
         event_tx: &EventSender,
         text: &str,
@@ -653,6 +682,12 @@ impl EvolutionMultiSocket {
         self.shutdown_tx = None;
         self.msg_tx = None;
         self.state_machine.reset();
+
+        // Lane R2 safety net: abort any tasks still tracked by the registry.
+        // The broadcast shutdown above is the primary cancellation path; the
+        // abort_all here catches stragglers (stuck syscalls, dropped futures
+        // that never observe the broadcast).
+        self.task_registry.abort_all();
 
         info!("[Evolution-Multi] ✅ Disconnected");
     }
