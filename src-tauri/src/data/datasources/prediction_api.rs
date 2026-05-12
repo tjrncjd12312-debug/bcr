@@ -28,7 +28,7 @@ impl Default for PredictionApiConfig {
     fn default() -> Self {
         Self {
             base_url: option_env!("BCR_API_BASE_URL")
-                .unwrap_or("https://twxzryfkzbmwfbwwzdsh.supabase.co/functions/v1/api")
+                .unwrap_or("https://twxzryfkzbmwfbwwzdsh.supabase.co/functions/v1")
                 .to_string(),
             auth_token: None,
             timeout_secs: 30,
