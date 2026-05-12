@@ -4,6 +4,7 @@ import type {
     RoomBetConfig,
 } from '../../../../domain/entities'
 import type { SemiAutoSettings } from '../../../../application/services/SemiAutoService'
+import { getFreshShoePreset } from '../../../../application/di/setupContainer'
 import './SemiAutoSettingsDialog.css'
 
 // Tab type for the dialog
@@ -42,6 +43,20 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
 }) => {
     const [animateIn, setAnimateIn] = useState(false)
     const [activeTab, setActiveTab] = useState<SettingsTab>('general')
+
+    // Fresh-Shoe Tie 마틴 프리셋 토글
+    const [freshShoeOn, setFreshShoeOn] = useState(() => {
+        const p = getFreshShoePreset()
+        return p ? p.isEnabled('semiauto') : false
+    })
+
+    const handleFreshShoeToggle = (next: boolean) => {
+        const p = getFreshShoePreset()
+        if (!p) return
+        if (next) p.enable('semiauto')
+        else p.disable('semiauto')
+        setFreshShoeOn(p.isEnabled('semiauto'))
+    }
 
     useEffect(() => {
         if (isOpen) {
@@ -143,6 +158,27 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
                     {/* Tab 1: General Settings */}
                     {activeTab === 'general' && (
                         <>
+                            {/* Fresh-Shoe Tie 마틴 프리셋 토글 */}
+                            <div style={{
+                                border: '1px solid var(--color-border, #444)',
+                                borderRadius: 8,
+                                padding: 12,
+                                margin: '12px 0',
+                                background: 'var(--color-surface-2, #1c1c1c)',
+                            }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={freshShoeOn}
+                                        onChange={(e) => handleFreshShoeToggle(e.target.checked)}
+                                    />
+                                    Fresh-Shoe Tie 마틴
+                                </label>
+                                <div style={{ fontSize: 12, color: 'var(--color-text-dim, #999)', marginTop: 6, lineHeight: 1.5 }}>
+                                    {getFreshShoePreset()?.getDescription() ?? '슈가 막 시작된 방에서만 Tie 마틴 베팅. 적중/관망 Tie/마틴 한도 시 다음 방으로.'}
+                                </div>
+                            </div>
+
                             {/* Section 1: Balance Display */}
                             <div className="sa-dialog-section">
                                 <h3 className="sa-section-title">잔고 현황</h3>
