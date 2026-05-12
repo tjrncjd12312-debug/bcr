@@ -11,6 +11,7 @@ import { AutoModeRoomGrid, type RoomBetLog } from './components/AutoModeRoomGrid
 import { AutoModeRoomList } from './components/AutoModeRoomList'
 import { AutoModeMosaic } from './components/AutoModeMosaic' // Added
 import { AutoModeHistory } from './components/AutoModeHistory'
+import FilterThresholdInputs from './components/FilterThresholdInputs'
 import { RoomSelectorModal } from '../shared'
 import { filterBaccaratRooms } from '../../utils'
 import type { RoomBetConfig } from '../../../domain/entities'
@@ -965,6 +966,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                     left: rect.left,
                   }}
                 >
+                  <FilterThresholdInputs />
+                  <div className="auto-mode__header-filter-divider" />
                   <button
                     className={`auto-mode__header-filter-item ${activeFilters.length === 0 ? 'active' : ''}`}
                     onClick={() => { clearFilters(); setShowFilterDropdown(false) }}

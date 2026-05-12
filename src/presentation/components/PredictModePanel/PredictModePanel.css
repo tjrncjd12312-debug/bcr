@@ -306,6 +306,12 @@
   color: var(--bg-base, #17171c);
 }
 
+.predict-header__filter-divider {
+  height: 1px;
+  background: var(--border-strong, rgba(255, 255, 255, 0.12));
+  margin: 6px 4px;
+}
+
 /* Pattern & Sort Buttons */
 .predict-header__pattern-btn {
   display: flex;

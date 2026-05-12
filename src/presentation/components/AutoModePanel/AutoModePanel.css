@@ -713,6 +713,12 @@
   color: var(--gold);
 }
 
+.auto-mode__header-filter-divider {
+  height: 1px;
+  background: var(--border, rgba(255, 255, 255, 0.08));
+  margin: 6px 4px;
+}
+
 .filter-count {
   font-size: 11px;
   padding: 2px 6px;

@@ -18,6 +18,7 @@ import { RoomCard } from './components/RoomCard'
 import { SelectedRoomDetail } from './components/SelectedRoomDetail'
 import { FocusedRoomView } from './components/FocusedRoomView'
 import { CompactRoomRow } from './components/CompactRoomRow'
+import FilterThresholdInputs from '../AutoModePanel/components/FilterThresholdInputs'
 import './PredictModePanel.css'
 
 // LocalStorage key for selected rooms
@@ -688,6 +689,8 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
             </button>
             {showFilterDropdown && (
               <div className="predict-header__filter-dropdown">
+                <FilterThresholdInputs />
+                <div className="predict-header__filter-divider" />
                 <button
                   className={`predict-header__filter-item ${activeFilters.length === 0 ? 'active' : ''}`}
                   onClick={() => { clearFilters(); setShowFilterDropdown(false) }}

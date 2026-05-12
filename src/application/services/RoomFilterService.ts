@@ -13,6 +13,7 @@ import type {
 import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES } from '../../domain/entities'
 import { toWinnerArray } from '../../domain/utils/converters'
 import CustomPatternService from './CustomPatternService'
+import FilterThresholdsService from './FilterThresholdsService'
 
 // NOTE: 내장 패턴(FILTER_DEFINITIONS) 제거됨
 // 이제 사용자가 PatternManagerModal에서 직접 등록한 커스텀 패턴만 사용
@@ -96,6 +97,10 @@ class RoomFilterServiceImpl {
     CustomPatternService.onChange((patterns) => {
       this.setCustomPatterns(patterns)
     })
+    // Re-emit available filters when thresholds change so labels (e.g. "타이 가뭄 (20)") update live
+    FilterThresholdsService.onChange(() => {
+      this.emitAvailableFiltersChange()
+    })
   }
 
   refreshFromCustomPatterns(): void {
@@ -104,12 +109,26 @@ class RoomFilterServiceImpl {
   }
 
   getAvailableFilters(): RoomFilter[] {
+    const { tieDroughtThreshold, freshRoomGames } = FilterThresholdsService.get()
 
-    // 1) 내장 필터
-    const builtin = BUILT_IN_FILTERS.map(filter => ({
-      ...filter,
-      enabled: this.activeFilters.has(filter.type),
-    }))
+    // 1) 내장 필터 - 임계값을 라벨/설명에 반영
+    const builtin = BUILT_IN_FILTERS.map(filter => {
+      let label = filter.label
+      let description = filter.description
+      if (filter.type === 'tie_drought') {
+        label = `타이 가뭄 (${tieDroughtThreshold})`
+        description = `최근 ${tieDroughtThreshold}게임 동안 Tie 미발생`
+      } else if (filter.type === 'fresh_room') {
+        label = `신규 방 (≤${freshRoomGames})`
+        description = `방 진입 후 ${freshRoomGames}게임 이내`
+      }
+      return {
+        ...filter,
+        label,
+        description,
+        enabled: this.activeFilters.has(filter.type),
+      }
+    })
 
     // 2) 커스텀 필터 (등록된 모든 패턴 표시)
     const customFilters: RoomFilter[] = this.customPatterns
@@ -305,9 +324,10 @@ class RoomFilterServiceImpl {
 
       case 'tie_drought': {
         // history[0] is newest. Find first 'T' index; if not found or >= threshold, match.
+        const { tieDroughtThreshold } = FilterThresholdsService.get()
         const idx = winners.findIndex(w => w === 'T')
         const gamesSinceTie = idx < 0 ? winners.length : idx
-        return gamesSinceTie >= TIE_DROUGHT_THRESHOLD
+        return gamesSinceTie >= tieDroughtThreshold
       }
 
       case 'no_tie_room': {
@@ -315,7 +335,8 @@ class RoomFilterServiceImpl {
       }
 
       case 'fresh_room': {
-        return winners.length > 0 && winners.length <= FRESH_ROOM_GAMES
+        const { freshRoomGames } = FilterThresholdsService.get()
+        return winners.length > 0 && winners.length <= freshRoomGames
       }
 
       default:
