@@ -30,7 +30,7 @@ export interface IPresetStorage {
 export interface PresetDeps {
   filterService: IFilterService
   settingsBridge: { auto: ISettingsBridge; semiauto: ISettingsBridge }
-  listener: Pick<MoveOnTieListener, 'enable' | 'disable' | 'onTrigger' | 'notePendingBet' | 'signalMartinCap'>
+  listener: Pick<MoveOnTieListener, 'enable' | 'disable' | 'onTrigger' | 'notePendingBet' | 'signalMartinCap' | 'forgetRoom'>
   casinoAdapter: IShoeChangeSource
   storage: IPresetStorage
   semiAutoTriggerHandler: (roomId: string, reason: TriggerReason) => Promise<void>
@@ -140,6 +140,8 @@ export class FreshShoeTieMartingalePreset {
       if (mode === 'auto') {
         snap.unsubscribeShoeChange = this.deps.casinoAdapter.onShoeChange((roomId) => {
           this.stoppedRooms.delete(roomId)
+          // 트리거 이력도 잊어서 다음 슈에서 다시 emit 가능하게
+          this.deps.listener.forgetRoom(roomId)
         })
       }
 

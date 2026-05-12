@@ -85,6 +85,15 @@ export function setupContainer(): void {
     },
   })
 
+  // Wire setFreshShoeGates with lazy references BEFORE constructing the preset.
+  // This eliminates the window where preset auto-restore fires before gates are set.
+  // The lazy closure captures presetForGates which is assigned right after construction.
+  let presetForGates: FreshShoeTieMartingalePresetType | null = null
+  AutoModeService.setFreshShoeGates(
+    (roomId) => presetForGates?.isRoomStopped(roomId) ?? false,
+    (roomId) => moveOnTieListener.signalMartinCap(roomId),
+  )
+
   // Build FreshShoeTieMartingalePreset
   freshShoePresetInstance = new FreshShoeTieMartingalePreset({
     filterService: RoomFilterService,
@@ -121,7 +130,8 @@ export function setupContainer(): void {
       // See MoveOnTieListener.onMartinReset above for rationale — no-op is intentional.
     },
   })
-  const freshShoePreset = freshShoePresetInstance
+  // Assign lazy reference so the gates closure can resolve the preset
+  presetForGates = freshShoePresetInstance
 
   // TODO(freshshoe-notePendingBet): when bet-placement events are exposed by AutoBettingService,
   // call moveOnTieListener.notePendingBet(roomId, { roundId, betType }) for accurate
@@ -133,13 +143,6 @@ export function setupContainer(): void {
   MultiRoomPredictionService.initialize()
   SemiAutoService.initialize()
   AutoModeService.initialize()
-
-  // Wire FreshShoe gates into AutoModeService's BettingDecisionService
-  // Must be called AFTER AutoModeService.initialize() so bettingDecisionService is ready
-  AutoModeService.setFreshShoeGates(
-    (roomId) => freshShoePreset.isRoomStopped(roomId),
-    (roomId) => moveOnTieListener.signalMartinCap(roomId),
-  )
 
   console.log('[DI] Services initialized with event subscriptions')
 }

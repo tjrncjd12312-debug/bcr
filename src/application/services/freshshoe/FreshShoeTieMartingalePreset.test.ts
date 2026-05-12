@@ -32,6 +32,7 @@ function createFakeListener() {
     fireTrigger: (roomId: string, reason: string) => triggerCallbacks.forEach(cb => cb(roomId, reason)),
     notePendingBet: vi.fn(),
     signalMartinCap: vi.fn(),
+    forgetRoom: vi.fn(),
   }
 }
 
@@ -168,5 +169,18 @@ describe('FreshShoeTieMartingalePreset', () => {
     const s = p.getDescription()
     expect(s.length).toBeGreaterThan(20)
     expect(s).toMatch(/fresh|슈|Tie|마틴/i)
+  })
+
+  it("invokes listener.forgetRoom on shoe change", () => {
+    const adapter = createFakeAdapter()
+    const listener = createFakeListener() as any
+    listener.forgetRoom = vi.fn()
+    const p = createPreset({ casinoAdapter: adapter, listener })
+    p.enable('auto')
+    listener.fireTrigger('r1', 'tie_hit')
+
+    adapter.fireShoeChange('r1')
+
+    expect(listener.forgetRoom).toHaveBeenCalledWith('r1')
   })
 })

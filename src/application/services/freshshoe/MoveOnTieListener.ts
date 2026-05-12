@@ -60,6 +60,17 @@ export class MoveOnTieListener {
     this.pendingBets.set(roomId, info)
   }
 
+  // 슈 리셋 등으로 한 방의 트리거 이력을 잊는다 (FreshShoeTieMartingalePreset 사용)
+  forgetRoom(roomId: string): void {
+    // firedKeys 에서 해당 roomId 항목 모두 제거
+    const prefix = `${roomId}:`
+    for (const key of Array.from(this.firedKeys)) {
+      if (key.startsWith(prefix)) this.firedKeys.delete(key)
+    }
+    // pendingBets 에서도 제거
+    this.pendingBets.delete(roomId)
+  }
+
   // BettingDecisionService가 martin cap 도달을 알릴 때 호출
   signalMartinCap(roomId: string): void {
     if (!this.passesScope(roomId)) return

@@ -175,7 +175,11 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
                                     Fresh-Shoe Tie 마틴
                                 </label>
                                 <div style={{ fontSize: 12, color: 'var(--color-text-dim, #999)', marginTop: 6, lineHeight: 1.5 }}>
-                                    {getFreshShoePreset()?.getDescription() ?? '슈가 막 시작된 방에서만 Tie 마틴 베팅. 적중/관망 Tie/마틴 한도 시 다음 방으로.'}
+                                    {(getFreshShoePreset()?.getDescription() ?? '')}
+                                    {' '}
+                                    <strong style={{ color: 'var(--color-warn, #d97706)' }}>
+                                        ⚠ 반자동 모드의 Tie 베팅 강제는 후속 패치에서 지원. 현재 토글은 fresh_shoe 필터와 이동 트리거만 활성화.
+                                    </strong>
                                 </div>
                             </div>
 

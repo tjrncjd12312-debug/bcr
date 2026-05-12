@@ -90,6 +90,21 @@ describe('MoveOnTieListener', () => {
       adapter.fireResult({ roomId: 'r1', winner: 'T', roundId: '1' })
       expect(onMartinReset).toHaveBeenCalledWith('r1')
     })
+
+    it("forgetRoom clears dedup state so a later tie in the same room emits again", () => {
+      listener.enable('auto')
+      adapter.fireResult({ roomId: 'r1', winner: 'T' })
+      expect(emitted).toHaveLength(1)
+
+      // Without forgetRoom, a second Tie with no roundId would be deduped
+      adapter.fireResult({ roomId: 'r1', winner: 'T' })
+      expect(emitted).toHaveLength(1)
+
+      // After forgetRoom, a new Tie should emit again
+      listener.forgetRoom('r1')
+      adapter.fireResult({ roomId: 'r1', winner: 'T' })
+      expect(emitted).toHaveLength(2)
+    })
   })
 
   describe("scope === 'semiauto'", () => {
