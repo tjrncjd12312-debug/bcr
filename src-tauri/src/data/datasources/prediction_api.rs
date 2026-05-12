@@ -27,7 +27,9 @@ pub struct PredictionApiConfig {
 impl Default for PredictionApiConfig {
     fn default() -> Self {
         Self {
-            base_url: "http://bcra.store".to_string(),
+            base_url: option_env!("BCR_API_BASE_URL")
+                .unwrap_or("https://twxzryfkzbmwfbwwzdsh.supabase.co/functions/v1/api")
+                .to_string(),
             auth_token: None,
             timeout_secs: 30,
         }
