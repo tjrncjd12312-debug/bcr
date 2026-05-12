@@ -106,9 +106,12 @@ export class BettingDecisionService implements IBettingDecisionService {
     )
 
     // 8. 배팅 타입 결정
+    // 'tie_only' 모드: prediction 무시하고 Tie 강제 (Fresh-Shoe 프리셋)
     const betType: BetType =
-      prediction.prediction === 'B' ? 'Banker' :
-      prediction.prediction === 'P' ? 'Player' : 'Tie'
+      settings.forceBetDirection === 'tie_only'
+        ? 'Tie'
+        : prediction.prediction === 'B' ? 'Banker' :
+          prediction.prediction === 'P' ? 'Player' : 'Tie'
 
     return {
       shouldBet: true,
