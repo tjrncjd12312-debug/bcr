@@ -195,7 +195,7 @@ pub struct SessionManagerConfig {
 impl Default for SessionManagerConfig {
     fn default() -> Self {
         Self {
-            validation_interval_secs: 30,
+            validation_interval_secs: 60,
             expiry_warning_secs: 300, // 5분
             expiry_soon_secs: 60,     // 1분
             network_retry_count: 3,
