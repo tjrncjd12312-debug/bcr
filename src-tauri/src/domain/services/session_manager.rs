@@ -180,7 +180,7 @@ impl SessionValidationResult {
 /// 세션 매니저 설정
 #[derive(Debug, Clone)]
 pub struct SessionManagerConfig {
-    /// 세션 검증 주기 (초) - 기본 30초
+    /// 세션 검증 주기 (초) - 기본 60초 (Supabase Edge Function 호출 한도 절약)
     pub validation_interval_secs: u64,
     /// 만료 경고 시간 (초) - 기본 5분 (300초)
     pub expiry_warning_secs: i64,
