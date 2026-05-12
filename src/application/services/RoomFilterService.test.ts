@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { RoomFilterService } from './RoomFilterService'
 import CustomPatternService from './CustomPatternService'
+import FilterThresholdsService from './FilterThresholdsService'
 import type { Room, RoadResult, Winner } from '../../domain/entities'
+import type { RoomPredictionState } from '../../domain/entities'
 
 // Helper to create RoadResult array from winner string
 function createHistory(pattern: string): RoadResult[] {
@@ -236,5 +238,63 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(roomMismatch, null, `custom:${pattern.id}`)).toBe(false)
     })
 
+  })
+
+  describe('fresh_shoe filter', () => {
+    function createPredictionState(roomId: string, isShoeReset?: boolean): RoomPredictionState {
+      return {
+        roomId,
+        roomName: `Room ${roomId}`,
+        lastPrediction: null,
+        stats: {
+          total: 0, correct: 0, winRate: 0,
+          consecutiveWins: 0, consecutiveLosses: 0,
+          maxConsecutiveWins: 0, maxConsecutiveLosses: 0,
+        },
+        pattern: null,
+        isFiltered: false,
+        predictionCount: 0,
+        history: [],
+        isShoeReset,
+      }
+    }
+
+    beforeEach(() => {
+      FilterThresholdsService.set({ freshShoeMaxGameNumber: 5 })
+    })
+
+    it('matches when predictionState.isShoeReset === true regardless of history length', () => {
+      const room = createRoom('r1', createHistory('BBPBPBBPPBBPBP')) // 14 results > 5
+      const state = createPredictionState('r1', true)
+      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(true)
+    })
+
+    it('matches when history.length <= freshShoeMaxGameNumber and isShoeReset is falsy', () => {
+      const room = createRoom('r2', createHistory('BPB')) // 3 results
+      const state = createPredictionState('r2', false)
+      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(true)
+    })
+
+    it('does NOT match when history is long and isShoeReset is false', () => {
+      const room = createRoom('r3', createHistory('BPBPBPBP')) // 8 > 5
+      const state = createPredictionState('r3', false)
+      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(false)
+    })
+
+    it('does NOT match when both isShoeReset is undefined and history is long', () => {
+      const room = createRoom('r4', createHistory('BPBPBPBP'))
+      const state = createPredictionState('r4', undefined)
+      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(false)
+    })
+
+    it('does NOT match when predictionState is null and history is long', () => {
+      const room = createRoom('r5', createHistory('BPBPBPBP'))
+      expect(RoomFilterService.matchesFilter(room, null, 'fresh_shoe')).toBe(false)
+    })
+
+    it('matches when predictionState is null but history is short (≤ N)', () => {
+      const room = createRoom('r6', createHistory('BP'))
+      expect(RoomFilterService.matchesFilter(room, null, 'fresh_shoe')).toBe(true)
+    })
   })
 })

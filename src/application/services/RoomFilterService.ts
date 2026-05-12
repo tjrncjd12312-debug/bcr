@@ -348,6 +348,13 @@ class RoomFilterServiceImpl {
         return winners.length > 0 && winners.length <= freshRoomGames
       }
 
+      case 'fresh_shoe': {
+        const { freshShoeMaxGameNumber } = FilterThresholdsService.get()
+        if (predictionState?.isShoeReset === true) return true
+        const historyLen = winners.length
+        return historyLen > 0 && historyLen <= freshShoeMaxGameNumber
+      }
+
       default:
         return false
     }
