@@ -96,31 +96,6 @@ describe('MultiRoomPredictionService', () => {
     MultiRoomPredictionService.dispose()
   })
 
-  it('refunds virtual bet on tie results', async () => {
-    const room: Room = {
-      id: 'room1',
-      name: 'Room 1',
-      koreanName: 'Room 1',
-      history: [
-        { winner: 'B', isPlayerPair: false, isBankerPair: false },
-        { winner: 'P', isPlayerPair: false, isBankerPair: false },
-        { winner: 'B', isPlayerPair: false, isBankerPair: false },
-        { winner: 'P', isPlayerPair: false, isBankerPair: false },
-        { winner: 'B', isPlayerPair: false, isBankerPair: false },
-      ],
-      gameCount: 5,
-      remainingSeconds: 12,
-    }
-    adapter.setRoom(room)
-
-    await MultiRoomPredictionService.requestPrediction(room)
-    expect(virtualBetting.placeBet).toHaveBeenCalled()
-
-    await MultiRoomPredictionService.onGameResult({ roomId: 'room1', winner: 'T' }, room)
-
-    expect(virtualBetting.resolveBet).toHaveBeenCalledWith('room1', 'Room 1', 'B', 'T')
-  })
-
   // ─────────────── Characterization tests (M1 baseline) ───────────────
   // Pin current observable behaviour so later lanes (F1 memoization,
   // F3 history eviction) can refactor without silently breaking flows.

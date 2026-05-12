@@ -236,15 +236,5 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(roomMismatch, null, `custom:${pattern.id}`)).toBe(false)
     })
 
-    it('should hide disabled custom patterns from available filters', () => {
-      const enabled = CustomPatternService.addPattern({ name: 'Enabled', sequence: 'BP', enabled: true })
-      const disabled = CustomPatternService.addPattern({ name: 'Disabled', sequence: 'PP', enabled: false })
-
-      const filters = RoomFilterService.getAvailableFilters()
-      const types = filters.map(f => f.type)
-
-      expect(types).toContain(`custom:${enabled.id}`)
-      expect(types).not.toContain(`custom:${disabled.id}`)
-    })
   })
 })

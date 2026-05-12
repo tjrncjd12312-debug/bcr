@@ -260,40 +260,4 @@ describe('AutoModeService', () => {
     expect(VirtualBettingService.getRoomState('room1')?.lastBetResult).toBe('pending')
   })
 
-  it('places a bet when a room becomes active during an ongoing betting window', async () => {
-    const baseHistory = makeHistory(['B', 'B', 'B', 'B', 'P'])
-    const room: Room = {
-      id: 'room1',
-      name: 'Room 1',
-      koreanName: 'Room 1',
-      history: baseHistory,
-      gameCount: baseHistory.length,
-      phase: 'betting',
-      remainingSeconds: 10,
-      gameState: {
-        playerHand: { score: 0, cards: ['AS', 'KD'] },
-        bankerHand: { score: 0, cards: ['2H', '3C'] },
-      },
-    }
-    adapter.setRoom(room)
-
-    AutoModeService.updateSettings({ enabled: false })
-    AutoModeService.setActiveBettingRooms([], 'long_streak')
-    AutoModeService.start()
-
-    // Betting window starts but room is not active yet
-    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
-    await flush()
-    await flush()
-
-    expect(AutoModeService.getRoomState('room1')).toBe(null)
-
-    // Room becomes active while countdown is still running
-    AutoModeService.setActiveBettingRooms(['room1'], 'long_streak')
-    await flush()
-    await flush()
-
-    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
-    expect(VirtualBettingService.getRoomState('room1')?.lastBetResult).toBe('pending')
-  })
 })

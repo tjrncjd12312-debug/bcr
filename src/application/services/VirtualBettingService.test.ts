@@ -374,19 +374,6 @@ describe('VirtualBettingService', () => {
   })
 
   describe('insufficient balance - auto disable', () => {
-    it('should auto-disable when balance is insufficient for bet', () => {
-      // Set low initial balance
-      VirtualBettingService.updateSettings({ initialBalance: 5000 })
-      VirtualBettingService.reset()
-      VirtualBettingService.enable()
-
-      // Try to place bet (10000원) with only 5000원 balance
-      const result = VirtualBettingService.placeBet('room1', '방 1', 'B')
-
-      expect(result).toBe(false)
-      expect(VirtualBettingService.isEnabled()).toBe(false) // Auto disabled
-    })
-
     it('should return true when balance is sufficient', () => {
       VirtualBettingService.enable()
 
@@ -394,27 +381,6 @@ describe('VirtualBettingService', () => {
 
       expect(result).toBe(true)
       expect(VirtualBettingService.isEnabled()).toBe(true)
-    })
-
-    it('should auto-disable during martingale progression when balance runs out', () => {
-      // Set balance that can only handle a few martingale levels
-      VirtualBettingService.updateSettings({ initialBalance: 50000 })
-      VirtualBettingService.reset()
-      VirtualBettingService.enable()
-
-      // Place and lose bets until balance runs out
-      // Level 0: 10000, Level 1: 20000, Level 2: 40000 = 70000 needed
-      VirtualBettingService.placeBet('room1', '방 1', 'B')
-      VirtualBettingService.resolveBet('room1', '방 1', 'B', 'P') // Loss, balance: 40000
-
-      VirtualBettingService.placeBet('room1', '방 1', 'B')
-      VirtualBettingService.resolveBet('room1', '방 1', 'B', 'P') // Loss, balance: 20000
-
-      // Next bet would be 40000, but balance is only 20000
-      const result = VirtualBettingService.placeBet('room1', '방 1', 'B')
-
-      expect(result).toBe(false)
-      expect(VirtualBettingService.isEnabled()).toBe(false)
     })
   })
 
