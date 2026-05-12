@@ -23,6 +23,7 @@ import { RoomFilterService } from '../services/RoomFilterService'
 import { MultiRoomPredictionService } from '../services/MultiRoomPredictionService'
 import { SemiAutoService } from '../services/SemiAutoService'
 import { AutoModeService } from '../services/AutoModeService'
+import { MoveOnTieListener, FreshShoeTieMartingalePreset } from '../services/freshshoe'
 
 /**
  * Initialize the DI container with all services
@@ -45,11 +46,87 @@ export function setupContainer(): void {
 
   console.log('[DI] Container initialized with all services')
 
+  // ==================== Fresh-Shoe Tie Martingale Preset ====================
+  // Get the casino adapter (EvolutionAdapter) — already registered above
+  const casinoAdapter = container.get('casinoAdapter')
+
+  // Build MoveOnTieListener — uses Evolution game-result events
+  const moveOnTieListener = new MoveOnTieListener({
+    casinoAdapter: {
+      onGameResult: (cb) => {
+        // GameResultEvent shape: { roomId, winner, ... }; no roundId in the domain event,
+        // so roundId is always undefined here — all Tie results classify as 'organic_tie'
+        // until notePendingBet is wired to the actual bet-placement path.
+        return casinoAdapter.onGameResult((event) => {
+          cb({
+            roomId: event.roomId,
+            winner: event.winner as 'B' | 'P' | 'T',
+            roundId: undefined,
+          })
+        })
+      },
+    },
+    getCurrentFocusedRoomId: () => SemiAutoService.getCurrentRoomId(),
+    onMartinReset: (_roomId: string) => {
+      // Defensive martin reset is managed internally by AutoModeService via MartingaleManager.
+      // The stoppedRoomsChecker gate blocks subsequent bets in the room, so no-op is correct here.
+    },
+  })
+
+  // Build FreshShoeTieMartingalePreset
+  const freshShoePreset = new FreshShoeTieMartingalePreset({
+    filterService: RoomFilterService,
+    settingsBridge: {
+      auto: {
+        // AutoModeSettings (public type) doesn't declare forceBetDirection, but the underlying
+        // settings object (from automode/types.ts AutoModeSettings) does — cast to access it.
+        get: () => ({ forceBetDirection: (AutoModeService.getSettings() as unknown as Record<string, unknown>)['forceBetDirection'] as 'auto' | 'tie_only' | undefined }),
+        update: (patch) => AutoModeService.updateSettings(patch as Parameters<typeof AutoModeService.updateSettings>[0]),
+      },
+      semiauto: {
+        // SemiAutoSettings does not include forceBetDirection; use no-op bridge.
+        // TODO(freshshoe-forceBetDirection): expose forceBetDirection on SemiAutoSettings
+        // and wire it through SemiAutoService.updateSettings when needed.
+        get: () => ({ forceBetDirection: 'auto' as const }),
+        update: (_patch) => { /* no-op — SemiAutoService has no forceBetDirection setting */ },
+      },
+    },
+    listener: moveOnTieListener,
+    casinoAdapter: {
+      onShoeChange: (cb) => {
+        // ICasinoAdapter.onShoeChange is optional; EvolutionAdapter implements it
+        const unsub = casinoAdapter.onShoeChange?.(cb)
+        return unsub ?? (() => { /* no-op if adapter doesn't support onShoeChange */ })
+      },
+    },
+    storage: {
+      get: () => (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('bcr-freshshoe-preset') : null,
+      set: (v) => { if (typeof window !== 'undefined' && window.localStorage) window.localStorage.setItem('bcr-freshshoe-preset', v) },
+      remove: () => { if (typeof window !== 'undefined' && window.localStorage) window.localStorage.removeItem('bcr-freshshoe-preset') },
+    },
+    semiAutoTriggerHandler: (roomId, reason) => SemiAutoService.handlePresetTrigger(roomId, reason),
+    onMartinReset: (_roomId: string) => {
+      // See MoveOnTieListener.onMartinReset above for rationale — no-op is intentional.
+    },
+  })
+
+  // TODO(freshshoe-notePendingBet): when bet-placement events are exposed by AutoBettingService,
+  // call moveOnTieListener.notePendingBet(roomId, { roundId, betType }) for accurate
+  // tie_hit vs organic_tie classification. Until then both classify as organic_tie, which is
+  // functionally equivalent for the downstream STOPPED/navigate logic.
+
   // Initialize services that need event subscriptions
   // This must be called after all services are registered
   MultiRoomPredictionService.initialize()
   SemiAutoService.initialize()
   AutoModeService.initialize()
+
+  // Wire FreshShoe gates into AutoModeService's BettingDecisionService
+  // Must be called AFTER AutoModeService.initialize() so bettingDecisionService is ready
+  AutoModeService.setFreshShoeGates(
+    (roomId) => freshShoePreset.isRoomStopped(roomId),
+    (roomId) => moveOnTieListener.signalMartinCap(roomId),
+  )
 
   console.log('[DI] Services initialized with event subscriptions')
 }

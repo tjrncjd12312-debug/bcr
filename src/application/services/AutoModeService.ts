@@ -330,6 +330,14 @@ class AutoModeServiceImpl {
 
   // ==================== Getters ====================
 
+  // Fresh-Shoe 프리셋용: 외부에서 BettingDecisionService에 게이트 주입
+  setFreshShoeGates(stoppedRoomsChecker: (roomId: string) => boolean, onMartinCap: (roomId: string) => void): void {
+    // bettingDecisionService는 Task 8에서 setters가 추가된 concrete BettingDecisionService 인스턴스
+    const svc = this.bettingDecisionService as { setStoppedRoomsChecker?: (fn: (id: string) => boolean) => void; setOnMartinCap?: (fn: (id: string) => void) => void }
+    svc.setStoppedRoomsChecker?.(stoppedRoomsChecker)
+    svc.setOnMartinCap?.(onMartinCap)
+  }
+
   getState(): AutoModeState {
     return {
       settings: { ...this.settings },
