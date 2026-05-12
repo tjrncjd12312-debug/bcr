@@ -276,6 +276,8 @@ export type RoomFilterType =
 export const TIE_DROUGHT_THRESHOLD = 20
 /** 새 방 진입 직후 N게임 (fresh_room 필터용) */
 export const FRESH_ROOM_GAMES = 5
+/** 카지노 슈가 막 시작된 직후 N게임 (fresh_shoe 필터용) */
+export const FRESH_SHOE_MAX_GAME_NUMBER = 5
 /** Tie 베팅 순이익 배수 (8:1 net payout — 1000 stake win → +8000 profit) */
 export const TIE_PAYOUT_MULTIPLIER = 8
 

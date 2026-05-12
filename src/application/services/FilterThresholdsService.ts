@@ -1,18 +1,20 @@
 // FilterThresholdsService - User-configurable filter threshold values with localStorage persistence
 // Presentation-friendly application service (no React dependency)
 
-import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES } from '../../domain/entities'
+import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES, FRESH_SHOE_MAX_GAME_NUMBER } from '../../domain/entities'
 
 const STORAGE_KEY = 'bcr-filter-thresholds'
 
 export interface FilterThresholds {
   tieDroughtThreshold: number
   freshRoomGames: number
+  freshShoeMaxGameNumber: number
 }
 
 const DEFAULTS: FilterThresholds = {
   tieDroughtThreshold: TIE_DROUGHT_THRESHOLD,
   freshRoomGames: FRESH_ROOM_GAMES,
+  freshShoeMaxGameNumber: FRESH_SHOE_MAX_GAME_NUMBER,
 }
 
 class FilterThresholdsServiceImpl {
@@ -32,6 +34,7 @@ class FilterThresholdsServiceImpl {
       this.values = {
         tieDroughtThreshold: this.coerce(parsed.tieDroughtThreshold, DEFAULTS.tieDroughtThreshold, 1, 200),
         freshRoomGames: this.coerce(parsed.freshRoomGames, DEFAULTS.freshRoomGames, 1, 200),
+        freshShoeMaxGameNumber: this.coerce(parsed.freshShoeMaxGameNumber, DEFAULTS.freshShoeMaxGameNumber, 1, 200),
       }
     } catch {
       this.values = { ...DEFAULTS }
@@ -65,6 +68,9 @@ class FilterThresholdsServiceImpl {
       freshRoomGames: partial.freshRoomGames !== undefined
         ? this.coerce(partial.freshRoomGames, this.values.freshRoomGames, 1, 200)
         : this.values.freshRoomGames,
+      freshShoeMaxGameNumber: partial.freshShoeMaxGameNumber !== undefined
+        ? this.coerce(partial.freshShoeMaxGameNumber, this.values.freshShoeMaxGameNumber, 1, 200)
+        : this.values.freshShoeMaxGameNumber,
     }
     this.save()
     this.emit()
