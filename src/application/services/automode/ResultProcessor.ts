@@ -3,6 +3,7 @@
 // 단일 책임: 게임 결과 처리, 통계 업데이트, 마틴/휴식 상태 전이
 
 import type { Winner, BetType } from '../../../domain/entities'
+import { TIE_PAYOUT_MULTIPLIER } from '../../../domain/entities'
 import type {
   RoomContext,
   AutoModeSettings,
@@ -147,7 +148,7 @@ export class ResultProcessor implements IResultProcessor {
   private calculateProfit(result: Winner, betType: BetType, betAmount: number): number {
     // Tie 베팅이 적중한 경우: ×8 배당 (no commission)
     if (betType === 'Tie' && result === 'T') {
-      return betAmount * 8
+      return betAmount * TIE_PAYOUT_MULTIPLIER
     }
 
     if (result === 'T') {

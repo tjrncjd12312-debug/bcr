@@ -19,6 +19,7 @@ import type {
   PatternBetConfig,
   Winner,
 } from '../../domain/entities'
+import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
 import type { ICasinoAdapter, IMultiRoomPredictionPort } from '../../domain/interfaces'
 import { container } from '../di'
 import { CallbackManager } from '../utils'
@@ -1747,7 +1748,7 @@ class AutoModeServiceImpl {
     // 손익 계산 시 반올림하지 않고 정확한 값 유지
     const rawProfit = won
       ? (predResult === 'B' ? betAmount * (1 - BANKER_COMMISSION)
-        : predResult === 'T' ? betAmount * 8   // Tie 배당
+        : predResult === 'T' ? betAmount * TIE_PAYOUT_MULTIPLIER
         : betAmount)
       : -betAmount
     // 개별 손익은 반올림하여 표시용으로 사용

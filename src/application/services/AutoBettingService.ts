@@ -9,6 +9,7 @@
 // - 배팅 이벤트 콜백 시스템
 
 import type { BetType, Prediction, PendingBetInfo, TableBettingConfig } from '../../domain/entities'
+import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
 import { TauriAdapter } from '../../infrastructure/adapters/TauriAdapter'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
 
@@ -403,7 +404,7 @@ class AutoBettingServiceImpl {
     // 타이 결과: betType=Tie면 승리(×8), 그 외엔 무승부 환불
     if (winner === 'T') {
       if (betType === 'Tie') {
-        const profit = amount * 8
+        const profit = amount * TIE_PAYOUT_MULTIPLIER
         this.emitBetResult({
           tableId,
           betType,
