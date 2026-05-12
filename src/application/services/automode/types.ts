@@ -51,6 +51,8 @@ export interface AutoModeSettings {
   // 배팅 모드
   isVirtualMode: boolean
   bettingMode: BettingMode
+  // 강제 베팅 방향: 'tie_only'일 때 prediction 무시하고 Tie 강제 (Fresh-Shoe 프리셋이 사용)
+  forceBetDirection?: 'auto' | 'tie_only'
   // SemiAutoSettings 호환 필드
   autoBetting: boolean
   useAiPrediction: boolean
@@ -77,6 +79,7 @@ export const DEFAULT_SETTINGS: AutoModeSettings = {
   lossThreshold: 0,
   isVirtualMode: true,
   bettingMode: 'ai',
+  forceBetDirection: 'auto',
   autoBetting: false,
   useAiPrediction: true,
   winCutAmount: 0,
