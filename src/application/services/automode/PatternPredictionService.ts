@@ -110,7 +110,7 @@ export class PatternPredictionService implements IPatternPredictionService {
       return this.createSkipPrediction(room.id, `${patternName} → 스킵`)
     }
 
-    if (betDirection === 'B' || betDirection === 'P') {
+    if (betDirection === 'B' || betDirection === 'P' || betDirection === 'T') {
       // 사용자가 명시적으로 설정한 배팅 방향 (고정)
       console.log(`[PatternPrediction] ${room.koreanName} - ${patternName} 패턴, betDirection=${betDirection} (사용자 설정)`)
       return {
@@ -272,7 +272,7 @@ export class PatternPredictionService implements IPatternPredictionService {
         isSkip: aiPrediction?.isSkip,
       })
 
-      if (aiPrediction && aiPrediction.prediction && aiPrediction.prediction !== 'T') {
+      if (aiPrediction && aiPrediction.prediction) {
         return {
           ...aiPrediction,
           reasoning: `${patternName} → AI: ${aiPrediction.prediction}`,

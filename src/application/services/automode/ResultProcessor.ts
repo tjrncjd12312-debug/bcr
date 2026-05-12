@@ -136,17 +136,22 @@ export class ResultProcessor implements IResultProcessor {
   // ==================== 승패 판정 ====================
 
   private isWin(result: Winner, betType: BetType): boolean {
-    if (result === 'T') return false // 타이는 승리 아님
-    if (betType === 'Banker' && result === 'B') return true
-    if (betType === 'Player' && result === 'P') return true
+    if (betType === 'Banker') return result === 'B'
+    if (betType === 'Player') return result === 'P'
+    if (betType === 'Tie') return result === 'T'
     return false
   }
 
   // ==================== 수익 계산 ====================
 
   private calculateProfit(result: Winner, betType: BetType, betAmount: number): number {
+    // Tie 베팅이 적중한 경우: ×8 배당 (no commission)
+    if (betType === 'Tie' && result === 'T') {
+      return betAmount * 8
+    }
+
     if (result === 'T') {
-      // 타이: 배팅 금액 반환 (수익 0)
+      // B/P 베팅인데 타이: 배팅 금액 반환 (수익 0, 환불 처리)
       return 0
     }
 

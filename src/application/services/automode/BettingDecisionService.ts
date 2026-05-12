@@ -89,10 +89,7 @@ export class BettingDecisionService implements IBettingDecisionService {
       return { shouldBet: false, skipReason: '패스 예측' }
     }
 
-    // 5.5. 타이 예측 확인
-    if (prediction.prediction === 'T') {
-      return { shouldBet: false, skipReason: '타이 예측' }
-    }
+    // 5.5. 타이 예측 허용 (Tie betting support)
 
     // 6. 마틴 레벨 확인 (전달받은 ctx.martingale.level 사용 - Codex 피드백)
     const currentLevel = ctx.martingale.level
@@ -109,7 +106,9 @@ export class BettingDecisionService implements IBettingDecisionService {
     )
 
     // 8. 배팅 타입 결정
-    const betType: BetType = prediction.prediction === 'B' ? 'Banker' : 'Player'
+    const betType: BetType =
+      prediction.prediction === 'B' ? 'Banker' :
+      prediction.prediction === 'P' ? 'Player' : 'Tie'
 
     return {
       shouldBet: true,
@@ -208,7 +207,9 @@ export class BettingDecisionService implements IBettingDecisionService {
       // AI 예측 필요 - 여기서는 처리하지 않음
       return { shouldBet: false, skipReason: 'AI 예측 필요' }
     } else {
-      betType = matchedPattern.betDirection === 'B' ? 'Banker' : 'Player'
+      betType =
+        matchedPattern.betDirection === 'B' ? 'Banker' :
+        matchedPattern.betDirection === 'P' ? 'Player' : 'Tie'
     }
 
     return {

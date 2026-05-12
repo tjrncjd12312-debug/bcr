@@ -10,6 +10,7 @@ import type {
   RoomPredictionState,
   CustomPattern,
 } from '../../domain/entities'
+import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES } from '../../domain/entities'
 import { toWinnerArray } from '../../domain/utils/converters'
 import CustomPatternService from './CustomPatternService'
 
@@ -64,6 +65,24 @@ const BUILT_IN_FILTERS: RoomFilter[] = [
     label: '연승(3+)',
     description: '예측 3연승 이상',
   },
+  {
+    type: 'tie_drought',
+    enabled: false,
+    label: '타이 가뭄',
+    description: `최근 ${TIE_DROUGHT_THRESHOLD}게임 동안 Tie 미발생`,
+  },
+  {
+    type: 'no_tie_room',
+    enabled: false,
+    label: 'Tie 없는 방',
+    description: '이 방의 히스토리에 Tie가 0건',
+  },
+  {
+    type: 'fresh_room',
+    enabled: false,
+    label: '신규 방',
+    description: `방 진입 후 ${FRESH_ROOM_GAMES}게임 이내`,
+  },
 ]
 
 class RoomFilterServiceImpl {
@@ -100,7 +119,7 @@ class RoomFilterServiceImpl {
           type,
           enabled: this.activeFilters.has(type),
           label: p.name || '커스텀 패턴',
-          description: `${p.sequence.join('')} → ${p.betDirection === 'B' ? '뱅커' : p.betDirection === 'P' ? '플레이어' : p.betDirection === 'skip' ? '스킵' : 'AI'}`,
+          description: `${p.sequence.join('')} → ${p.betDirection === 'B' ? '뱅커' : p.betDirection === 'P' ? '플레이어' : p.betDirection === 'T' ? '타이' : p.betDirection === 'skip' ? '스킵' : 'AI'}`,
           isCustom: true,
           patternId: p.id,
           sequence: p.sequence,
@@ -282,6 +301,21 @@ class RoomFilterServiceImpl {
         // 3+ consecutive prediction wins
         const wins = predictionState?.stats.consecutiveWins || 0
         return wins >= 3
+      }
+
+      case 'tie_drought': {
+        // history[0] is newest. Find first 'T' index; if not found or >= threshold, match.
+        const idx = winners.findIndex(w => w === 'T')
+        const gamesSinceTie = idx < 0 ? winners.length : idx
+        return gamesSinceTie >= TIE_DROUGHT_THRESHOLD
+      }
+
+      case 'no_tie_room': {
+        return winners.length > 0 && !winners.includes('T')
+      }
+
+      case 'fresh_room': {
+        return winners.length > 0 && winners.length <= FRESH_ROOM_GAMES
       }
 
       default:

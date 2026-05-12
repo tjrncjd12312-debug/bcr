@@ -267,7 +267,15 @@ export type RoomFilterType =
   | 'after_tie'          // 타이 직후 (last result is T)
   | 'banker_dominant'    // 뱅커 우세 (recent 10 games, B > P)
   | 'player_dominant'    // 플레이어 우세 (recent 10 games, P > B)
+  | 'tie_drought'        // Tie 미발생 N게임 이상 (default N=20)
+  | 'no_tie_room'        // 이 방의 히스토리에 Tie 0건
+  | 'fresh_room'         // 방 입장 직후 N게임 이내 (default N=5)
   | CustomPatternType
+
+/** Tie 미발생 임계 게임 수 (tie_drought 필터용) */
+export const TIE_DROUGHT_THRESHOLD = 20
+/** 새 방 진입 직후 N게임 (fresh_room 필터용) */
+export const FRESH_ROOM_GAMES = 5
 
 export interface RoomFilter {
   type: RoomFilterType
@@ -496,7 +504,7 @@ export interface PendingBetInfo {
 // ==================== Semi-Auto Settings ====================
 
 /** 패턴별 배팅 방향 설정 */
-export type PatternBetDirection = 'B' | 'P' | 'skip' | 'ai'
+export type PatternBetDirection = 'B' | 'P' | 'T' | 'skip' | 'ai'
 
 /** 패턴별 배팅 설정 */
 export interface PatternBetConfig {
@@ -553,6 +561,9 @@ export const DEFAULT_PATTERN_CONFIGS: PatternBetConfig[] = [
   { patternType: 'after_tie', betDirection: 'ai', includeTie: true, enabled: true },
   { patternType: 'banker_dominant', betDirection: 'B', includeTie: false, enabled: true },
   { patternType: 'player_dominant', betDirection: 'P', includeTie: false, enabled: true },
+  { patternType: 'tie_drought',  betDirection: 'T', includeTie: false, enabled: true },
+  { patternType: 'no_tie_room',  betDirection: 'T', includeTie: false, enabled: true },
+  { patternType: 'fresh_room',   betDirection: 'T', includeTie: false, enabled: true },
 ]
 
 /** 오토 배팅 모드 기본 설정 */

@@ -8,6 +8,7 @@ const BET_DIRECTION_LABELS: Record<PatternBetDirection, string> = {
   ai: 'AI 예측',
   B: '뱅커 (B)',
   P: '플레이어 (P)',
+  T: '타이 (T)',
   skip: '스킵',
 }
 
@@ -171,6 +172,7 @@ export function PatternManagerModal({
                   <option value="ai">AI 예측 (서버 요청)</option>
                   <option value="B">뱅커 (B) 배팅</option>
                   <option value="P">플레이어 (P) 배팅</option>
+                  <option value="T">타이 (T) 배팅</option>
                   <option value="skip">배팅 안 함 (스킵)</option>
                 </select>
               </label>

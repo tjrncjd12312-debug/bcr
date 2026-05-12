@@ -1319,7 +1319,9 @@ class AutoModeServiceImpl {
     // placeBet는 try-finally로 락 해제만 담당
 
     const betAmount = this.calculateBetAmount(roomState.martinLevel)
-    const betType: BetType = prediction.prediction === 'B' ? 'Banker' : 'Player'
+    const betType: BetType =
+      prediction.prediction === 'B' ? 'Banker' :
+      prediction.prediction === 'P' ? 'Player' : 'Tie'
 
     console.log(`[AutoMode] placeBet 시작 - room: ${room.koreanName}, prediction: ${prediction.prediction}, amount: ${betAmount}, isVirtual: ${this.settings.isVirtualMode}`)
 
@@ -1690,7 +1692,8 @@ class AutoModeServiceImpl {
     const wasVirtualBet = roomState.wasVirtualBet ?? this.settings.isVirtualMode
 
     // 타이 처리 (push) - 손익/마틴 변화 없음, 환불 처리
-    if (winner === 'T') {
+    // 단, predResult가 'T'인 경우는 Tie 배팅이 적중한 경우이므로 일반 승리 처리(아래로) 진행
+    if (winner === 'T' && predResult !== 'T') {
       if (wasVirtualBet) {
         VirtualBettingService.resolveBet(roomId, roomName, predResult, 'T')
         // ✅ 결과 처리 후 잔액 동기화 (Single Source of Truth: cumulativeProfit)
@@ -1714,7 +1717,7 @@ class AutoModeServiceImpl {
         type: 'bet_result',
         roomId,
         roomName,
-        prediction: predResult === 'T' ? null : predResult,
+        prediction: predResult,
         winner: 'T',
         won: null,
         status: 'tie',
@@ -1743,7 +1746,9 @@ class AutoModeServiceImpl {
     const BANKER_COMMISSION = 0.05
     // 손익 계산 시 반올림하지 않고 정확한 값 유지
     const rawProfit = won
-      ? (predResult === 'B' ? betAmount * (1 - BANKER_COMMISSION) : betAmount)
+      ? (predResult === 'B' ? betAmount * (1 - BANKER_COMMISSION)
+        : predResult === 'T' ? betAmount * 8   // Tie 배당
+        : betAmount)
       : -betAmount
     // 개별 손익은 반올림하여 표시용으로 사용
     const profit = Math.round(rawProfit)

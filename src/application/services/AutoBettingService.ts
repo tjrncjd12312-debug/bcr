@@ -127,12 +127,14 @@ class AutoBettingServiceImpl {
     tableId: string,
     betAmount: number
   ): Promise<{ success: boolean; error?: string }> {
-    // Skip if no prediction or Tie
-    if (!prediction.prediction || prediction.prediction === 'T') {
+    // Skip if no prediction
+    if (!prediction.prediction) {
       return { success: false, error: 'No valid prediction' }
     }
 
-    const betType: BetType = prediction.prediction === 'B' ? 'Banker' : 'Player'
+    const betType: BetType =
+      prediction.prediction === 'B' ? 'Banker' :
+      prediction.prediction === 'P' ? 'Player' : 'Tie'
     return this.placeBet(tableId, betType, betAmount)
   }
 
@@ -396,18 +398,31 @@ class AutoBettingServiceImpl {
       return
     }
 
-    // 타이는 무승부 처리 (배팅금 반환)
+    const { betType, amount, gameId } = pendingBet
+
+    // 타이 결과: betType=Tie면 승리(×8), 그 외엔 무승부 환불
     if (winner === 'T') {
+      if (betType === 'Tie') {
+        const profit = amount * 8
+        this.emitBetResult({
+          tableId,
+          betType,
+          amount,
+          gameId,
+          won: true,
+          profit,
+          timestamp: Date.now(),
+        })
+      }
       this.pendingBets.delete(tableId)
       EvolutionAdapter.resetLastBetGame(tableId)
       return
     }
 
-    const { betType, amount, gameId } = pendingBet
-    const expectedWinner = betType === 'Banker' ? 'B' : 'P'
+    const expectedWinner = betType === 'Banker' ? 'B' : betType === 'Player' ? 'P' : 'T'
     const won = winner === expectedWinner
 
-    // 뱅커 승리 시 5% 커미션
+    // 뱅커 승리 시 5% 커미션 / Tie 베팅은 위에서 처리됨
     const BANKER_COMMISSION = 0.05
     const profit = won
       ? (betType === 'Banker' ? amount * (1 - BANKER_COMMISSION) : amount)
