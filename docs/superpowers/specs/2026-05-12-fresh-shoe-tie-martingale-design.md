@@ -16,8 +16,8 @@ The user wants a new betting preset that:
    - The martingale level reaches the user-configured max (stop-loss).
 4. Resumes betting in that room only after the next shoe reset event from Evolution.
 5. Works in both **자동 모드 (Auto)** and **반자동 모드 (Semi-Auto)**:
-   - Auto: all user-selected rooms run the strategy in parallel, each with an independent state machine.
-   - Semi-Auto: serial — pick one fresh-shoe room from the list, bet there, on trigger navigate (via Chrome CDP) to another fresh-shoe room from the list.
+   - **Auto**: all user-selected rooms are monitored *and bet on* in parallel via the existing multi-socket. Each room has an independent state machine. Bets are placed per-room without changing any visible tab.
+   - **Semi-Auto**: all user-selected rooms are *monitored* in parallel via multi-socket (same radar as Auto), but **betting happens in only one room at a time** — the room currently focused by the CDP browser tab. The UI displays only that focused room. On trigger, multi-socket radar data is consulted to select the next `fresh_shoe`-matching room, and CDP navigates the tab there. Trigger evaluation is **only for the currently focused/betting room**; organic ties in other watched rooms are ignored (they just become candidates for the next navigation if they remain fresh-shoe).
 
 This is Evolution-only. Pragmatic is out of scope.
 
@@ -31,6 +31,7 @@ The existing codebase already provides the building blocks: `MartingaleManager` 
 - Building blocks are independently usable and independently testable so future presets can reuse them.
 - All existing behavior (when the preset is OFF) is byte-for-byte unchanged. Regression test coverage for that.
 - Safe-by-default: if Evolution payload lacks shoe data, do not bet.
+- Multi-socket detection across the user's watch list in **both** Auto and Semi-Auto (same radar). Betting parallelism differs by mode (Auto = all rooms in parallel; Semi-Auto = the single CDP-focused tab room).
 - Per-room state machine in Auto mode: WATCHING → BETTING → STOPPED → WATCHING (on shoe reset).
 - TDD for every new module; verification gate (build + typecheck + tests + manual UI check) before claiming completion.
 
@@ -115,12 +116,16 @@ Design choices and *why*:
   ```
 - Responsibilities:
   - **Track pending bets per room**: subscribe to bet-placed events (whatever the existing wiring is — `AutoBettingService`'s `onBetSent`-style callback, or `BettingDecisionService`'s post-decision hook; pick the existing one closest to "bet was actually sent" in plan-step-1). Maintain `pendingBets: Map<roomId, { roundId, betType }>`. Clear on game result.
-  - Subscribe to `casinoAdapter` `game.result` events. If result is `'T'`:
+  - Subscribe to `casinoAdapter` `game.result` events from the **multi-socket** stream (same source the rest of the app uses).
+  - **Scope filter (mode-dependent)**:
+    - `scope === 'auto'`: process events for *all* user-selected rooms.
+    - `scope === 'semiauto'`: process events for **only the room currently focused by the CDP tab** (queried from `SemiAutoService.currentRoomId`). Events for other rooms are ignored by this listener (they remain visible in the multi-socket data for the next room-selection step, but they do not fire move-on-tie triggers).
+  - If result is `'T'` (and the event passes the scope filter):
     - If `pendingBets.get(roomId)?.betType === 'Tie'` for the round just settled → `'tie_hit'`.
     - Otherwise → `'organic_tie'`.
     - Either way, call `MartingaleManager.resetLevel(roomId)` (defensive — `'organic_tie'` and `'martin_cap'` paths do not go through `ResultProcessor.recordWin`, so the level needs an explicit reset here; safe to call when already 0).
     - Emit a trigger with `(roomId, reason)`.
-  - Subscribe to a `martin_cap` signal from `BettingDecisionService`. When the next bet would exceed `maxLevel`, `BettingDecisionService` blocks the bet (existing behavior) **and** emits a `'martin_cap'` event for this listener.
+  - Subscribe to a `martin_cap` signal from `BettingDecisionService`. When the next bet would exceed `maxLevel`, `BettingDecisionService` blocks the bet (existing behavior) **and** emits a `'martin_cap'` event for this listener (also scope-filtered).
 - Idempotency: dedupes by `(roomId, roundId)` so duplicate game-result events from multi-socket sources do not double-fire.
 - Returns a disable function from `enable()`. Unit test verifies that after disable no further triggers fire.
 
@@ -198,20 +203,42 @@ Design choices and *why*:
   → preset removes K from STOPPED set → K back to WATCHING
 ```
 
-### 6.2 Semi-Auto mode (single tab, serial)
+### 6.2 Semi-Auto mode (multi-socket radar + CDP-focused single-tab betting)
 
-Same trigger detection, but instead of marking STOPPED:
+Detection radar covers all user-selected rooms via multi-socket (same as Auto). Betting is confined to the room currently focused by the CDP tab. Triggers fire only for that focused room.
 
 ```
-MoveOnTieListener emit(<any reason>, currentRoom)
+[Toggle ON]
+  → FreshShoeTieMartingalePreset.enable('semiauto')
+      → RoomFilterService: 'fresh_shoe' filter active
+      → BettingDecisionService: forceBetDirection = 'tie_only'
+      → MoveOnTieListener.enable('semiauto')   // scope-filtered to currentRoomId
+
+[Multi-socket: continuous widget.resolved / game.result for all watched rooms]
+  → MultiRoomPredictionService / SemiAutoService maintain real-time state for every room
+  → Only events for SemiAutoService.currentRoomId drive trigger evaluation
+  → Events for other rooms only update the per-room state cache used for the next candidate selection
+
+[BettingDecisionService.shouldBet on currentRoom — same gates as Auto]
+  → places Tie bet via existing bet path (single-tab session)
+
+[MoveOnTieListener emit(<any reason>, currentRoom)]
   → SemiAutoService.handlePresetTrigger(currentRoom, reason)
       → MartingaleManager.resetLevel(currentRoom)
-      → candidates = userRoomList.filter(r => fresh_shoe filter.matches(r) && r.id !== currentRoom)
+      → candidates = userRoomList
+          .filter(r => fresh_shoe filter.matches(r) using multi-socket state)
+          .filter(r => r.id !== currentRoom)
       → if candidates.length === 0:
-          stay; wait for next onShoeChange in any watched room, then re-evaluate
+          stay on currentRoom and continue listening to multi-socket;
+          when any other watched room becomes fresh-shoe (next widget.resolved
+          or onShoeChange event from multi-socket), re-evaluate and navigate
       → else:
-          navigateToRoom(candidates[0])  // existing CDP navigation
+          navigateToRoom(candidates[0])           // existing CDP navigation
+          UI now displays only candidates[0]      // existing single-tab UX
+          listener scope updates to new currentRoomId automatically
 ```
+
+Selection policy when multiple candidates exist: take the first one for now (simple deterministic ordering by room list index). YAGNI — if the user wants smarter ranking later (e.g., prefer rooms with `isShoeReset === true` over rooms with `gameNumber === 5`), add it in a follow-up.
 
 ### 6.3 Per-room state machine (Auto mode)
 
@@ -226,7 +253,7 @@ STOPPED ──(onShoeChange OR isShoeReset=true again)──▶ WATCHING
 | ID  | Case                                                                                | Handling                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | E1  | Evolution payload missing both `isShoeReset` and `gameNumber`                       | `fresh_shoe` filter returns false. Log once at debug level. **Safe-by-default: no bet.**                                                                                |
-| E2  | User room list is empty / no fresh-shoe candidate                                   | Auto: idle, no bets placed; UI shows "fresh-shoe 방 없음". Semi-Auto: stay on current room and wait for `onShoeChange`; UI shows "대기 중 — fresh-shoe 방 등장 시 자동 이동". |
+| E2  | User room list is empty / no fresh-shoe candidate                                   | Auto: idle, no bets placed; UI shows "fresh-shoe 방 없음". Semi-Auto: stay on current room (do not navigate), and re-evaluate when any multi-socket event (`widget.resolved`, `game.result`, or `onShoeChange`) flips another watched room into the fresh-shoe state; UI shows "대기 중 — fresh-shoe 방 등장 시 자동 이동". |
 | E3  | Bet placement fails (network / balance)                                             | Handled by existing `BettingDecisionService` / `AutoBettingService`. Plan verifies that a failed bet does **not** call `MartingaleManager.recordLoss()`.                |
 | E4  | Race: bet decision in flight, result `'T'` arrives before bet is sent               | Bet send is aborted by existing code. `MoveOnTieListener` classifies as `'organic_tie'`. No new handling needed.                                                        |
 | E5  | Duplicate `game.result` events (multi-socket)                                       | `MoveOnTieListener` dedupes by `(roomId, roundId)`. Unit-tested.                                                                                                        |
