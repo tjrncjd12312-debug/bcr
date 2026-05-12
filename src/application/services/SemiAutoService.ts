@@ -92,7 +92,7 @@ export interface BetLogEvent {
   type: 'placed' | 'result'
   roomId: string
   roomName: string
-  betType: 'Banker' | 'Player'
+  betType: 'Banker' | 'Player' | 'Tie'
   amount: number
   won?: boolean
   profit?: number
@@ -464,6 +464,43 @@ class SemiAutoServiceImpl {
 
     this.setStatus(`${roomName} (점수: ${score.toFixed(0)})`)
     this.emitStateChange()
+  }
+
+  // Fresh-Shoe 프리셋용 — 현재 CDP가 가리키는 방의 id (MoveOnTieListener scope filter)
+  getCurrentRoomId(): string | null {
+    return this.internalState.currentRoomId
+  }
+
+  // Fresh-Shoe 프리셋 트리거 처리: 후보 fresh-shoe 방 선택 → CDP navigate
+  async handlePresetTrigger(currentRoomId: string, reason: import('./freshshoe').TriggerReason): Promise<void> {
+    // 후보 방 산출 — 테스트 훅이 있으면 그것, 아니면 production fallback (현재는 빈 배열, Task 11에서 와이어링)
+    const provider = this.candidatesProvider
+    const candidates: any[] = provider ? provider() : await this.collectFreshShoeCandidates()
+    const next = candidates.find(r => r && r.id !== currentRoomId)
+
+    if (!next) {
+      console.log('[SemiAuto] handlePresetTrigger: no fresh-shoe candidate, staying', { currentRoomId, reason })
+      return
+    }
+
+    await this.navigateToRoom(next)
+  }
+
+  // RoomFilterService 통해 fresh_shoe 방 후보 산출 — Task 11에서 와이어링.
+  private async collectFreshShoeCandidates(): Promise<any[]> {
+    return []
+  }
+
+  // 테스트 전용 훅
+  private candidatesProvider: (() => any[]) | null = null
+  __testSetCandidatesProvider(provider: (() => any[]) | null): void {
+    this.candidatesProvider = provider
+  }
+
+  resetForTest(): void {
+    this.candidatesProvider = null
+    this.internalState.currentRoomId = null
+    this.internalState.currentRoomName = null
   }
 
   /**

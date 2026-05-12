@@ -1,6 +1,6 @@
 // SemiAutoService.test.ts - 반자동 모드 핵심 로직 검증
 // bcrstore의 GameLogic 참조하여 이벤트 기반 아키텍처 테스트
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock dependencies
 vi.mock('../di', () => ({
@@ -444,5 +444,46 @@ describe('SemiAutoService Room URL Building', () => {
     expect(url).toContain('game=baccarat')
     expect(url).toContain(`table_id=${roomId}`)
     expect(url).toContain('lobby_launch_id=')
+  })
+})
+
+import SemiAutoService from './SemiAutoService'
+import type { TriggerReason } from './freshshoe'
+
+describe('SemiAutoService preset trigger', () => {
+  beforeEach(() => {
+    if (typeof (SemiAutoService as any).resetForTest === 'function') {
+      ;(SemiAutoService as any).resetForTest()
+    }
+  })
+
+  it('exposes getCurrentRoomId', () => {
+    expect(typeof SemiAutoService.getCurrentRoomId).toBe('function')
+  })
+
+  it("handlePresetTrigger with no candidates does not call navigateToRoom", async () => {
+    const navigateSpy = vi.spyOn(SemiAutoService, 'navigateToRoom' as any).mockResolvedValue(undefined)
+    ;(SemiAutoService as any).__testSetCandidatesProvider(() => [])
+
+    await SemiAutoService.handlePresetTrigger('current', 'tie_hit' as TriggerReason)
+
+    expect(navigateSpy).not.toHaveBeenCalled()
+    navigateSpy.mockRestore()
+  })
+
+  it("handlePresetTrigger with candidates navigates to first candidate that is not the current room", async () => {
+    const candidates = [
+      { id: 'current', name: 'Current', koreanName: '현재', history: [], gameCount: 0 } as any,
+      { id: 'other', name: 'Other', koreanName: '다음', history: [], gameCount: 0 } as any,
+    ]
+    ;(SemiAutoService as any).__testSetCandidatesProvider(() => candidates)
+
+    const navigateSpy = vi.spyOn(SemiAutoService, 'navigateToRoom' as any).mockResolvedValue(undefined)
+
+    await SemiAutoService.handlePresetTrigger('current', 'organic_tie' as TriggerReason)
+
+    expect(navigateSpy).toHaveBeenCalledTimes(1)
+    expect((navigateSpy.mock.calls[0][0] as any).id).toBe('other')
+    navigateSpy.mockRestore()
   })
 })
