@@ -52,7 +52,7 @@ describe('Fresh-Shoe Tie Martingale — Semi-Auto end-to-end', () => {
       listener: listener as any,
       casinoAdapter: adapter as any,
       storage: makeStorage(),
-      semiAutoTriggerHandler,
+      semiAutoTriggerHandler: semiAutoTriggerHandler as any,
       onMartinReset: vi.fn(),
     })
   })
