@@ -12,6 +12,15 @@ import type {
 import type { IMartingaleManager } from './MartingaleManager'
 import type { IRestPeriodManager } from './RestPeriodManager'
 
+// ==================== Gates ====================
+
+export interface BettingDecisionGates {
+  // Fresh-Shoe 프리셋이 STOPPED 마킹한 방을 차단하는 게이트 (true 반환 시 차단)
+  stoppedRoomsChecker?: (roomId: string) => boolean
+  // 마틴 한도 도달 시 호출 (MoveOnTieListener.signalMartinCap에 연결)
+  onMartinCap?: (roomId: string) => void
+}
+
 // ==================== Interface ====================
 
 export interface IBettingDecisionService {
@@ -46,12 +55,23 @@ export class BettingDecisionService implements IBettingDecisionService {
   private martingaleManager: IMartingaleManager
   // NOTE: restPeriodManager는 더 이상 사용하지 않음 (ctx.rest 사용)
   // 생성자 시그니처는 하위 호환성을 위해 유지
+  private gates: BettingDecisionGates
 
   constructor(
     martingaleManager: IMartingaleManager,
-    _restPeriodManager: IRestPeriodManager  // 미사용 - ctx.rest로 대체됨
+    _restPeriodManager: IRestPeriodManager,  // 미사용 - ctx.rest로 대체됨
+    gates: BettingDecisionGates = {}
   ) {
     this.martingaleManager = martingaleManager
+    this.gates = gates
+  }
+
+  setStoppedRoomsChecker(checker: (roomId: string) => boolean): void {
+    this.gates.stoppedRoomsChecker = checker
+  }
+
+  setOnMartinCap(cb: (roomId: string) => void): void {
+    this.gates.onMartinCap = cb
   }
 
   // ==================== 배팅 결정 ====================
@@ -79,6 +99,11 @@ export class BettingDecisionService implements IBettingDecisionService {
       return { shouldBet: false, skipReason: `휴식 중 (${remaining}분 남음)` }
     }
 
+    // 3.5. Fresh-Shoe 프리셋의 STOPPED 게이트
+    if (this.gates.stoppedRoomsChecker?.(roomId)) {
+      return { shouldBet: false, skipReason: 'Fresh-shoe 종료' }
+    }
+
     // 4. 예측 유효성 확인
     if (!prediction || !prediction.prediction) {
       return { shouldBet: false, skipReason: '예측 없음' }
@@ -94,6 +119,7 @@ export class BettingDecisionService implements IBettingDecisionService {
     // 6. 마틴 레벨 확인 (전달받은 ctx.martingale.level 사용 - Codex 피드백)
     const currentLevel = ctx.martingale.level
     if (currentLevel >= settings.maxMartin) {
+      this.gates.onMartinCap?.(roomId)
       return { shouldBet: false, skipReason: `최대 마틴 도달 (${currentLevel}M)` }
     }
 
@@ -227,9 +253,10 @@ export class BettingDecisionService implements IBettingDecisionService {
 
 export function createBettingDecisionService(
   martingaleManager: IMartingaleManager,
-  restPeriodManager: IRestPeriodManager
+  restPeriodManager: IRestPeriodManager,
+  gates: BettingDecisionGates = {}
 ): BettingDecisionService {
-  return new BettingDecisionService(martingaleManager, restPeriodManager)
+  return new BettingDecisionService(martingaleManager, restPeriodManager, gates)
 }
 
 export default BettingDecisionService
