@@ -84,6 +84,12 @@ const BUILT_IN_FILTERS: RoomFilter[] = [
     label: '신규 방',
     description: `방 진입 후 ${FRESH_ROOM_GAMES}게임 이내`,
   },
+  {
+    type: 'fresh_shoe',
+    enabled: false,
+    label: 'Fresh Shoe',
+    description: '카지노 슈가 막 시작된 방 (isShoeReset 또는 history ≤ N)',
+  },
 ]
 
 class RoomFilterServiceImpl {
@@ -109,7 +115,7 @@ class RoomFilterServiceImpl {
   }
 
   getAvailableFilters(): RoomFilter[] {
-    const { tieDroughtThreshold, freshRoomGames } = FilterThresholdsService.get()
+    const { tieDroughtThreshold, freshRoomGames, freshShoeMaxGameNumber } = FilterThresholdsService.get()
 
     // 1) 내장 필터 - 임계값을 라벨/설명에 반영
     const builtin = BUILT_IN_FILTERS.map(filter => {
@@ -121,6 +127,9 @@ class RoomFilterServiceImpl {
       } else if (filter.type === 'fresh_room') {
         label = `신규 방 (≤${freshRoomGames})`
         description = `방 진입 후 ${freshRoomGames}게임 이내`
+      } else if (filter.type === 'fresh_shoe') {
+        label = `Fresh Shoe (≤${freshShoeMaxGameNumber})`
+        description = `카지노 슈가 막 시작된 방 — isShoeReset=true 또는 history ≤ ${freshShoeMaxGameNumber}`
       }
       return {
         ...filter,

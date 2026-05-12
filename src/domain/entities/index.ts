@@ -270,6 +270,7 @@ export type RoomFilterType =
   | 'tie_drought'        // Tie 미발생 N게임 이상 (default N=20)
   | 'no_tie_room'        // 이 방의 히스토리에 Tie 0건
   | 'fresh_room'         // 방 입장 직후 N게임 이내 (default N=5)
+  | 'fresh_shoe'         // 카지노 슈가 막 시작된 방
   | CustomPatternType
 
 /** Tie 미발생 임계 게임 수 (tie_drought 필터용) */
