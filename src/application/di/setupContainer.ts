@@ -24,6 +24,18 @@ import { MultiRoomPredictionService } from '../services/MultiRoomPredictionServi
 import { SemiAutoService } from '../services/SemiAutoService'
 import { AutoModeService } from '../services/AutoModeService'
 import { MoveOnTieListener, FreshShoeTieMartingalePreset } from '../services/freshshoe'
+import type { FreshShoeTieMartingalePreset as FreshShoeTieMartingalePresetType } from '../services/freshshoe'
+
+// Module-level singleton reference for the FreshShoeTieMartingalePreset
+let freshShoePresetInstance: FreshShoeTieMartingalePresetType | null = null
+
+/**
+ * Returns the FreshShoeTieMartingalePreset singleton created during setupContainer().
+ * Returns null if setupContainer() has not been called yet.
+ */
+export function getFreshShoePreset(): FreshShoeTieMartingalePresetType | null {
+  return freshShoePresetInstance
+}
 
 /**
  * Initialize the DI container with all services
@@ -74,7 +86,7 @@ export function setupContainer(): void {
   })
 
   // Build FreshShoeTieMartingalePreset
-  const freshShoePreset = new FreshShoeTieMartingalePreset({
+  freshShoePresetInstance = new FreshShoeTieMartingalePreset({
     filterService: RoomFilterService,
     settingsBridge: {
       auto: {
@@ -109,6 +121,7 @@ export function setupContainer(): void {
       // See MoveOnTieListener.onMartinReset above for rationale — no-op is intentional.
     },
   })
+  const freshShoePreset = freshShoePresetInstance
 
   // TODO(freshshoe-notePendingBet): when bet-placement events are exposed by AutoBettingService,
   // call moveOnTieListener.notePendingBet(roomId, { roundId, betType }) for accurate
