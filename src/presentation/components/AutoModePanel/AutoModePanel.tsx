@@ -808,7 +808,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
               onClick={handleToggle}
             >
               <span className="auto-mode__toggle-indicator" />
-              <span className="auto-mode__toggle-label">{enabled ? '시작' : '정지'}</span>
+              <span className="auto-mode__toggle-label">{enabled ? '정지' : '시작'}</span>
             </button>
           )}
 
