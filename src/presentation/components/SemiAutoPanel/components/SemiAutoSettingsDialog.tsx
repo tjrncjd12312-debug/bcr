@@ -5,6 +5,7 @@ import type {
 } from '../../../../domain/entities'
 import type { SemiAutoSettings } from '../../../../application/services/SemiAutoService'
 import { FreshShoeToggle } from '../../common/FreshShoeToggle'
+import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import './SemiAutoSettingsDialog.css'
 
@@ -154,35 +155,23 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
                         </p>
 
                         <div className="sa-setting-grid">
-                            <div className="sa-setting-item">
-                                <label>연승 이동</label>
-                                <div className="sa-input-wrapper">
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="20"
-                                        value={settings.winThreshold ?? 0}
-                                        onChange={(e) => onUpdateSettings({ winThreshold: Number(e.target.value) })}
-                                        className="sa-dialog-input"
-                                    />
-                                    <span className="sa-input-suffix">승</span>
-                                </div>
-                            </div>
+                            <NumberFieldWithSuffix
+                                label="연승 이동"
+                                value={settings.winThreshold ?? 0}
+                                suffix="승"
+                                min={0}
+                                max={20}
+                                onChange={(n) => onUpdateSettings({ winThreshold: n })}
+                            />
 
-                            <div className="sa-setting-item">
-                                <label>연패 이동</label>
-                                <div className="sa-input-wrapper">
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="20"
-                                        value={settings.lossThreshold ?? 0}
-                                        onChange={(e) => onUpdateSettings({ lossThreshold: Number(e.target.value) })}
-                                        className="sa-dialog-input"
-                                    />
-                                    <span className="sa-input-suffix">연패</span>
-                                </div>
-                            </div>
+                            <NumberFieldWithSuffix
+                                label="연패 이동"
+                                value={settings.lossThreshold ?? 0}
+                                suffix="연패"
+                                min={0}
+                                max={20}
+                                onChange={(n) => onUpdateSettings({ lossThreshold: n })}
+                            />
                         </div>
                         <p className="sa-setting-hint">
                             0 = 무제한
