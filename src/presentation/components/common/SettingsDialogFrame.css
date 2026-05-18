@@ -142,3 +142,33 @@
   color: var(--text-muted);
   pointer-events: none;
 }
+
+/* Shared stat card primitive (StatCard) */
+.settings-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.settings-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--modal-surface);
+  border: 1px solid var(--modal-border);
+  border-radius: 8px;
+}
+.settings-stat-card__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.settings-stat-card__value {
+  font-size: 18px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-primary);
+}
+.settings-stat-card.positive .settings-stat-card__value { color: var(--status-success); }
+.settings-stat-card.negative .settings-stat-card__value { color: var(--status-danger); }
