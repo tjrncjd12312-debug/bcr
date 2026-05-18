@@ -1,158 +1,6 @@
 /* AutoModeSettingsDialog.css - Premium Casino Design */
 /* Matches SemiAutoSettingsDialog style */
-
-.ams-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: var(--modal-backdrop);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.25s ease-out;
-}
-
-.ams-overlay.visible {
-  opacity: 1;
-}
-
-.ams-dialog {
-  width: 90%;
-  max-width: 480px;
-  background: var(--modal-bg);
-  border: 1px solid var(--modal-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-modal);
-  overflow: hidden;
-  transform: scale(0.92) translateY(20px);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  display: flex;
-  flex-direction: column;
-  max-height: 90vh;
-  color: var(--text-primary);
-  /* Premium gold accent glow */
-  box-shadow:
-    var(--shadow-modal),
-    0 0 0 1px var(--accent-gold-muted),
-    inset 0 1px 0 var(--border-subtle);
-}
-
-.ams-overlay.visible .ams-dialog {
-  transform: scale(1) translateY(0);
-}
-
-/* Header */
-.ams-header {
-  padding: 18px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--modal-border);
-  background: var(--modal-surface);
-}
-
-.ams-header h2 {
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-
-.ams-close {
-  background: var(--modal-elevated);
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 6px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: var(--transition-smooth);
-}
-
-.ams-close:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  border-color: var(--modal-border);
-}
-
-/* Tabs */
-.ams-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--modal-border);
-  background: var(--modal-surface);
-  padding: 0 24px;
-  gap: 4px;
-  overflow-x: auto;
-}
-
-.ams-tab {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 14px 16px;
-  cursor: pointer;
-  position: relative;
-  transition: var(--transition-smooth);
-  white-space: nowrap;
-}
-
-.ams-tab:hover {
-  color: var(--text-primary);
-}
-
-.ams-tab.active {
-  color: var(--accent-primary);
-}
-
-.ams-tab.active::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--accent-primary);
-  border-radius: 1px 1px 0 0;
-}
-
-/* Content */
-.ams-content {
-  padding: 24px;
-  overflow-y: auto;
-  flex: 1;
-  background: var(--modal-bg);
-  min-height: 0;
-}
-
-/* Custom Scrollbar */
-.ams-content::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.ams-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.ams-content::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: var(--radius-xs);
-}
-
-.ams-content::-webkit-scrollbar-thumb:hover {
-  background: var(--border-accent);
-}
+/* NOTE: overlay/dialog/header/tabs/content/footer chrome lives in SettingsDialogFrame.css */
 
 /* Section */
 .ams-section {
@@ -586,13 +434,7 @@
   color: var(--status-danger);
 }
 
-/* Footer */
-.ams-footer {
-  padding: 18px 24px;
-  border-top: 1px solid var(--modal-border);
-  background: var(--modal-surface);
-}
-
+/* Primary Footer Button (rendered inside SettingsDialogFrame's footer slot) */
 .ams-btn-primary {
   width: 100%;
   padding: 14px;
@@ -622,29 +464,6 @@
    ═══════════════════════════════════════════════════════════════ */
 
 @media (max-width: 480px) {
-  .ams-dialog {
-    width: 95%;
-    max-width: none;
-    border-radius: var(--radius-lg);
-  }
-
-  .ams-header {
-    padding: 16px 18px;
-  }
-
-  .ams-content {
-    padding: 18px;
-  }
-
-  .ams-tabs {
-    padding: 0 14px;
-  }
-
-  .ams-tab {
-    padding: 12px 14px;
-    font-size: 12px;
-  }
-
   .ams-input-row {
     grid-template-columns: 1fr;
     gap: 14px;
