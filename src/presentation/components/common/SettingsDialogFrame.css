@@ -1,7 +1,6 @@
 /* SettingsDialogFrame.css — shared chrome for settings dialogs.
- * Visual rules pulled from the AutoMode settings dialog so all settings
- * dialogs match. Per-dialog body content keeps its own *-section / *-input
- * styles for now. */
+ * Chrome dimensions come from --dialog-* tokens in global.css, shared with
+ * Modal.css. Visuals (z-index, no glow, transition-based animation) are local. */
 
 .settings-dialog-overlay {
   position: fixed;
@@ -19,7 +18,7 @@
 
 .settings-dialog {
   width: min(720px, 92vw);
-  max-height: 88vh;
+  max-height: var(--dialog-max-height);
   background: var(--modal-bg);
   border: 1px solid var(--modal-border);
   border-radius: var(--radius-xl);
@@ -37,24 +36,24 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 24px;
+  padding: var(--dialog-chrome-padding);
   border-bottom: 1px solid var(--modal-border);
 }
 .settings-dialog-header h2 {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
+  font-size: var(--dialog-title-size);
+  font-weight: var(--dialog-title-weight);
   color: var(--text-primary);
 }
 .settings-dialog-close {
-  width: 32px;
-  height: 32px;
+  width: var(--dialog-close-size);
+  height: var(--dialog-close-size);
   display: flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--dialog-close-radius);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -92,16 +91,41 @@
 .settings-dialog-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: var(--dialog-content-padding);
 }
 
 .settings-dialog-footer {
-  padding: 16px 24px;
+  padding: var(--dialog-chrome-padding);
   border-top: 1px solid var(--modal-border);
   background: var(--modal-surface);
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* Shared two-column field row — used by both AutoMode and SemiAuto settings.
+ * Collapses to a single column under 480px to keep dialogs usable in narrow modes. */
+.settings-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 480px) {
+  .settings-field-row {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
+
+/* Shared section heading — small uppercase accent label. */
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin: 0 0 8px 0;
 }
 
 /* Shared field primitive (NumberFieldWithSuffix) */

@@ -1,4 +1,6 @@
-/* Modal Common Styles - Premium Casino Design */
+/* Modal Common Styles - Premium Casino Design
+ * Chrome dimensions come from --dialog-* tokens in global.css, shared with
+ * SettingsDialogFrame.css. Visuals (z-index, glow, animation) are local. */
 
 .modal-overlay {
   position: fixed;
@@ -16,16 +18,15 @@
 .modal {
   width: 90%;
   max-width: 480px;
-  max-height: 85vh;
+  max-height: var(--dialog-max-height);
   background: var(--modal-bg);
   border: 1px solid var(--modal-border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: modal-pop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  /* Purple accent glow */
+  /* Modal-specific: purple accent glow + subtle inner highlight */
   box-shadow:
     var(--shadow-modal),
     var(--shadow-glow-accent),
@@ -40,23 +41,22 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 24px;
+  padding: var(--dialog-chrome-padding);
   border-bottom: 1px solid var(--modal-border);
   background: var(--modal-surface);
 }
 
 .modal-header h2 {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
+  font-size: var(--dialog-title-size);
+  font-weight: var(--dialog-title-weight);
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
 .modal-close {
-  width: 32px;
-  height: 32px;
-  border: none;
+  width: var(--dialog-close-size);
+  height: var(--dialog-close-size);
   background: var(--modal-elevated);
   color: var(--text-secondary);
   font-size: 18px;
@@ -89,7 +89,7 @@
 }
 
 .modal-footer {
-  padding: 18px 24px;
+  padding: var(--dialog-chrome-padding);
   border-top: 1px solid var(--modal-border);
   background: var(--modal-surface);
 }

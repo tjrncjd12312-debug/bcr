@@ -331,7 +331,7 @@ export const FocusedRoomView = memo(function FocusedRoomView({ room, state, last
               ) : prediction || displayState?.lastPrediction?.isSkip ? (
                 <div className={`prediction-bar__prediction ${isNewPrediction ? 'new-prediction' : ''}`} key={predictionKey}>
                   <span className={`prediction-bar__value ${prediction?.toLowerCase() || 'pass'}`}>
-                    {displayState?.lastPrediction?.isSkip ? 'PASS' : prediction}
+                    {displayState?.lastPrediction?.isSkip ? '패스' : prediction}
                   </span>
                   <div className="prediction-bar__confidence">
                     <span className="confidence-percent">{confidencePercent}%</span>

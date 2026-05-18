@@ -269,7 +269,7 @@ function AutoModeListRow({
             {/* 2. Status */}
             <div className="col-status">
                 <div className={`status-dot ${isEnabled ? (isBetting ? 'betting' : 'active') : 'disabled'}`} />
-                <span className="status-text">{isEnabled ? (isBetting ? '배팅중' : '대기중') : 'OFF'}</span>
+                <span className="status-text">{isEnabled ? (isBetting ? '배팅중' : '대기중') : '정지'}</span>
             </div>
 
             {/* 3. Timer */}
@@ -322,7 +322,7 @@ function AutoModeListRow({
                 {isBetting && activePrediction ? (
                     <div className="predict-group">
                         <div className={`predict-badge ${activePrediction === 'B' ? 'banker' : activePrediction === 'P' ? 'player' : 'tie'}`}>
-                            {activePrediction === 'B' ? 'BANKER' : activePrediction === 'P' ? 'PLAYER' : 'TIE'}
+                            {activePrediction === 'B' ? '뱅커' : activePrediction === 'P' ? '플레이어' : '타이'}
                         </div>
                         <div className="predict-info">
                             {betAmount > 0 && <span className="bet-amt">{betAmount.toLocaleString()}</span>}

@@ -195,11 +195,7 @@
   color: #ffffff;
 }
 
-/* Filter Dropdown */
-.predict-header__filter {
-  position: relative;
-}
-
+/* Filter Settings Button (opens FilterSettingsDialog) */
 .predict-header__filter-btn {
   display: flex;
   align-items: center;
@@ -253,121 +249,7 @@
   opacity: 1;
 }
 
-.predict-header__filter-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 6px;
-  min-width: 480px;
-  max-height: 520px;
-  overflow-y: auto;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  padding: 6px;
-  box-shadow: 0 18px 48px -12px rgba(0, 0, 0, 0.65);
-  z-index: 100;
-}
-
-.predict-header__filter-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 2px 8px 2px 0;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: default;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-button.predict-header__filter-item {
-  padding: 12px 14px;
-  cursor: pointer;
-}
-
-.predict-header__filter-item-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-  min-width: 0;
-  padding: 10px 4px 10px 14px;
-  background: transparent;
-  border: none;
-  border-radius: 6px 0 0 6px;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-
-.predict-header__filter-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.predict-header__filter-item-toggle:hover {
-  color: var(--text-primary);
-}
-
-.predict-header__filter-item.active {
-  background: var(--gold-muted);
-}
-
-.predict-header__filter-item.active .predict-header__filter-item-toggle {
-  color: var(--gold-bright);
-}
-
-.predict-header__filter-manage {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 10px 12px;
-  margin-top: 2px;
-  border-radius: 8px;
-  border: 1px dashed var(--gold-muted, rgba(212, 175, 55, 0.4));
-  background: rgba(212, 175, 55, 0.06);
-  color: var(--gold-bright, #f7d35c);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.18s, border-color 0.18s, color 0.18s;
-}
-
-.predict-header__filter-manage:hover {
-  background: rgba(212, 175, 55, 0.14);
-  border-color: var(--gold-bright, #f7d35c);
-  color: #fff;
-}
-
-.predict-header__filter-manage svg {
-  flex-shrink: 0;
-}
-
-.filter-count {
-  font-weight: 700;
-  font-size: 12px;
-  padding: 3px 8px;
-  background: var(--bg-active, rgba(255,255,255,0.08));
-  border-radius: 4px;
-}
-
-.predict-header__filter-item.active .filter-count {
-  background: var(--gold);
-  color: var(--bg-base, #17171c);
-}
-
-.predict-header__filter-divider {
-  height: 1px;
-  background: var(--border-strong, rgba(255, 255, 255, 0.12));
-  margin: 6px 4px;
-}
+/* Filter dropdown styles removed — settings now live in FilterSettingsDialog. */
 
 /* Pattern & Sort Buttons */
 .predict-header__pattern-btn {

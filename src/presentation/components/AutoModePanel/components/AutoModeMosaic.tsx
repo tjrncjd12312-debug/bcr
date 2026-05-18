@@ -168,11 +168,11 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
   // Logic Separation: Use Custom Hook for Visual State -> Removed as per user request (Eye strain)
 
   const statusDisplay = useMemo(() => {
-    if (isResting) return { text: 'REST', class: 'rest' }
-    if (isBetting) return { text: 'BETTING', class: 'betting' }
-    if (recentResultLog?.status === 'win') return { text: 'WIN', class: 'win' }
-    if (recentResultLog?.status === 'loss') return { text: 'LOSS', class: 'loss' }
-    if (recentPassLog) return { text: 'PASS', class: 'pass' }
+    if (isResting) return { text: '휴식', class: 'rest' }
+    if (isBetting) return { text: '배팅중', class: 'betting' }
+    if (recentResultLog?.status === 'win') return { text: '승', class: 'win' }
+    if (recentResultLog?.status === 'loss') return { text: '패', class: 'loss' }
+    if (recentPassLog) return { text: '패스', class: 'pass' }
 
     // Default Idle
     return { text: '대기중', class: 'idle' }

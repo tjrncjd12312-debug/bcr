@@ -300,8 +300,8 @@ export default function SemiAutoPanel({
 
         {/* Header */}
         <div className="sa-compact-header">
-          <span className="sa-compact-title">Semi-Auto Command</span>
-          {enabled && <span className="sa-compact-status active">ACTIVE</span>}
+          <span className="sa-compact-title">반자동 모드</span>
+          {enabled && <span className="sa-compact-status active">작동중</span>}
 
           {/* Sound Toggle */}
           <button
@@ -469,9 +469,9 @@ export default function SemiAutoPanel({
               <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.5 3.5 6.5 1 1.5 2 4.5-.5 7-2.5 2.5-6 1.5-7-1.5z" />
             </svg>
             <div className="sa-compact-stat-content">
-              <span className="label">MARTIN</span>
+              <span className="label">마틴</span>
               <span className={`value ${displayMartin >= 3 ? 'danger' : displayMartin > 0 ? 'warning' : ''}`}>
-                Lvl {displayMartin}
+                {displayMartin}단계
               </span>
             </div>
           </div>
@@ -481,8 +481,8 @@ export default function SemiAutoPanel({
               <circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" />
             </svg>
             <div className="sa-compact-stat-content">
-              <span className="label">SESSION</span>
-              <span className="value">{totalWins}W / {totalLosses}L</span>
+              <span className="label">세션</span>
+              <span className="value">{totalWins}승 / {totalLosses}패</span>
             </div>
           </div>
 
@@ -491,7 +491,7 @@ export default function SemiAutoPanel({
               <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
             </svg>
             <div className="sa-compact-stat-content">
-              <span className="label">WIN RATE</span>
+              <span className="label">적중률</span>
               <span className={`value ${winRate >= 50 ? 'success' : ''}`}>{winRate}%</span>
             </div>
           </div>
@@ -501,7 +501,7 @@ export default function SemiAutoPanel({
               <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
             <div className="sa-compact-stat-content">
-              <span className="label">BALANCE</span>
+              <span className="label">잔액</span>
               <span className="value">{realBalance !== null ? `₩${(realBalance / 10000).toFixed(1)}M` : '---'}</span>
             </div>
           </div>

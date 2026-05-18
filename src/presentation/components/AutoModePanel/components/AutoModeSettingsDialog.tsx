@@ -1,12 +1,12 @@
 // AutoModeSettingsDialog - SmartHelper 오토모드 설정창
 // Clean Architecture: Presentation Layer
+// NOTE: Filter thresholds and the 새 슈 타이 마틴 toggle now live in
+// FilterSettingsDialog (consolidated filter settings).
 
 import { useEffect, useState, useMemo } from 'react'
 import type { BetStrategyType } from '../../../../domain/entities'
 import type { AutoModeSettings } from '../../../../application/services/AutoModeService'
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
-import FilterThresholdsService, { type FilterThresholds } from '../../../../application/services/FilterThresholdsService'
-import { FreshShoeToggle } from '../../common/FreshShoeToggle'
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import { StatCard } from '../../common/StatCard'
@@ -58,13 +58,6 @@ export function AutoModeSettingsDialog({
     VirtualBettingService.getSettings().initialBalance
   )
 
-  // 필터 임계값 상태 - FilterThresholdsService와 양방향 동기화
-  const [thresholds, setThresholds] = useState<FilterThresholds>(() => FilterThresholdsService.get())
-
-  useEffect(() => {
-    return FilterThresholdsService.onChange(setThresholds)
-  }, [])
-
   // currentVirtualBalance must equal the header's calculation; do not switch
   // to VirtualBettingService.getGlobalBalance() — it has a sync race.
   const currentVirtualBalance = virtualBalance + cumulativeProfit
@@ -74,13 +67,6 @@ export function AutoModeSettingsDialog({
       setVirtualBalance(VirtualBettingService.getSettings().initialBalance)
     }
   }, [isOpen])
-
-  // 필터 임계값 변경 핸들러
-  const handleThresholdChange = (key: keyof FilterThresholds, raw: string) => {
-    const n = parseInt(raw, 10)
-    if (!Number.isFinite(n)) return
-    FilterThresholdsService.set({ [key]: n } as Partial<FilterThresholds>)
-  }
 
   const handleVirtualBalanceChange = (newBalance: number) => {
     setVirtualBalance(newBalance)
@@ -179,7 +165,7 @@ export function AutoModeSettingsDialog({
           {settings.isVirtualMode && (
             <div className="ams-section">
               <div className="ams-section-title">가상 잔액 설정</div>
-              <div className="ams-input-row">
+              <div className="settings-field-row">
                 <NumberFieldWithSuffix
                   label="초기 잔액"
                   value={virtualBalance}
@@ -207,40 +193,6 @@ export function AutoModeSettingsDialog({
               <div className="ams-hint">초기 잔액 변경 시 자동으로 리셋됩니다 · 다음 실행에도 저장됨</div>
             </div>
           )}
-
-          {/* 필터 임계값 설정 (Tie 가뭄 / 신규 방 / Fresh Shoe 기준 게임수) */}
-          <div className="ams-section">
-            <div className="ams-section-title">필터 임계값</div>
-            <div className="ams-input-row">
-              <NumberFieldWithSuffix
-                label="타이 미발생 (가뭄)"
-                value={thresholds.tieDroughtThreshold}
-                suffix="게임"
-                min={1}
-                max={200}
-                onChange={(n) => handleThresholdChange('tieDroughtThreshold', String(n))}
-              />
-              <NumberFieldWithSuffix
-                label="신규 방 기준"
-                value={thresholds.freshRoomGames}
-                suffix="게임"
-                min={1}
-                max={200}
-                onChange={(n) => handleThresholdChange('freshRoomGames', String(n))}
-              />
-              <NumberFieldWithSuffix
-                label="새 슈 기준"
-                value={thresholds.freshShoeMaxGameNumber}
-                suffix="게임"
-                min={1}
-                max={200}
-                onChange={(n) => handleThresholdChange('freshShoeMaxGameNumber', String(n))}
-              />
-            </div>
-            <div className="ams-hint">
-              타이 가뭄: 최근 N게임 동안 타이 미발생인 방만 필터링 · 필터 드롭다운에서 '타이 가뭄' 활성화 시 적용
-            </div>
-          </div>
 
           {/* 현재 상태 */}
           <div className="ams-section">
@@ -303,8 +255,6 @@ export function AutoModeSettingsDialog({
       {/* ========== Tab: 배팅 전략 ========== */}
       {activeTab === 'strategy' && (
         <>
-          <FreshShoeToggle scope="auto" />
-
           {/* 배팅 전략 선택 */}
           <div className="ams-section">
             <div className="ams-section-title">배팅 전략</div>
@@ -335,7 +285,7 @@ export function AutoModeSettingsDialog({
           {/* 배팅 금액 설정 */}
           <div className="ams-section">
             <div className="ams-section-title">배팅 금액</div>
-            <div className="ams-input-row">
+            <div className="settings-field-row">
               <NumberFieldWithSuffix
                 label="기본 배팅금"
                 value={settings.baseBetAmount || 10000}
@@ -408,7 +358,7 @@ export function AutoModeSettingsDialog({
 
           <div className="ams-section">
             <div className="ams-section-title">동시 배팅 제한</div>
-            <div className="ams-input-row">
+            <div className="settings-field-row">
               <NumberFieldWithSuffix
                 label="최대 동시 배팅 수"
                 value={settings.maxConcurrentBets ?? 0}
@@ -432,7 +382,7 @@ export function AutoModeSettingsDialog({
           {/* 윈컷/로스컷 */}
           <div className="ams-section">
             <div className="ams-section-title">손익 제한</div>
-            <div className="ams-input-row">
+            <div className="settings-field-row">
               <NumberFieldWithSuffix
                 label="윈컷 (목표 수익)"
                 value={settings.winCutAmount || 0}
@@ -456,7 +406,7 @@ export function AutoModeSettingsDialog({
           {/* 연패 설정 */}
           <div className="ams-section">
             <div className="ams-section-title">연패 제한</div>
-            <div className="ams-input-row">
+            <div className="settings-field-row">
               <NumberFieldWithSuffix
                 label="연패 기준 (해당 방 배팅 중지)"
                 value={settings.globalMaxConsecutiveLosses || 5}
@@ -472,7 +422,7 @@ export function AutoModeSettingsDialog({
           {/* 휴식 시간 */}
           <div className="ams-section">
             <div className="ams-section-title">휴식 시간</div>
-            <div className="ams-input-row">
+            <div className="settings-field-row">
               <NumberFieldWithSuffix
                 label="연패 후 휴식"
                 value={settings.restDurationMinutes || 0}

@@ -61,7 +61,7 @@ const RoomThumbnailCard = memo(function RoomThumbnailCard({
   // 예측 표시 (PASS/SKIP 처리 포함)
   const isSkip = state?.lastPrediction?.isSkip || state?.lastPrediction?.prediction === 'T'
   const prediction = state?.lastPrediction?.prediction
-  const predictionLabel = isSkip ? 'PASS' : (prediction === 'B' || prediction === 'P') ? prediction : null
+  const predictionLabel = isSkip ? '패스' : (prediction === 'B' || prediction === 'P') ? prediction : null
   const nextPrediction = isSkip ? 'SKIP' : (prediction === 'B' || prediction === 'P') ? prediction : null
 
   // 🔥 로드맵 스크롤 컨테이너 ref

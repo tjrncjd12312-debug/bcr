@@ -104,6 +104,17 @@
   --modal-border: rgba(176, 184, 193, 0.12);
   --modal-border-accent: rgba(49, 130, 246, 0.5);
 
+  /* Dialog chrome — shared between Modal.css (PatternManagerModal) and
+   * SettingsDialogFrame.css. Z-index, backdrop blur, default width, and
+   * animation method are deliberately NOT tokenized — each dialog owns those. */
+  --dialog-chrome-padding: 18px 24px;
+  --dialog-content-padding: 20px 24px;
+  --dialog-title-size: 17px;
+  --dialog-title-weight: 700;
+  --dialog-close-size: 32px;
+  --dialog-close-radius: 8px;
+  --dialog-max-height: 88vh;
+
   /* ===== Dimensions ===== */
   --header-height: 52px;
   --panel-left-width: 260px;

@@ -4,7 +4,7 @@ import type {
     RoomBetConfig,
 } from '../../../../domain/entities'
 import type { SemiAutoSettings } from '../../../../application/services/SemiAutoService'
-import { FreshShoeToggle } from '../../common/FreshShoeToggle'
+// NOTE: 새 슈 타이 마틴 toggle moved to the consolidated FilterSettingsDialog.
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import { StatCard } from '../../common/StatCard'
@@ -119,11 +119,6 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
             {/* Tab 1: General Settings */}
             {activeTab === 'general' && (
                 <>
-                    <FreshShoeToggle
-                        scope="semiauto"
-                        warning="⚠ 반자동 모드의 타이 베팅 강제는 후속 패치에서 지원. 현재 토글은 '새 슈' 필터와 이동 트리거만 활성화."
-                    />
-
                     {/* Section 1: Balance Display */}
                     <div className="sa-dialog-section">
                         <h3 className="sa-section-title">잔고 현황</h3>
@@ -155,7 +150,7 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
                             연승 또는 연패 시 자동으로 다른 방으로 이동
                         </p>
 
-                        <div className="sa-setting-grid">
+                        <div className="settings-field-row">
                             <NumberFieldWithSuffix
                                 label="연승 이동"
                                 value={settings.winThreshold ?? 0}

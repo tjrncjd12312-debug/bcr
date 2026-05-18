@@ -19,9 +19,7 @@ import { RoomCard } from './components/RoomCard'
 import { SelectedRoomDetail } from './components/SelectedRoomDetail'
 import { FocusedRoomView } from './components/FocusedRoomView'
 import { CompactRoomRow } from './components/CompactRoomRow'
-import PatternBetDirectionSelect from '../AutoModePanel/components/PatternBetDirectionSelect'
-import PatternBetStrategySelect from '../AutoModePanel/components/PatternBetStrategySelect'
-import FilterThresholdInline from '../AutoModePanel/components/FilterThresholdInline'
+import { FilterSettingsDialog } from '../common/FilterSettingsDialog'
 import './PredictModePanel.css'
 
 // LocalStorage key for selected rooms
@@ -87,7 +85,7 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
   // Toast notifications (replaces window.alert popups)
   const { showSuccess, showInfo } = useError()
 
-  const [showFilterDropdown, setShowFilterDropdown] = useState(false)
+  const [showFilterDialog, setShowFilterDialog] = useState(false)
   const [showPatternModal, setShowPatternModal] = useState(false)
   const [showSemiAutoPanel, setShowSemiAutoPanel] = useState(false)
   const [showRoomSelector, setShowRoomSelector] = useState(false)
@@ -682,62 +680,14 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
             </button>
           )}
 
-          {/* Filter Dropdown */}
-          <div className="predict-header__filter">
-            <button
-              className="predict-header__filter-btn"
-              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-            >
-              <span>필터: {getCurrentFilterLabel()}</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {showFilterDropdown && (
-              <div className="predict-header__filter-dropdown">
-                <button
-                  className={`predict-header__filter-item ${activeFilters.length === 0 ? 'active' : ''}`}
-                  onClick={() => { clearFilters(); setShowFilterDropdown(false) }}
-                >
-                  <span>전체</span>
-                  <span className="filter-count">{selectedRoomPatternCounts.all}</span>
-                </button>
-                {availableFilters.map(filter => {
-                  const isActive = activeFilters.includes(filter.type)
-                  return (
-                    <div
-                      key={filter.type}
-                      className={`predict-header__filter-item ${isActive ? 'active' : ''}`}
-                    >
-                      <button
-                        type="button"
-                        className="predict-header__filter-item-toggle"
-                        onClick={() => toggleFilter(filter.type)}
-                      >
-                        <span>{filter.label}</span>
-                        <span className="filter-count">{selectedRoomPatternCounts[filter.type] || 0}</span>
-                      </button>
-                      <FilterThresholdInline filterType={filter.type} />
-                      <PatternBetDirectionSelect patternType={filter.type} />
-                      <PatternBetStrategySelect patternType={filter.type} />
-                    </div>
-                  )
-                })}
-                <div className="predict-header__filter-divider" />
-                <button
-                  type="button"
-                  className="predict-header__filter-manage"
-                  onClick={() => { setShowPatternModal(true); setShowFilterDropdown(false) }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                  <span>커스텀 패턴 추가/관리</span>
-                </button>
-              </div>
-            )}
-          </div>
+          {/* Filter Settings Button - opens consolidated FilterSettingsDialog */}
+          <button
+            className="predict-header__filter-btn"
+            onClick={() => setShowFilterDialog(true)}
+            title="필터 설정 열기"
+          >
+            <span>필터: {getCurrentFilterLabel()}</span>
+          </button>
 
           {/* Pattern Settings Button */}
           <button
@@ -1135,6 +1085,22 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
         selectedRoomIds={selectedRoomIds}
         onSelectionChange={handleRoomSelectionChange}
         title="분석 대상 방 선택"
+      />
+
+      {/* Consolidated Filter Settings Dialog */}
+      <FilterSettingsDialog
+        isOpen={showFilterDialog}
+        onClose={() => setShowFilterDialog(false)}
+        availableFilters={availableFilters}
+        activeFilters={activeFilters}
+        toggleFilter={toggleFilter}
+        clearFilters={clearFilters}
+        filterCounts={selectedRoomPatternCounts}
+        onOpenPatternManager={() => {
+          setShowPatternModal(true)
+          setShowFilterDialog(false)
+        }}
+        freshShoeScope="semiauto"
       />
     </div>
   )

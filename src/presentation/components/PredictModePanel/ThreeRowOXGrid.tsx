@@ -261,7 +261,7 @@ function renderCell(cell: OXCell | null | undefined) {
 
   if (cell.isSkip) {
     if (cell.isNext) {
-      return <span className="three-row-ox-grid__cell three-row-ox-grid__cell--skip three-row-ox-grid__cell--blinking">PASS</span>
+      return <span className="three-row-ox-grid__cell three-row-ox-grid__cell--skip three-row-ox-grid__cell--blinking">패스</span>
     }
     return <span className="three-row-ox-grid__cell three-row-ox-grid__cell--skip">-</span>
   }

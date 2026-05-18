@@ -244,7 +244,7 @@ export function AutoModeHistory({ logs }: AutoModeHistoryProps) {
                             {config.icon}
                             <span className="type-label">{config.label}</span>
                           </span>
-                          <span className="card-room-name">{log.roomName !== '-' ? log.roomName : 'SYSTEM'}</span>
+                          <span className="card-room-name">{log.roomName !== '-' ? log.roomName : '시스템'}</span>
                         </div>
                         <span className="card-time">{log.time}</span>
                       </div>
@@ -259,14 +259,14 @@ export function AutoModeHistory({ logs }: AutoModeHistoryProps) {
                             <span className="score-value">{log.playerScore ?? '-'}</span>
                           </div>
                           <div className="score-vs">
-                            <span className="vs-text">VS</span>
+                            <span className="vs-text">대</span>
                           </div>
                           <div className={`score-badge banker ${log.winner === 'B' ? 'winner' : ''}`}>
                             <span className="score-label">뱅커</span>
                             <span className="score-value">{log.bankerScore ?? '-'}</span>
                           </div>
                           {log.winner === 'T' && (
-                            <div className="score-tie-badge">TIE</div>
+                            <div className="score-tie-badge">무</div>
                           )}
                         </div>
                       )}

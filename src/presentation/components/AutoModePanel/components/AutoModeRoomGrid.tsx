@@ -363,13 +363,13 @@ function AutoModeRoomCard({
       case 'failed':
         return '미배팅'
       case 'win':
-        return 'WIN'
+        return '승'
       case 'loss':
-        return 'LOSS'
+        return '패'
       case 'tie':
-        return 'TIE'
+        return '무'
       case 'pass':
-        return 'PASS'
+        return '패스'
       default:
         return (lastGameStatus as string).toUpperCase()
     }
@@ -432,7 +432,7 @@ function AutoModeRoomCard({
         {isBetting && betBadgeType && (
           <div className="auto-mode__bet-action-overlay">
             <div className={`auto-mode__bet-action-badge ${betBadgeType}`}>
-              BET {activePrediction}
+              배팅 {activePrediction === 'B' ? '뱅커' : activePrediction === 'P' ? '플레이어' : activePrediction}
             </div>
             <div className="auto-mode__bet-action-amount">
               {currentBetAmount.toLocaleString()}원
@@ -456,7 +456,7 @@ function AutoModeRoomCard({
         {!isBetting && !isResting && betLogs.length > 0 && betLogs[0].status === 'pass' && (Date.now() - betLogs[0].timestamp < 3000) && (
           <div className="auto-mode__bet-action-overlay pass-overlay">
             <div className="auto-mode__bet-action-badge pass">
-              PASS
+              패스
             </div>
             <div className="auto-mode__bet-action-amount">
               {betLogs[0].message || '패스'}
@@ -476,7 +476,7 @@ function AutoModeRoomCard({
             return (
               <div className={`auto-mode__bet-action-overlay ${recentResultLog.status === 'win' ? 'win-overlay' : 'loss-overlay'}`}>
                 <div className={`auto-mode__bet-action-badge ${recentResultLog.status === 'win' ? 'win' : 'loss'}`}>
-                  {recentResultLog.status === 'win' ? 'WIN' : 'LOSS'}
+                  {recentResultLog.status === 'win' ? '승' : '패'}
                 </div>
                 <div className="auto-mode__bet-action-amount">
                   {recentResultLog.profit > 0 ? '+' : ''}{recentResultLog.profit.toLocaleString()}원
@@ -490,13 +490,13 @@ function AutoModeRoomCard({
         {/* Pro-UI Score Display */}
         <div className="auto-mode__score-display">
           <div className="auto-mode__score-item player">
-            <span className="auto-mode__score-label">PLAYER</span>
+            <span className="auto-mode__score-label">플레이어</span>
             <span className="auto-mode__score-value">{hasScore ? playerScore : '-'}</span>
           </div>
           <div className="auto-mode__score-divider" />
           <div className="auto-mode__score-item banker">
             <span className="auto-mode__score-value">{hasScore ? bankerScore : '-'}</span>
-            <span className="auto-mode__score-label">BANKER</span>
+            <span className="auto-mode__score-label">뱅커</span>
           </div>
         </div>
 

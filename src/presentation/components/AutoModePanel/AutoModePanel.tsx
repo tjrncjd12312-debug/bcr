@@ -12,9 +12,8 @@ import { AutoModeRoomGrid, type RoomBetLog } from './components/AutoModeRoomGrid
 import { AutoModeRoomList } from './components/AutoModeRoomList'
 import { AutoModeMosaic } from './components/AutoModeMosaic' // Added
 import { AutoModeHistory } from './components/AutoModeHistory'
-import PatternBetDirectionSelect from './components/PatternBetDirectionSelect'
-import PatternBetStrategySelect from './components/PatternBetStrategySelect'
 import { RoomSelectorModal } from '../shared'
+import { FilterSettingsDialog } from '../common/FilterSettingsDialog'
 import { filterBaccaratRooms } from '../../utils'
 import type { RoomBetConfig } from '../../../domain/entities'
 import PatternManagerModal from '../MainScreen/components/PatternManagerModal'
@@ -124,7 +123,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     return 'grid'
   })
   const [showPatternModal, setShowPatternModal] = useState(false)
-  const [showFilterDropdown, setShowFilterDropdown] = useState(false)
+  const [showFilterDialog, setShowFilterDialog] = useState(false)
   const [showRoomSelector, setShowRoomSelector] = useState(false)
   const [sortType, setSortType] = useState<RoomSortType>('games')
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([])
@@ -134,7 +133,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   const [timeSinceLastBet, setTimeSinceLastBet] = useState<string>('')
   const [roomBetLogs, setRoomBetLogs] = useState<Map<string, RoomBetLog[]>>(new Map())
   const logIdRef = useRef(0)
-  const filterBtnRef = useRef<HTMLDivElement>(null)
 
   // viewMode 변경 시 localStorage에 저장
   useEffect(() => {
@@ -450,14 +448,14 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 prediction: prediction ?? null,
                 winner: undefined,
                 historyIndex,
-                message: reasoning || 'PASS',
+                message: reasoning || '패스',
                 timestamp: Date.now()
               }
               newMap.set(roomId, [passLog, ...logs].slice(0, 10))
               return newMap
             })
             // 히스토리 로그에도 추가 (SKIP 타입 사용)
-            addHistoryLog(roomName, reasoning || 'PASS', 'skip')
+            addHistoryLog(roomName, reasoning || '패스', 'skip')
             return
           }
 
@@ -726,14 +724,14 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
           {globalStatus.isHtml ? (
             <div className="auto-mode__status-strip-content">
-              <span>AUTO BETTING</span>
+              <span>자동 배팅</span>
               <span className="status-divider">·</span>
-              <span>{settings.isVirtualMode ? 'VIRTUAL' : 'REAL'}</span>
+              <span>{settings.isVirtualMode ? '가상' : '실제'}</span>
               <span className="status-divider">·</span>
               <div className="status-score">
-                <span className="win">{totalWins}W</span>
+                <span className="win">{totalWins}승</span>
                 <span className="divider">/</span>
-                <span className="loss">{totalLosses}L</span>
+                <span className="loss">{totalLosses}패</span>
               </div>
               {autoMode.startTime && (
                 <>
@@ -767,7 +765,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 <>
                   <span className="strip-dot">·</span>
                   <span className={`auto-mode__last-result ${lastBetResult}`}>
-                    {lastBetResult === 'win' ? 'W' : 'L'}
+                    {lastBetResult === 'win' ? '승' : '패'}
                   </span>
                 </>
               )}
@@ -810,7 +808,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
               onClick={handleToggle}
             >
               <span className="auto-mode__toggle-indicator" />
-              <span className="auto-mode__toggle-label">{enabled ? 'ON' : 'OFF'}</span>
+              <span className="auto-mode__toggle-label">{enabled ? '시작' : '정지'}</span>
             </button>
           )}
 
@@ -826,78 +824,21 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 <rect x="3" y="14" width="7" height="7" rx="1" />
                 <rect x="14" y="14" width="7" height="7" rx="1" />
               </svg>
-              <span>ROOMS {selectedRoomIds.size > 0 ? `(${selectedRoomIds.size})` : `(${rooms.size})`}</span>
+              <span>방 {selectedRoomIds.size > 0 ? `(${selectedRoomIds.size})` : `(${rooms.size})`}</span>
             </button>
           )}
 
-          {/* Filter Dropdown */}
-          <div className="auto-mode__header-filter" ref={filterBtnRef}>
-            <button
-              className="auto-mode__header-filter-btn"
-              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-              </svg>
-              <span>{getCurrentFilterLabel()}</span>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {showFilterDropdown && filterBtnRef.current && (() => {
-              const rect = filterBtnRef.current.getBoundingClientRect()
-              return (
-                <div
-                  className="auto-mode__header-filter-dropdown"
-                  style={{
-                    position: 'fixed',
-                    top: rect.bottom + 8,
-                    left: rect.left,
-                  }}
-                >
-                  <button
-                    className={`auto-mode__header-filter-item ${activeFilters.length === 0 ? 'active' : ''}`}
-                    onClick={() => { clearFilters(); setShowFilterDropdown(false) }}
-                  >
-                    <span>전체 (AI 자동)</span>
-                    <span className="filter-count">{selectedRoomPatternCounts.all}</span>
-                  </button>
-                  {availableFilters.map(filter => {
-                    const isActive = activeFilters.includes(filter.type)
-                    return (
-                      <div
-                        key={filter.type}
-                        className={`auto-mode__header-filter-item ${isActive ? 'active' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          className="auto-mode__header-filter-item-toggle"
-                          onClick={() => toggleFilter(filter.type)}
-                        >
-                          <span>{filter.label}</span>
-                          <span className="filter-count">{selectedRoomPatternCounts[filter.type] || 0}</span>
-                        </button>
-                        <PatternBetDirectionSelect patternType={filter.type} />
-                        <PatternBetStrategySelect patternType={filter.type} />
-                      </div>
-                    )
-                  })}
-                  <div className="auto-mode__header-filter-divider" />
-                  <button
-                    type="button"
-                    className="auto-mode__header-filter-manage"
-                    onClick={() => { setShowPatternModal(true); setShowFilterDropdown(false) }}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    <span>커스텀 패턴 추가/관리</span>
-                  </button>
-                </div>
-              )
-            })()}
-          </div>
+          {/* Filter Settings Button - opens consolidated FilterSettingsDialog */}
+          <button
+            className="auto-mode__header-filter-btn"
+            onClick={() => setShowFilterDialog(true)}
+            title="필터 설정 열기"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+            </svg>
+            <span>필터: {getCurrentFilterLabel()}</span>
+          </button>
 
           {/* Strategy Display Badge (New) */}
           <button
@@ -990,7 +931,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
             <div className="auto-mode__header-money-value">
               {sessionProfit >= 0 ? '+' : '-'}{animatedSessionProfit.toLocaleString()}원
               <span className={`auto-mode__header-money-percent ${autoMode.totalBetAmount > 0 ? (sessionProfit >= 0 ? 'positive' : 'negative') : ''}`}>
-                ROI {autoMode.totalBetAmount > 0
+                수익률 {autoMode.totalBetAmount > 0
                   ? `${sessionProfit >= 0 ? '+' : ''}${((sessionProfit / autoMode.totalBetAmount) * 100).toFixed(1)}%`
                   : '0.0%'}
               </span>
@@ -1324,6 +1265,22 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         onlySelectedValue={settings.onlySelectedRooms || false}
         onOnlySelectedChange={(value) => updateSettings({ onlySelectedRooms: value })}
         emptyHint="방을 선택해야 배팅이 진행됩니다"
+      />
+
+      {/* Consolidated Filter Settings Dialog */}
+      <FilterSettingsDialog
+        isOpen={showFilterDialog}
+        onClose={() => setShowFilterDialog(false)}
+        availableFilters={availableFilters}
+        activeFilters={activeFilters}
+        toggleFilter={toggleFilter}
+        clearFilters={clearFilters}
+        filterCounts={selectedRoomPatternCounts}
+        onOpenPatternManager={() => {
+          setShowPatternModal(true)
+          setShowFilterDialog(false)
+        }}
+        freshShoeScope="auto"
       />
     </div >
   )

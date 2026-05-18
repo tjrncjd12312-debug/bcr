@@ -21,7 +21,7 @@ export const SemiAutoHeader: React.FC<SemiAutoHeaderProps> = ({
             <div className="sa-fs-header-left">
                 <span className="sa-fs-title">반자동 모드</span>
                 <span className={`sa-fs-status ${enabled ? 'active' : ''}`}>
-                    {enabled ? 'ON' : 'OFF'}
+                    {enabled ? '작동중' : '정지'}
                 </span>
             </div>
             <div className="sa-fs-header-right">

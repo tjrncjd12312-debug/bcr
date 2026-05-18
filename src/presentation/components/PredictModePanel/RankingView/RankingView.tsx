@@ -152,7 +152,7 @@ function RankingCard({ rank, room, state, stats, martingaleLevel, isTop3, onClic
                                     color={currentPred === 'B' ? '#ef4444' : currentPred === 'P' ? '#3b82f6' : '#22c55e'}
                                 />
                             </span>
-                            <span className="pred-text">{currentPred === 'B' ? 'BANKER' : currentPred === 'P' ? 'PLAYER' : 'TIE'}</span>
+                            <span className="pred-text">{currentPred === 'B' ? '뱅커' : currentPred === 'P' ? '플레이어' : '타이'}</span>
                         </div>
                     ) : (
                         <div className="pred-value pred-value--waiting">

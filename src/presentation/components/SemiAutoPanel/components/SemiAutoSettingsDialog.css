@@ -35,11 +35,7 @@
   font-weight: 600;
 }
 
-.sa-setting-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
+/* NOTE: .sa-setting-grid moved to SettingsDialogFrame.css as .settings-field-row */
 
 /* Checkbox */
 .sa-checkbox-label {
@@ -259,10 +255,3 @@
   color: var(--status-danger);
 }
 
-/* Responsive Adjustments */
-@media (max-width: 480px) {
-  .sa-setting-grid {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-}

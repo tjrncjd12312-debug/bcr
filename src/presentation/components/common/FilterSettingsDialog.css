@@ -1,0 +1,129 @@
+/* FilterSettingsDialog — minimal layout. Chrome lives in SettingsDialogFrame.css. */
+
+.filter-settings__section {
+  margin-bottom: 24px;
+}
+
+.filter-settings__section:last-child {
+  margin-bottom: 0;
+}
+
+/* .settings-section-title lives in SettingsDialogFrame.css (shared). */
+
+.filter-settings__hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px 0;
+}
+
+.filter-settings__filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-settings__filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--modal-elevated);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.filter-settings__filter-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+.filter-settings__filter-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.filter-settings__filter-label {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.filter-settings__filter-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  background: var(--modal-bg);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  min-width: 28px;
+  text-align: center;
+}
+
+.filter-settings__detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-settings__detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--modal-elevated);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-md);
+}
+
+.filter-settings__detail-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-settings__detail-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.filter-settings__patterns-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--modal-elevated);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.filter-settings__patterns-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+/* Footer 확인 button uses the global .btn-primary class. */
+
+@media (max-width: 480px) {
+  .filter-settings__detail-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-settings__detail-controls {
+    justify-content: flex-start;
+  }
+}

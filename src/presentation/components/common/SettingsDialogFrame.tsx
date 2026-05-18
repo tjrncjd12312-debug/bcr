@@ -16,7 +16,7 @@ export interface SettingsDialogFrameProps<T extends string> {
   title: string
   tabs?: SettingsTabDef<T>[]
   activeTab?: T
-  onTabChange: (next: T) => void
+  onTabChange?: (next: T) => void
   footer?: ReactNode
   children: ReactNode
 }
@@ -70,7 +70,7 @@ export function SettingsDialogFrame<T extends string>({
               <button
                 key={tab.value}
                 className={`settings-tab ${activeTab === tab.value ? 'active' : ''}`}
-                onClick={() => onTabChange(tab.value)}
+                onClick={() => onTabChange?.(tab.value)}
               >
                 {tab.label}
               </button>

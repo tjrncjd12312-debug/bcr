@@ -87,8 +87,8 @@ const BUILT_IN_FILTERS: RoomFilter[] = [
   {
     type: 'fresh_shoe',
     enabled: false,
-    label: 'Fresh Shoe',
-    description: '카지노 슈가 막 시작된 방 (isShoeReset 또는 history ≤ N)',
+    label: '새 슈',
+    description: '카지노 슈가 막 시작된 방',
   },
 ]
 
@@ -128,8 +128,8 @@ class RoomFilterServiceImpl {
         label = `신규 방 (≤${freshRoomGames})`
         description = `방 진입 후 ${freshRoomGames}게임 이내`
       } else if (filter.type === 'fresh_shoe') {
-        label = `Fresh Shoe (≤${freshShoeMaxGameNumber})`
-        description = `카지노 슈가 막 시작된 방 — isShoeReset=true 또는 history ≤ ${freshShoeMaxGameNumber}`
+        label = `새 슈 (≤${freshShoeMaxGameNumber})`
+        description = `카지노 슈가 막 시작된 방 (${freshShoeMaxGameNumber}게임 이내)`
       }
       return {
         ...filter,
