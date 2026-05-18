@@ -7,6 +7,7 @@ import type { SemiAutoSettings } from '../../../../application/services/SemiAuto
 import { FreshShoeToggle } from '../../common/FreshShoeToggle'
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
+import { StatCard } from '../../common/StatCard'
 import './SemiAutoSettingsDialog.css'
 
 // Tab type for the dialog
@@ -223,19 +224,10 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
                     <div className="sa-dialog-section">
                         <h3 className="sa-section-title">통계 및 관리</h3>
 
-                        <div className="sa-stats-summary">
-                            <div className="sa-stat-box">
-                                <span className="label">총 예측</span>
-                                <span className="value">{totalWins + totalLosses}</span>
-                            </div>
-                            <div className="sa-stat-box success">
-                                <span className="label">적중</span>
-                                <span className="value">{totalWins}</span>
-                            </div>
-                            <div className="sa-stat-box danger">
-                                <span className="label">실패</span>
-                                <span className="value">{totalLosses}</span>
-                            </div>
+                        <div className="settings-stat-grid">
+                            <StatCard label="총 예측" value={totalWins + totalLosses} />
+                            <StatCard label="적중" value={totalWins} tone="positive" />
+                            <StatCard label="실패" value={totalLosses} tone="negative" />
                         </div>
 
                         <div className="sa-action-buttons">
