@@ -6,7 +6,7 @@ import { FreshShoeToggle } from './FreshShoeToggle'
 const isEnabled = vi.fn()
 const enable = vi.fn()
 const disable = vi.fn()
-const getDescription = vi.fn(() => '슈가 막 시작된 방에서만 Tie 마틴 베팅.')
+const getDescription = vi.fn(() => '슈가 막 시작된 방에서만 타이 마틴 베팅.')
 
 vi.mock('../../../application/di/setupContainer', () => ({
   getFreshShoePreset: () => ({ isEnabled, enable, disable, getDescription }),
@@ -18,13 +18,13 @@ describe('FreshShoeToggle', () => {
     enable.mockReset()
     disable.mockReset()
     getDescription.mockClear()
-    getDescription.mockReturnValue('슈가 막 시작된 방에서만 Tie 마틴 베팅.')
+    getDescription.mockReturnValue('슈가 막 시작된 방에서만 타이 마틴 베팅.')
   })
 
   it('renders the label and description from the preset', () => {
     isEnabled.mockReturnValue(false)
     render(<FreshShoeToggle scope="auto" />)
-    expect(screen.getByText('Fresh-Shoe Tie 마틴')).toBeInTheDocument()
+    expect(screen.getByText('새 슈 타이 마틴')).toBeInTheDocument()
     expect(screen.getByText(/슈가 막 시작된 방에서만/)).toBeInTheDocument()
   })
 

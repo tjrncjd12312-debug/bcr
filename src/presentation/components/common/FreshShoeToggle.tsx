@@ -40,7 +40,7 @@ export function FreshShoeToggle({ scope, warning }: FreshShoeToggleProps) {
           checked={on}
           onChange={(e) => handleChange(e.target.checked)}
         />
-        Fresh-Shoe Tie 마틴
+        새 슈 타이 마틴
       </label>
       <div style={{ fontSize: 12, color: 'var(--color-text-dim, #999)', marginTop: 6, lineHeight: 1.5 }}>
         {preset.getDescription()}

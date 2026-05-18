@@ -22,7 +22,7 @@ export default function FilterThresholdInputs() {
     <div className="filter-threshold-inputs" onClick={(e) => e.stopPropagation()}>
       <div className="filter-threshold-inputs__title">필터 임계값 설정</div>
       <label className="filter-threshold-inputs__row">
-        <span className="filter-threshold-inputs__label">Tie 미발생 임계</span>
+        <span className="filter-threshold-inputs__label">타이 미발생 임계</span>
         <input
           className="filter-threshold-inputs__input"
           type="number"
@@ -48,7 +48,7 @@ export default function FilterThresholdInputs() {
         <span className="filter-threshold-inputs__suffix">게임</span>
       </label>
       <label className="filter-threshold-inputs__row">
-        <span className="filter-threshold-inputs__label">Fresh Shoe 기준</span>
+        <span className="filter-threshold-inputs__label">새 슈 기준</span>
         <input
           className="filter-threshold-inputs__input"
           type="number"

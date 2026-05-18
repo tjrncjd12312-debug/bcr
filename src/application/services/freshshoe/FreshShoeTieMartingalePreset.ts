@@ -80,8 +80,8 @@ export class FreshShoeTieMartingalePreset {
   getDescription(): string {
     return (
       '슈가 막 시작된 방에서만 베팅 (Evolution 슈 리셋 감지 기반). ' +
-      'Tie에 마틴 (기존 설정 금액·마틴 한도 재사용). ' +
-      '적중 / 관망 중 Tie 출현 / 마틴 한도 도달 → 자동으로 다음 fresh-shoe 방으로 이동.'
+      '타이에 마틴 (기존 설정 금액·마틴 한도 재사용). ' +
+      '적중 / 관망 중 타이 출현 / 마틴 한도 도달 → 자동으로 다음 \'새 슈\' 방으로 이동.'
     )
   }
 

@@ -244,13 +244,13 @@ export function AutoModeSettingsDialog({
             <div className="ams-section-title">필터 임계값</div>
             <div className="ams-input-row">
               <label className="ams-input-group">
-                <span>Tie 미발생 (가뭄)</span>
+                <span>타이 미발생 (가뭄)</span>
                 <div className="ams-input-wrap">
                   <input
                     type="number"
                     min="1"
                     max="200"
-                    aria-label="Tie 미발생 (가뭄)"
+                    aria-label="타이 미발생 (가뭄)"
                     value={thresholds.tieDroughtThreshold}
                     onChange={(e) => handleThresholdChange('tieDroughtThreshold', e.target.value)}
                   />
@@ -272,13 +272,13 @@ export function AutoModeSettingsDialog({
                 </div>
               </label>
               <label className="ams-input-group">
-                <span>Fresh Shoe 기준</span>
+                <span>새 슈 기준</span>
                 <div className="ams-input-wrap">
                   <input
                     type="number"
                     min="1"
                     max="200"
-                    aria-label="Fresh Shoe 기준"
+                    aria-label="새 슈 기준"
                     value={thresholds.freshShoeMaxGameNumber}
                     onChange={(e) => handleThresholdChange('freshShoeMaxGameNumber', e.target.value)}
                   />
@@ -287,7 +287,7 @@ export function AutoModeSettingsDialog({
               </label>
             </div>
             <div className="ams-hint">
-              Tie 가뭄: 최근 N게임 동안 Tie 미발생인 방만 필터링 · 필터 드롭다운에서 '타이 가뭄' 활성화 시 적용
+              타이 가뭄: 최근 N게임 동안 타이 미발생인 방만 필터링 · 필터 드롭다운에서 '타이 가뭄' 활성화 시 적용
             </div>
           </div>
 
@@ -369,10 +369,10 @@ export function AutoModeSettingsDialog({
                 checked={freshShoeOn}
                 onChange={(e) => handleFreshShoeToggle(e.target.checked)}
               />
-              Fresh-Shoe Tie 마틴
+              새 슈 타이 마틴
             </label>
             <div style={{ fontSize: 12, color: 'var(--color-text-dim, #999)', marginTop: 6, lineHeight: 1.5 }}>
-              {getFreshShoePreset()?.getDescription() ?? '슈가 막 시작된 방에서만 Tie 마틴 베팅. 적중/관망 Tie/마틴 한도 시 다음 방으로.'}
+              {getFreshShoePreset()?.getDescription() ?? '슈가 막 시작된 방에서만 타이 마틴 베팅. 적중/관망 타이/마틴 한도 시 다음 방으로.'}
             </div>
           </div>
 
