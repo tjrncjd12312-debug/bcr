@@ -70,6 +70,15 @@ interface NormalizedBalanceUpdate {
     currency: string
 }
 
+interface PragmaticBetReceipt {
+    tableId: string
+    betType: string
+    amount: number
+    gameId: string
+    sentAtMs: number
+    attempts: number
+}
+
 // Pragmatic room name mapping (fallback: "프라그마틱 {id}")
 const PRAGMATIC_ROOM_LABELS: Record<string, string> = {
     // 예시: '413': '프라그마틱 413',
@@ -206,21 +215,14 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
             return
         }
 
-        // TODO: formatting message based on Pragmatic protocol
-        // For now, sending a placeholder JSON
-        const payload = JSON.stringify({
-            type: 'place_bet',
-            betType,
-            amount,
-            timestamp: Date.now()
-        })
-
         try {
             console.log(`[PragmaticAdapter] Placing Real Bet: ${betType} ${amount} on ${roomId}`)
-            await invoke('send_pragmatic_message', {
-                roomId,
-                message: payload
+            const receipt = await invoke<PragmaticBetReceipt>('place_pragmatic_bet', {
+                tableId: roomId,
+                betType,
+                amount: Math.trunc(amount)
             })
+            console.log('[PragmaticAdapter] Pragmatic bet sent:', receipt)
         } catch (error) {
             console.error('[PragmaticAdapter] Failed to place bet:', error)
             throw error

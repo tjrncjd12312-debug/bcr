@@ -1,7 +1,7 @@
 // CustomPatternService - Manage user-defined patterns with localStorage persistence
 // Presentation-friendly application service (no React dependency)
 
-import type { CustomPattern, Winner, PatternBetDirection } from '../../domain/entities'
+import type { CustomPattern, Winner, PatternBetDirection, BetStrategyType } from '../../domain/entities'
 
 const STORAGE_KEY = 'smart-helper:custom-patterns'
 
@@ -46,7 +46,7 @@ class CustomPatternServiceImpl {
     return [...this.patterns]
   }
 
-  addPattern(data: { name: string; sequence: string | Winner[]; enabled?: boolean; description?: string; betDirection?: PatternBetDirection }): CustomPattern {
+  addPattern(data: { name: string; sequence: string | Winner[]; enabled?: boolean; description?: string; betDirection?: PatternBetDirection; betStrategy?: BetStrategyType }): CustomPattern {
     const sequence = cleanSequence(data.sequence)
     const now = Date.now()
 
@@ -57,6 +57,7 @@ class CustomPatternServiceImpl {
       enabled: data.enabled ?? true,
       description: data.description?.trim(),
       betDirection: data.betDirection ?? 'ai',
+      betStrategy: data.betStrategy,
       createdAt: now,
       updatedAt: now,
     }
@@ -130,6 +131,7 @@ class CustomPatternServiceImpl {
           enabled: p.enabled ?? true,
           description: p.description,
           betDirection: p.betDirection || 'ai',
+          betStrategy: p.betStrategy,
           createdAt: p.createdAt || Date.now(),
           updatedAt: p.updatedAt,
         }))

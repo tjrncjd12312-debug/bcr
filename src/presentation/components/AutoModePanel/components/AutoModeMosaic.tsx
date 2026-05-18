@@ -225,7 +225,8 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
       {/* Main Row */}
       <div className="mosaic-main">
         <div className={`mosaic-prediction-badge ${predictionBadge === 'B' ? 'banker' :
-          predictionBadge === 'P' ? 'player' : 'empty'
+          predictionBadge === 'P' ? 'player' :
+            predictionBadge === 'T' ? 'tie' : 'empty'
           }`}>
           {predictionBadge || '-'}
         </div>

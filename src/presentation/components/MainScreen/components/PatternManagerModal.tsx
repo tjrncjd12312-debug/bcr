@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CustomPattern, RoomFilterType, PatternBetDirection } from '../../../../domain/entities'
 import { cleanSequence } from '../../../../application/services/CustomPatternService'
 import '../../common/Modal.css'
 
-// 배팅 방향 레이블
 const BET_DIRECTION_LABELS: Record<PatternBetDirection, string> = {
   ai: 'AI 예측',
   B: '뱅커 (B)',
@@ -11,6 +10,8 @@ const BET_DIRECTION_LABELS: Record<PatternBetDirection, string> = {
   T: '타이 (T)',
   skip: '스킵',
 }
+
+const DELETE_CONFIRM_WINDOW_MS = 3000
 
 interface PatternManagerModalProps {
   isOpen: boolean
@@ -37,7 +38,7 @@ const defaultForm: FormState = {
   sequence: '',
   enabled: true,
   description: '',
-  betDirection: 'ai',  // 기본값을 AI 예측으로 설정
+  betDirection: 'ai',
 }
 
 export function PatternManagerModal({
@@ -54,14 +55,32 @@ export function PatternManagerModal({
   const [form, setForm] = useState<FormState>(defaultForm)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!isOpen) {
       setForm(defaultForm)
       setEditingId(null)
       setError(null)
+      clearConfirmTimer()
+      setConfirmDeleteId(null)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
+
+  // Cleanup any pending confirm timer on unmount to prevent leaks.
+  useEffect(() => {
+    return () => clearConfirmTimer()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function clearConfirmTimer() {
+    if (confirmTimerRef.current) {
+      clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = null
+    }
+  }
 
   const selectedId = useMemo(() => {
     if (typeof selectedPattern === 'string' && selectedPattern.startsWith('custom:')) {
@@ -106,6 +125,36 @@ export function PatternManagerModal({
       betDirection: pattern.betDirection || 'ai',
     })
     setError(null)
+    clearConfirmTimer()
+    setConfirmDeleteId(null)
+  }
+
+  const cancelEdit = () => {
+    setForm(defaultForm)
+    setEditingId(null)
+    setError(null)
+  }
+
+  // Two-step delete: first click arms the confirmation state with a 3s timeout,
+  // second click within the window performs the delete. Prevents accidental
+  // destruction without resorting to a blocking native confirm().
+  const handleDeleteClick = (id: string) => {
+    if (confirmDeleteId === id) {
+      clearConfirmTimer()
+      setConfirmDeleteId(null)
+      // If user was editing the pattern they're about to delete, exit edit mode first.
+      if (editingId === id) {
+        cancelEdit()
+      }
+      onDelete(id)
+      return
+    }
+    clearConfirmTimer()
+    setConfirmDeleteId(id)
+    confirmTimerRef.current = setTimeout(() => {
+      setConfirmDeleteId(null)
+      confirmTimerRef.current = null
+    }, DELETE_CONFIRM_WINDOW_MS)
   }
 
   const handleApply = (id: string) => {
@@ -119,23 +168,23 @@ export function PatternManagerModal({
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal pattern-modal">
         <div className="modal-header">
-          <h2>패턴 설정</h2>
+          <h2>패턴 설정 {editingId && <span className="pattern-modal__edit-tag">편집 중</span>}</h2>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
 
         <div className="modal-body pattern-body">
-          {/* 패턴 등록 폼 */}
-          <div className="pattern-form">
+          {/* 패턴 등록/수정 폼 */}
+          <div className={`pattern-form${editingId ? ' pattern-form--editing' : ''}`}>
             <div className="pattern-form__header">
               <div>
                 <div className="pattern-form__title">{editingId ? '패턴 수정' : '새 패턴 등록'}</div>
                 <p className="pattern-form__hint">
-                  감지할 패턴과 배팅 방향을 설정하세요.<br/>
+                  감지할 패턴과 배팅 방향을 설정하세요.<br />
                   예) 패턴: BPBP → 배팅: 플레이어 = "BPBP가 나오면 P에 배팅"
                 </p>
               </div>
               {editingId && (
-                <button className="btn-secondary" onClick={() => { setForm(defaultForm); setEditingId(null) }}>
+                <button type="button" className="btn-secondary" onClick={cancelEdit}>
                   새 패턴으로 전환
                 </button>
               )}
@@ -199,7 +248,7 @@ export function PatternManagerModal({
               {error && <div className="pattern-error">{error}</div>}
 
               <div className="pattern-actions">
-                <button type="button" className="btn-secondary" onClick={() => { setForm(defaultForm); setEditingId(null); setError(null) }}>
+                <button type="button" className="btn-secondary" onClick={cancelEdit}>
                   취소
                 </button>
                 <button type="submit" className="btn-primary">
@@ -223,16 +272,25 @@ export function PatternManagerModal({
 
             {patterns.length === 0 ? (
               <div className="pattern-empty">
-                등록된 패턴이 없습니다.<br/>
+                등록된 패턴이 없습니다.<br />
                 위에서 새 패턴을 추가하세요.
               </div>
             ) : (
               <ul>
                 {patterns.map((pattern) => {
                   const isSelected = selectedId === pattern.id
+                  const isEditing = editingId === pattern.id
+                  const isConfirmingDelete = confirmDeleteId === pattern.id
                   const dirLabel = BET_DIRECTION_LABELS[pattern.betDirection || 'ai']
+                  const itemClass = [
+                    'pattern-item',
+                    !pattern.enabled && 'disabled',
+                    isEditing && 'is-editing',
+                    isConfirmingDelete && 'is-confirming',
+                  ].filter(Boolean).join(' ')
+
                   return (
-                    <li key={pattern.id} className={`pattern-item ${!pattern.enabled ? 'disabled' : ''}`}>
+                    <li key={pattern.id} className={itemClass}>
                       <div className="pattern-item__main">
                         <div className="pattern-item__title">
                           <span>{pattern.name}</span>
@@ -241,6 +299,7 @@ export function PatternManagerModal({
                           </span>
                           {!pattern.enabled && <span className="pattern-chip">비활성</span>}
                           {isSelected && <span className="pattern-chip active">선택됨</span>}
+                          {isEditing && <span className="pattern-chip editing">편집 중</span>}
                         </div>
                         {pattern.description && (
                           <div className="pattern-item__meta">
@@ -283,13 +342,11 @@ export function PatternManagerModal({
                         </button>
                         <button
                           type="button"
-                          className="btn-danger"
-                          onClick={() => {
-                            console.log('[PatternManagerModal] Delete clicked, id:', pattern.id)
-                            onDelete(pattern.id)
-                          }}
+                          className={`btn-danger${isConfirmingDelete ? ' btn-danger--confirming' : ''}`}
+                          onClick={() => handleDeleteClick(pattern.id)}
+                          title={isConfirmingDelete ? '한 번 더 누르면 삭제됩니다' : '삭제'}
                         >
-                          삭제
+                          {isConfirmingDelete ? '정말 삭제?' : '삭제'}
                         </button>
                       </div>
                     </li>

@@ -29,7 +29,8 @@ use evolution::commands::{
 };
 use pragmatic::commands::{
     connect_pragmatic, connect_pragmatic_room, connect_pragmatic_table, disconnect_all_pragmatic,
-    disconnect_pragmatic, disconnect_pragmatic_room, send_pragmatic_message,
+    disconnect_pragmatic, disconnect_pragmatic_room, place_pragmatic_bet, send_pragmatic_message,
+    set_pragmatic_user_id,
 };
 use pragmatic::manager::{PragmaticConnectionManager, PragmaticManagerState};
 use presentation::{
@@ -38,11 +39,14 @@ use presentation::{
         check_session_validity,
         cleanup_on_exit,
         // Connection mode commands (actual WS handled by evolution/multi_client)
+        click_pragmatic_room_in_lobby,
         connect_evolution_manual,
         connect_multiwidget_manual,
+        detach_embedded_chrome,
         disable_multi_room_mode,
         disable_multi_room_prediction,
         disconnect_multiwidget,
+        embed_chrome_window,
         enable_multi_room_mode,
         enable_multi_room_prediction,
         exit_app,
@@ -80,6 +84,7 @@ use presentation::{
         open_in_chrome_normal,
         open_new_tab_cdp,
         process_evolution_message,
+        refresh_pragmatic_lobby_rooms_from_dom,
         refresh_lobby_page,
         navigate_to_evolution_lobby,
         report_result_v2,
@@ -88,6 +93,7 @@ use presentation::{
         // V2 API commands (Enhanced prediction with Evolution data)
         request_prediction_v2,
         request_prediction_with_history,
+        resize_embedded_chrome,
         restart_cdp_monitoring,
         restore_session,
         send_multiwidget_message,
@@ -217,6 +223,8 @@ pub fn run() {
             request_best_room_selection,
             request_prediction_with_history,
             // CDP (Chrome DevTools Protocol) commands
+            click_pragmatic_room_in_lobby,
+            refresh_pragmatic_lobby_rooms_from_dom,
             start_cdp_monitoring,
             stop_cdp_monitoring,
             restart_cdp_monitoring,
@@ -230,6 +238,9 @@ pub fn run() {
             refresh_lobby_page,
             navigate_to_evolution_lobby,
             connect_evolution_manual,
+            embed_chrome_window,
+            resize_embedded_chrome,
+            detach_embedded_chrome,
             // Pragmatic commands
             connect_pragmatic,
             disconnect_pragmatic,
@@ -238,6 +249,8 @@ pub fn run() {
             disconnect_all_pragmatic,
             connect_pragmatic_table,
             send_pragmatic_message,
+            set_pragmatic_user_id,
+            place_pragmatic_bet,
             // Multiwidget auto-connection commands (CDP auto-connect)
             get_multiwidget_status,
             get_evolution_base_url,

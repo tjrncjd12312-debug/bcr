@@ -6,7 +6,14 @@ import type { BetStrategy, MartingaleState, RoomContext } from './types'
 
 // ==================== Fibonacci Sequence ====================
 
-const FIBONACCI_MULTIPLIERS = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+// Pre-compute fibonacci multipliers up to 100 levels so that
+// MartingaleManager.calculateBetAmount(level, base, 'fibonacci', ...) works
+// for any martin level the UI allows (max input is 100).
+const FIBONACCI_MULTIPLIERS: number[] = (() => {
+  const arr: number[] = [1, 1]
+  for (let i = 2; i < 100; i++) arr.push(arr[i - 1] + arr[i - 2])
+  return arr
+})()
 
 // ==================== Interface ====================
 

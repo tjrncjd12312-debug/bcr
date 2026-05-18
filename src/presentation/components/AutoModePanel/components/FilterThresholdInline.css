@@ -1,0 +1,39 @@
+/* FilterThresholdInline - Compact per-row threshold input */
+
+.filter-threshold-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+
+.filter-threshold-inline__input {
+  width: 50px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text-primary, #fff);
+  background: var(--bg-base, #17171c);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 5px;
+  -moz-appearance: textfield;
+}
+
+.filter-threshold-inline__input::-webkit-outer-spin-button,
+.filter-threshold-inline__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.filter-threshold-inline__input:focus {
+  outline: none;
+  border-color: var(--gold, #d4af37);
+  box-shadow: 0 0 0 2px var(--gold-muted, rgba(212, 175, 55, 0.2));
+}
+
+.filter-threshold-inline__suffix {
+  font-size: 10px;
+  color: var(--text-muted, #888);
+}

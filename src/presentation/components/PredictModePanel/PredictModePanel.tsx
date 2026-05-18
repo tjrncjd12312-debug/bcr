@@ -5,6 +5,7 @@
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useGame } from '../../context/GameContext'
+import { useError } from '../../context'
 import { useWindowControl, useMultiRoomPrediction, useAutoMode } from '../../hooks'
 import type { Room, RoomPredictionState, RoomFilterType } from '../../../domain/entities'
 import { SORT_OPTIONS } from '../../../domain/entities'
@@ -18,7 +19,9 @@ import { RoomCard } from './components/RoomCard'
 import { SelectedRoomDetail } from './components/SelectedRoomDetail'
 import { FocusedRoomView } from './components/FocusedRoomView'
 import { CompactRoomRow } from './components/CompactRoomRow'
-import FilterThresholdInputs from '../AutoModePanel/components/FilterThresholdInputs'
+import PatternBetDirectionSelect from '../AutoModePanel/components/PatternBetDirectionSelect'
+import PatternBetStrategySelect from '../AutoModePanel/components/PatternBetStrategySelect'
+import FilterThresholdInline from '../AutoModePanel/components/FilterThresholdInline'
 import './PredictModePanel.css'
 
 // LocalStorage key for selected rooms
@@ -80,6 +83,9 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
 
     return undefined
   }, [virtualBetStates, autoModeRoomStates])
+
+  // Toast notifications (replaces window.alert popups)
+  const { showSuccess, showInfo } = useError()
 
   const [showFilterDropdown, setShowFilterDropdown] = useState(false)
   const [showPatternModal, setShowPatternModal] = useState(false)
@@ -689,8 +695,6 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
             </button>
             {showFilterDropdown && (
               <div className="predict-header__filter-dropdown">
-                <FilterThresholdInputs />
-                <div className="predict-header__filter-divider" />
                 <button
                   className={`predict-header__filter-item ${activeFilters.length === 0 ? 'active' : ''}`}
                   onClick={() => { clearFilters(); setShowFilterDropdown(false) }}
@@ -698,16 +702,39 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
                   <span>전체</span>
                   <span className="filter-count">{selectedRoomPatternCounts.all}</span>
                 </button>
-                {availableFilters.map(filter => (
-                  <button
-                    key={filter.type}
-                    className={`predict-header__filter-item ${activeFilters.includes(filter.type) ? 'active' : ''}`}
-                    onClick={() => toggleFilter(filter.type)}
-                  >
-                    <span>{filter.label}</span>
-                    <span className="filter-count">{selectedRoomPatternCounts[filter.type] || 0}</span>
-                  </button>
-                ))}
+                {availableFilters.map(filter => {
+                  const isActive = activeFilters.includes(filter.type)
+                  return (
+                    <div
+                      key={filter.type}
+                      className={`predict-header__filter-item ${isActive ? 'active' : ''}`}
+                    >
+                      <button
+                        type="button"
+                        className="predict-header__filter-item-toggle"
+                        onClick={() => toggleFilter(filter.type)}
+                      >
+                        <span>{filter.label}</span>
+                        <span className="filter-count">{selectedRoomPatternCounts[filter.type] || 0}</span>
+                      </button>
+                      <FilterThresholdInline filterType={filter.type} />
+                      <PatternBetDirectionSelect patternType={filter.type} />
+                      <PatternBetStrategySelect patternType={filter.type} />
+                    </div>
+                  )
+                })}
+                <div className="predict-header__filter-divider" />
+                <button
+                  type="button"
+                  className="predict-header__filter-manage"
+                  onClick={() => { setShowPatternModal(true); setShowFilterDropdown(false) }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  <span>커스텀 패턴 추가/관리</span>
+                </button>
               </div>
             )}
           </div>
@@ -1033,7 +1060,7 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
             description: data.description,
             betDirection: data.betDirection
           })
-          alert(`패턴 "${data.name}" 저장 완료!`)
+          showSuccess(`패턴 "${data.name}" 저장 완료`)
         }}
         onUpdate={(id, data) => {
           patternManager.update(id, {
@@ -1043,12 +1070,18 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
             description: data.description,
             betDirection: data.betDirection
           })
-          alert(`패턴 "${data.name}" 수정 완료!`)
+          showSuccess(`패턴 "${data.name}" 수정 완료`)
         }}
         onDelete={(id) => {
+          const target = customPatterns.find(p => p.id === id)
           patternManager.remove(id)
+          showSuccess(`패턴 "${target?.name ?? ''}" 삭제됨`)
         }}
-        onToggle={(id, enabled) => patternManager.toggle(id, enabled)}
+        onToggle={(id, enabled) => {
+          patternManager.toggle(id, enabled)
+          const target = customPatterns.find(p => p.id === id)
+          showInfo(`패턴 "${target?.name ?? ''}" ${enabled ? '활성화' : '비활성화'}`)
+        }}
         onApply={(pattern) => {
           if ((pattern as string) === 'all') clearFilters()
           else toggleFilter(pattern as RoomFilterType)

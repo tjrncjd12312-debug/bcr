@@ -2,7 +2,7 @@
 // Implements ICdpPort interface (Single Responsibility)
 
 import { invoke } from '@tauri-apps/api/core'
-import type { ICdpPort } from '../../../domain/interfaces'
+import type { ChromeEmbedResult, EmbedBounds, ICdpPort } from '../../../domain/interfaces'
 
 class TauriCdpAdapterImpl implements ICdpPort {
   async openInChrome(url: string): Promise<void> {
@@ -42,6 +42,18 @@ class TauriCdpAdapterImpl implements ICdpPort {
   // Navigate to room with WebSocket blocking (reuses existing tab)
   async navigateToRoom(url: string): Promise<void> {
     await invoke('navigate_to_room_with_ws_block', { url })
+  }
+
+  async embedChromeWindow(bounds: EmbedBounds): Promise<ChromeEmbedResult> {
+    return await invoke<ChromeEmbedResult>('embed_chrome_window', { ...bounds })
+  }
+
+  async resizeEmbeddedChrome(bounds: EmbedBounds): Promise<ChromeEmbedResult> {
+    return await invoke<ChromeEmbedResult>('resize_embedded_chrome', { ...bounds })
+  }
+
+  async detachEmbeddedChrome(): Promise<boolean> {
+    return await invoke<boolean>('detach_embedded_chrome')
   }
 }
 

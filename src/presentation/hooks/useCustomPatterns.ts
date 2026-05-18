@@ -1,7 +1,7 @@
 // useCustomPatterns - Manage custom pattern list with localStorage persistence
 
 import { useCallback, useEffect, useState } from 'react'
-import type { CustomPattern, Winner, PatternBetDirection } from '../../domain/entities'
+import type { CustomPattern, Winner, PatternBetDirection, BetStrategyType } from '../../domain/entities'
 import CustomPatternService, { cleanSequence } from '../../application/services/CustomPatternService'
 
 export interface CustomPatternInput {
@@ -10,6 +10,7 @@ export interface CustomPatternInput {
   enabled?: boolean
   description?: string
   betDirection?: PatternBetDirection
+  betStrategy?: BetStrategyType
 }
 
 export function useCustomPatterns() {

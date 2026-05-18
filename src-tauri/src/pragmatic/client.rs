@@ -1,7 +1,8 @@
-// use std::sync::Arc;
-// use tokio::sync::Mutex;
+use std::sync::Arc;
+
 use futures_util::{SinkExt, StreamExt};
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
@@ -9,6 +10,8 @@ use url::Url;
 
 use super::normalizer;
 use super::parser;
+use super::parser::PragmaticMessage;
+use super::manager::PragmaticConnectionManager;
 
 // PragmaticClientState moved to manager.rs (PragmaticManagerState)
 
@@ -41,6 +44,7 @@ impl PragmaticClient {
         &mut self,
         app_handle: AppHandle,
         ws_url: String,
+        manager_arc: Arc<Mutex<PragmaticConnectionManager>>,
     ) -> Result<JoinHandle<()>, String> {
         if self.is_connected {
             self.disconnect().await;
@@ -64,6 +68,7 @@ impl PragmaticClient {
 
         let app_handle_clone = app_handle.clone();
         let room_id_clone = self.room_id.clone();
+        let manager_for_events = manager_arc.clone();
 
         let join_handle = tokio::spawn(async move {
             match connect_async(url_string).await {
@@ -79,6 +84,15 @@ impl PragmaticClient {
                                     Some(Ok(Message::Text(text))) => {
                                         // Parse & Normalize
                                         if let Some(parsed) = parser::parse_message(&text) {
+                                            if let PragmaticMessage::GameState(state) = &parsed {
+                                                let mut manager = manager_for_events.lock().await;
+                                                manager.record_game_state(
+                                                    &state.table_id,
+                                                    state.game_id.clone(),
+                                                    state.betting_open,
+                                                );
+                                            }
+
                                             if let Some(event) = normalizer::normalize_message(parsed) {
                                                 let _ = app_handle_clone.emit("pragmatic_event", event);
                                             }

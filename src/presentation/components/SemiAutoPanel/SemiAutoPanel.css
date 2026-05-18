@@ -393,6 +393,13 @@
   box-shadow: var(--shadow-glow-player);
 }
 
+.sa-compact-pred-circle.t {
+  color: #10b981;
+  text-shadow: 0 0 30px rgba(16, 185, 129, 0.55);
+  border-color: rgba(16, 185, 129, 0.7);
+  box-shadow: 0 0 24px rgba(16, 185, 129, 0.35);
+}
+
 .sa-compact-pred-conf {
   font-size: 13px;
   font-weight: 800;
@@ -1632,6 +1639,13 @@
   background: linear-gradient(135deg, #3182f6, #4593fc);
   color: #fff;
   box-shadow: 0 20px 50px rgba(0, 122, 255, 0.3);
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.sa-fs-pred-big.t {
+  background: linear-gradient(135deg, #10b981, #34d399);
+  color: #fff;
+  box-shadow: 0 20px 50px rgba(16, 185, 129, 0.35);
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 

@@ -318,6 +318,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "windows",
 ]
 
 [[package]]

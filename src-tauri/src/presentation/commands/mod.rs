@@ -5,6 +5,7 @@
 
 mod auth_commands;
 mod connection_commands;
+mod embed_commands;
 mod prediction_commands;
 mod room_commands;
 mod session_commands;
@@ -12,6 +13,7 @@ mod webview_commands;
 
 pub use auth_commands::*;
 pub use connection_commands::*;
+pub use embed_commands::*;
 pub use prediction_commands::*;
 pub use room_commands::*;
 pub use session_commands::*;

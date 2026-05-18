@@ -391,8 +391,8 @@ export default function SemiAutoPanel({
               </div>
               <span className="sa-compact-pred-label">결과 대기</span>
             </div>
-          ) : lastPrediction?.isSkip || lastPrediction?.prediction === 'T' ? (
-            // SKIP/PASS mode (server returned Tie or skip)
+          ) : lastPrediction?.isSkip ? (
+            // SKIP/PASS mode (server explicitly returned a skip signal)
             <div className="sa-compact-pred-display">
               <div className={`sa-compact-pred-circle skip ${resultOverlay ? 'has-overlay' : ''}`}>
                 ⏭

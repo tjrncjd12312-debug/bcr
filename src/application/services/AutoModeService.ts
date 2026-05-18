@@ -26,6 +26,7 @@ import { CallbackManager } from '../utils'
 import { VirtualBettingService } from './VirtualBettingService'
 import { AutoBettingService } from './AutoBettingService'
 import { MultiRoomPredictionService } from './MultiRoomPredictionService'
+import { PatternBettingService } from './PatternBettingService'
 
 // ==================== AutoMode Modules Integration ====================
 import {
@@ -127,7 +128,7 @@ export interface AutoModeBetLogEvent {
   type: 'prediction' | 'bet_placed' | 'bet_result'
   roomId: string
   roomName: string
-  prediction?: 'B' | 'P' | null
+  prediction?: 'B' | 'P' | 'T' | null
   betType?: BetType
   betAmount?: number
   martinLevel: number
@@ -1216,11 +1217,13 @@ class AutoModeServiceImpl {
 
         // BettingDecisionService.shouldBet()에 위임하여 배팅 결정
         // RoomBettingState → RoomContext 변환
+        // 현재 활성 필터에 per-filter 전략이 있으면 settings의 전략을 그것으로 교체해서 전달
         const roomContext: RoomContext = fromRoomBettingState(roomState)
+        const effectiveSettings = this.getSettingsForActiveFilter()
         const betDecision = this.bettingDecisionService.shouldBet(
           roomId,
           prediction,
-          this.settings,
+          effectiveSettings,
           roomContext
         )
 
@@ -1348,7 +1351,7 @@ class AutoModeServiceImpl {
             type: 'bet_result',
             roomId,
             roomName: room.koreanName,
-            prediction: prediction.prediction === 'T' ? null : prediction.prediction,
+            prediction: prediction.prediction,
             betType,
             betAmount,
             martinLevel: roomState.martinLevel,
@@ -1426,7 +1429,7 @@ class AutoModeServiceImpl {
             type: 'bet_result',
             roomId,
             roomName: room.koreanName,
-            prediction: prediction.prediction === 'T' ? null : prediction.prediction,
+            prediction: prediction.prediction,
             betType,
             betAmount,
             martinLevel: roomState.martinLevel,
@@ -1469,7 +1472,7 @@ class AutoModeServiceImpl {
             type: 'bet_result',
             roomId,
             roomName: room.koreanName,
-            prediction: prediction.prediction === 'T' ? null : prediction.prediction,
+            prediction: prediction.prediction,
             betType,
             betAmount,
             martinLevel: roomState.martinLevel,
@@ -1493,7 +1496,7 @@ class AutoModeServiceImpl {
       type: 'bet_placed',
       roomId,
       roomName: room.koreanName,
-      prediction: prediction.prediction === 'T' ? null : prediction.prediction,
+      prediction: prediction.prediction,
       betType,
       betAmount,
       martinLevel: roomState.martinLevel,
@@ -1862,7 +1865,7 @@ class AutoModeServiceImpl {
       type: 'bet_result',
       roomId,
       roomName,
-      prediction: predResult === 'T' ? null : predResult,
+      prediction: predResult,
       winner,
       won,
       status: won ? 'win' : 'loss',
@@ -1948,13 +1951,40 @@ class AutoModeServiceImpl {
     // martinLevel은 0-indexed이므로 maxMartin-1이 최대 레벨
     const effectiveLevel = Math.min(martinLevel, this.settings.maxMartin - 1)
 
+    // 활성 필터의 per-filter 전략을 적용 (없으면 글로벌 전략)
+    const effectiveStrategy = this.resolveActiveFilterStrategy()
+
     // MartingaleManager에 위임 (Codex 피드백: 배팅 금액 계산 로직 통합)
     return this.martingaleManager.calculateBetAmount(
       effectiveLevel,
       this.settings.baseBetAmount,
-      this.settings.betStrategy,
+      effectiveStrategy,
       this.settings.customBetAmounts
     )
+  }
+
+  /**
+   * Resolve the effective bet strategy for the currently active pattern filter.
+   * Falls back to the global `settings.betStrategy` when no filter is active or
+   * the filter has no per-filter override.
+   */
+  private resolveActiveFilterStrategy() {
+    if (this.currentPatternFilter === 'all') return this.settings.betStrategy
+    return PatternBettingService.resolveBetStrategy(
+      this.currentPatternFilter as RoomFilterType,
+      this.settings.betStrategy
+    )
+  }
+
+  /**
+   * Return a shallow-copied settings object whose `betStrategy` reflects the
+   * per-filter override (if any). When no override applies, returns the live
+   * settings reference to avoid unnecessary allocation.
+   */
+  private getSettingsForActiveFilter() {
+    const effective = this.resolveActiveFilterStrategy()
+    if (effective === this.settings.betStrategy) return this.settings
+    return { ...this.settings, betStrategy: effective }
   }
 
   /**
@@ -1969,7 +1999,8 @@ class AutoModeServiceImpl {
       this.currentPatternFilter,
       {
         maxMartin: this.settings.maxMartin,
-        betStrategy: this.settings.betStrategy,
+        // per-filter 전략이 있으면 그것을 PatternPredictionService에도 전달
+        betStrategy: this.resolveActiveFilterStrategy(),
         minConfidence: undefined, // 서버 동적 최적화 사용
         realBalance: this.realBalance, // 🆕 v3.7.0: 실제 잔액 전달
       }

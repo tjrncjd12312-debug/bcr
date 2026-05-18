@@ -300,6 +300,7 @@ export interface CustomPattern {
   enabled: boolean
   description?: string
   betDirection?: PatternBetDirection  // 이 패턴 감지시 배팅 방향
+  betStrategy?: BetStrategyType       // 이 패턴 감지시 사용할 배팅 전략 (없으면 글로벌 전략)
   createdAt: number
   updatedAt?: number
 }
@@ -517,6 +518,7 @@ export interface PatternBetConfig {
   betDirection: PatternBetDirection // 해당 패턴 발생시 배팅 방향
   includeTie: boolean               // 패턴 검출시 타이 포함 여부
   enabled: boolean                  // 이 패턴 설정 활성화
+  betStrategy?: BetStrategyType     // 이 패턴 감지시 사용할 배팅 전략 (없으면 글로벌 전략)
 }
 
 /** 방별 설정 */

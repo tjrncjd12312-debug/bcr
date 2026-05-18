@@ -243,6 +243,12 @@
   box-shadow: 0 2px 6px var(--player-glow);
 }
 
+.mosaic-prediction-badge.tie {
+  background: linear-gradient(135deg, #10b981, #34d399);
+  color: white;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.45);
+}
+
 .mosaic-prediction-badge.empty {
   background: var(--bg-surface);
   color: var(--text-muted);

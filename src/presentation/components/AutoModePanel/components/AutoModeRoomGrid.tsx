@@ -13,7 +13,7 @@ export interface RoomBetLog {
   status: RoomBetStatus
   profit: number
   martinLevel: number
-  prediction?: 'B' | 'P' | null
+  prediction?: 'B' | 'P' | 'T' | null
   winner?: 'B' | 'P' | 'T'
   message?: string
   historyIndex?: number
@@ -345,7 +345,7 @@ function AutoModeRoomCard({
 
   // 예측/배팅 배지 (B/P)
   const activePrediction = prediction || autoState?.lastPrediction?.prediction
-  const betBadgeType = activePrediction === 'B' ? 'b' : activePrediction === 'P' ? 'p' : null
+  const betBadgeType = activePrediction === 'B' ? 'b' : activePrediction === 'P' ? 'p' : activePrediction === 'T' ? 't' : null
 
   // Score
   const playerScore = room.gameState?.playerHand?.score
@@ -560,8 +560,8 @@ function AutoModeRoomCard({
       <div className="auto-mode__room-card-footer">
         <div className="auto-mode__room-card-footer-left">
           {prediction ? (
-            <span className={`auto-mode__room-card-footer-pred ${prediction === 'B' ? 'banker' : 'player'}`}>
-              {prediction === 'B' ? 'B' : 'P'} {currentBetAmount >= 10000 ? `${Math.round(currentBetAmount / 1000)}K` : currentBetAmount.toLocaleString()}
+            <span className={`auto-mode__room-card-footer-pred ${prediction === 'B' ? 'banker' : prediction === 'P' ? 'player' : 'tie'}`}>
+              {prediction === 'B' ? 'B' : prediction === 'P' ? 'P' : 'T'} {currentBetAmount >= 10000 ? `${Math.round(currentBetAmount / 1000)}K` : currentBetAmount.toLocaleString()}
             </span>
           ) : (
             <span className="auto-mode__room-card-footer-pred idle">대기</span>

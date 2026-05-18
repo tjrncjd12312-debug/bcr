@@ -72,6 +72,25 @@ export interface ICdpPort {
   refreshLobbyPage(): Promise<boolean>
   /** Navigate to room with WebSocket blocking (reuses existing tab) */
   navigateToRoom(url: string): Promise<void>
+  /** Reparent the Chrome casino window into the app at physical-pixel bounds. */
+  embedChromeWindow(bounds: EmbedBounds): Promise<ChromeEmbedResult>
+  /** Resize the already embedded Chrome child window. */
+  resizeEmbeddedChrome(bounds: EmbedBounds): Promise<ChromeEmbedResult>
+  /** Restore the embedded Chrome window as a normal top-level window. */
+  detachEmbeddedChrome(): Promise<boolean>
+}
+
+export interface EmbedBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+  titleHint?: string
+}
+
+export interface ChromeEmbedResult extends EmbedBounds {
+  hwnd: number
+  embedded: boolean
 }
 
 /**

@@ -57,7 +57,7 @@ export const SemiAutoMain: React.FC<SemiAutoMainProps> = ({
             </div>
             <div className="sa-fs-pred-status">결과 대기중...</div>
           </div>
-        ) : lastPrediction?.isSkip || lastPrediction?.prediction === 'T' ? (
+        ) : lastPrediction?.isSkip ? (
           <div className="sa-fs-pred-display">
             <div className="sa-fs-pred-big skip animate">
               ⏭

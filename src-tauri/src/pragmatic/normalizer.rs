@@ -1,4 +1,6 @@
-use super::parser::{GameResultEntry, PragmaticMessage, StatisticsMessage};
+use super::parser::{
+    GameResultEntry, GameStateMessage, PragmaticMessage, StatisticsMessage, TableConfigMessage,
+};
 use serde::{Deserialize, Serialize};
 
 // Unified Event structure for Frontend (Evolution compatible)
@@ -73,6 +75,7 @@ pub struct NormalizedBalanceUpdate {
 
 pub fn normalize_message(msg: PragmaticMessage) -> Option<CasinoEvent> {
     match msg {
+        PragmaticMessage::TableConfig(data) => normalize_table_configs(data).map(CasinoEvent::RoomUpdate),
         PragmaticMessage::Statistics(data) => {
             tracing::debug!(
                 "🎲 Normalizer: processing Statistics for tableId={}",
@@ -94,6 +97,7 @@ pub fn normalize_message(msg: PragmaticMessage) -> Option<CasinoEvent> {
                 data.table_name,
             )
         }
+        PragmaticMessage::GameState(data) => normalize_game_state(data),
         PragmaticMessage::SeatUpdate(data) => {
             tracing::debug!(
                 "🎲 Normalizer: ignoring SeatUpdate for tableId={}",
@@ -117,6 +121,51 @@ pub fn normalize_message(msg: PragmaticMessage) -> Option<CasinoEvent> {
             None
         }
     }
+}
+
+fn normalize_table_configs(data: Vec<TableConfigMessage>) -> Option<Vec<NormalizedRoom>> {
+    let rooms: Vec<NormalizedRoom> = data
+        .into_iter()
+        .filter(|config| {
+            is_baccarat(
+                config.table_type.as_deref(),
+                config.table_subtype.as_deref(),
+                config.table_name.as_deref(),
+            )
+        })
+        .map(|config| {
+            let name = infer_room_name(&config.table_id, config.table_name.clone());
+            NormalizedRoom {
+                id: config.table_id,
+                name,
+                history: Vec::new(),
+                status: "active".to_string(),
+                table_type: config.table_type,
+                table_subtype: config.table_subtype,
+            }
+        })
+        .collect();
+
+    (!rooms.is_empty()).then_some(rooms)
+}
+
+fn normalize_game_state(data: GameStateMessage) -> Option<CasinoEvent> {
+    let remaining_seconds = data.remaining_seconds.unwrap_or_else(|| {
+        if data.betting_open == Some(true) {
+            15
+        } else {
+            0
+        }
+    });
+
+    if data.betting_open.is_some() || data.remaining_seconds.is_some() {
+        return Some(CasinoEvent::BettingPhase(NormalizedBettingPhase {
+            room_id: data.table_id,
+            remaining_seconds,
+        }));
+    }
+
+    None
 }
 
 fn normalize_statistics(data: StatisticsMessage) -> Option<Vec<NormalizedRoom>> {

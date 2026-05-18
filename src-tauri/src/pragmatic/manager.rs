@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 use url::Url;
 
+use super::bet_builder::{build_bet_xml, normalize_table_id, now_ms, parse_bet_type};
 use super::client::PragmaticClient;
 use crate::presentation::task_registry::TaskRegistry;
 
@@ -25,9 +26,32 @@ pub struct PragmaticConnectionManager {
     clients: HashMap<String, PragmaticClient>,
     // Active session info (captured from the first valid connection)
     active_session: Option<PragmaticSession>,
+    active_user_id: Option<String>,
+    table_game_ids: HashMap<String, String>,
+    table_betting_open: HashMap<String, bool>,
+    last_bets: HashMap<String, LastPragmaticBet>,
     /// Lane R2: Tracks the per-room WebSocket spawn so reconnects/teardown
     /// don't leak `JoinHandle`s. Keyed by `pragmatic:{room_id}`.
     task_registry: Arc<TaskRegistry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LastPragmaticBet {
+    pub bet_type: String,
+    pub amount: u64,
+    pub game_id: String,
+    pub sent_at_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PragmaticBetReceipt {
+    pub table_id: String,
+    pub bet_type: String,
+    pub amount: u64,
+    pub game_id: String,
+    pub sent_at_ms: i64,
+    pub attempts: usize,
 }
 
 impl PragmaticConnectionManager {
@@ -35,6 +59,10 @@ impl PragmaticConnectionManager {
         Self {
             clients: HashMap::new(),
             active_session: None,
+            active_user_id: None,
+            table_game_ids: HashMap::new(),
+            table_betting_open: HashMap::new(),
+            last_bets: HashMap::new(),
             task_registry: Arc::new(TaskRegistry::new()),
         }
     }
@@ -67,6 +95,7 @@ impl PragmaticConnectionManager {
         &mut self,
         app_handle: AppHandle,
         ws_url: String,
+        manager_arc: Arc<Mutex<PragmaticConnectionManager>>,
     ) -> Result<(), String> {
         info!("🔎 Analyzing new connection URL: {}", ws_url);
 
@@ -78,17 +107,21 @@ impl PragmaticConnectionManager {
             );
 
             // 2. Store Session if not exists (or update)
+            if let Some(user_id) = extract_user_id(&session.params) {
+                self.active_user_id = Some(user_id);
+            }
             self.active_session = Some(session.clone());
 
             // 3. Connect to this specific room/lobby
             // Note: If room_id is "lobby" (no tableId), we treat it as lobby
-            self.connect_room(app_handle, room_id, ws_url).await?;
+            self.connect_room(app_handle, room_id, ws_url, manager_arc)
+                .await?;
         } else {
             // If we can't parse standard params but it matched "pragmatic",
             // it might be the 'livechatinc' or some other lobby socket.
             // Just connect as "raw_lobby" to sniff traffic.
             warn!("⚠️ Could not parse standard Pragmatic params, connecting as raw_lobby");
-            self.connect_room(app_handle, "raw_lobby".to_string(), ws_url)
+            self.connect_room(app_handle, "raw_lobby".to_string(), ws_url, manager_arc)
                 .await?;
         }
 
@@ -103,11 +136,133 @@ impl PragmaticConnectionManager {
         }
     }
 
+    pub fn set_user_id(&mut self, user_id: String) {
+        let trimmed = user_id.trim();
+        if !trimmed.is_empty() {
+            self.active_user_id = Some(trimmed.to_string());
+        }
+    }
+
+    pub fn record_game_state(
+        &mut self,
+        table_id: &str,
+        game_id: Option<String>,
+        betting_open: Option<bool>,
+    ) {
+        let table_id = normalize_table_id(table_id);
+        if let Some(game_id) = game_id.filter(|value| !value.trim().is_empty()) {
+            self.table_game_ids.insert(table_id.clone(), game_id);
+        }
+        if let Some(open) = betting_open {
+            self.table_betting_open.insert(table_id, open);
+        }
+    }
+
+    pub async fn place_bet(
+        &mut self,
+        table_id: &str,
+        bet_type: &str,
+        amount: u64,
+    ) -> Result<PragmaticBetReceipt, String> {
+        if amount == 0 {
+            return Err("Bet amount must be greater than zero".to_string());
+        }
+
+        let normalized_table_id = normalize_table_id(table_id);
+        if self.table_betting_open.get(&normalized_table_id) == Some(&false) {
+            return Err(format!(
+                "Pragmatic table {} is not open for betting",
+                normalized_table_id
+            ));
+        }
+
+        let bet_code = parse_bet_type(bet_type)
+            .map_err(|_| format!("Unsupported Pragmatic bet type: {}", bet_type))?;
+        let game_id = self
+            .table_game_ids
+            .get(&normalized_table_id)
+            .cloned()
+            .ok_or_else(|| format!("No active gameId for Pragmatic table {}", normalized_table_id))?;
+        let user_id = self
+            .active_user_id
+            .clone()
+            .or_else(|| {
+                self.active_session
+                    .as_ref()
+                    .and_then(|session| extract_user_id(&session.params))
+            })
+            .ok_or_else(|| "No Pragmatic user id captured from session".to_string())?;
+        let client_key = self
+            .resolve_client_key(&normalized_table_id)
+            .ok_or_else(|| format!("Room {} not connected", normalized_table_id))?;
+        let sent_at_ms = now_ms();
+        let xml = build_bet_xml(
+            &normalized_table_id,
+            bet_code,
+            amount,
+            &game_id,
+            &user_id,
+            sent_at_ms,
+        );
+        let retry_delays_ms = [0_u64, 200, 500, 1000, 1500, 2500];
+        let mut last_error = None;
+
+        for (index, delay_ms) in retry_delays_ms.iter().enumerate() {
+            if *delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+            }
+
+            let send_result = match self.clients.get(&client_key) {
+                Some(client) => client.send_message(xml.clone()).await,
+                None => Err(format!("Room {} not connected", normalized_table_id)),
+            };
+
+            match send_result {
+                Ok(()) => {
+                    self.last_bets.insert(
+                        normalized_table_id.clone(),
+                        LastPragmaticBet {
+                            bet_type: bet_type.to_string(),
+                            amount,
+                            game_id: game_id.clone(),
+                            sent_at_ms,
+                        },
+                    );
+                    return Ok(PragmaticBetReceipt {
+                        table_id: normalized_table_id,
+                        bet_type: bet_type.to_string(),
+                        amount,
+                        game_id,
+                        sent_at_ms,
+                        attempts: index + 1,
+                    });
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| "Pragmatic bet send failed".to_string()))
+    }
+
+    fn resolve_client_key(&self, table_id: &str) -> Option<String> {
+        if self.clients.contains_key(table_id) {
+            return Some(table_id.to_string());
+        }
+
+        let prefixed = format!("table-{}", table_id);
+        if self.clients.contains_key(&prefixed) {
+            return Some(prefixed);
+        }
+
+        None
+    }
+
     pub async fn connect_room(
         &mut self,
         app_handle: AppHandle,
         room_id: String,
         ws_url: String,
+        manager_arc: Arc<Mutex<PragmaticConnectionManager>>,
     ) -> Result<(), String> {
         info!("🔌 Connecting to room: {} ({})", room_id, ws_url);
 
@@ -120,7 +275,7 @@ impl PragmaticConnectionManager {
         // TODO(R4): the manager-wide lock is held across this `await`. R4 will
         // narrow the lock scope; R2 only adds the task-handle registry.
         let mut client = PragmaticClient::new(room_id.clone());
-        let handle = client.connect(app_handle, ws_url).await?;
+        let handle = client.connect(app_handle, ws_url, manager_arc).await?;
 
         // Lane R2: record the spawned task so the manager can abort it on
         // disconnect, even if the client's broadcast shutdown is missed.
@@ -136,11 +291,12 @@ impl PragmaticConnectionManager {
         &mut self,
         app_handle: AppHandle,
         table_id: &str,
+        manager_arc: Arc<Mutex<PragmaticConnectionManager>>,
     ) -> Result<(), String> {
         let url = self
             .construct_room_url(table_id)
             .ok_or_else(|| "No active Pragmatic session to construct room URL".to_string())?;
-        self.connect_room(app_handle, table_id.to_string(), url)
+        self.connect_room(app_handle, table_id.to_string(), url, manager_arc)
             .await
     }
 
@@ -239,4 +395,22 @@ impl PragmaticConnectionManager {
         drop(query);
         Some(url.to_string())
     }
+}
+
+fn extract_user_id(params: &HashMap<String, String>) -> Option<String> {
+    [
+        "uId",
+        "uid",
+        "userId",
+        "user_id",
+        "playerId",
+        "accountId",
+        "memberId",
+        "login",
+    ]
+    .iter()
+    .find_map(|key| params.get(*key))
+    .map(|value| value.trim())
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string)
 }

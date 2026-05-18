@@ -5,13 +5,15 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useGame } from '../../context/GameContext'
+import { useError } from '../../context'
 import { useAutoMode } from '../../hooks'
 import { AutoModeSettingsDialog } from './components/AutoModeSettingsDialog'
 import { AutoModeRoomGrid, type RoomBetLog } from './components/AutoModeRoomGrid'
 import { AutoModeRoomList } from './components/AutoModeRoomList'
 import { AutoModeMosaic } from './components/AutoModeMosaic' // Added
 import { AutoModeHistory } from './components/AutoModeHistory'
-import FilterThresholdInputs from './components/FilterThresholdInputs'
+import PatternBetDirectionSelect from './components/PatternBetDirectionSelect'
+import PatternBetStrategySelect from './components/PatternBetStrategySelect'
 import { RoomSelectorModal } from '../shared'
 import { filterBaccaratRooms } from '../../utils'
 import type { RoomBetConfig } from '../../../domain/entities'
@@ -104,6 +106,9 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   } = autoMode
 
   const roomStates = gameRoomStates
+
+  // Toast notifications (replaces window.alert popups)
+  const { showSuccess, showInfo } = useError()
 
   // State
   const [showSettings, setShowSettings] = useState(false)
@@ -290,165 +295,49 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     return counts
   }, [selectedRoomIds, rooms, roomStates, availableFilters, matchesFilter, roomDataVersion])
 
-  // 🆕 v2.23: Top 6 추천 점수 계산 함수 (Top3Rankings.tsx와 동일한 로직)
-  const calcRecommendScore = useCallback((
-    consecutiveWins: number,
-    consecutiveLosses: number,
-    recent5WinRate: number,
-    totalWinRate: number,
-    total: number
-  ): number => {
-    // 연패 2 이상이면 제외
-    if (consecutiveLosses >= 2) return -1000
-
-    let score = 0
-    // 연승 보너스
-    if (consecutiveWins >= 1) {
-      score += consecutiveWins * 20 + (consecutiveWins - 1) * 5
-      if (consecutiveWins >= 5) score += 50
-    }
-    // 최근 5게임 적중률
-    score += recent5WinRate * 0.5
-    // 전체 적중률
-    score += totalWinRate * 0.3
-    // 샘플 사이즈 보정
-    if (total >= 20) score += 15
-    else if (total >= 10) score += 10 + (total - 10) * 0.5
-    else if (total >= 5) score += (total - 5) * 2
-    // 1패 직후 감점
-    if (consecutiveLosses === 1) score -= 10
-
-    return score
-  }, [])
-
-  // 최근 N게임 적중률 계산
-  const calcRecentWinRate = useCallback((history: { result: string }[], n: number): number => {
-    if (!history || history.length === 0) return 0
-    const recent = history.slice(0, n).filter(h => h.result === 'WIN' || h.result === 'LOSS')
-    if (recent.length === 0) return 0
-    const wins = recent.filter(h => h.result === 'WIN').length
-    return (wins / recent.length) * 100
-  }, [])
-
   // 배팅 대상 방 필터링 로직:
-  // 🆕 v2.24: maxConcurrentBets=0이면 전체 방 배팅, 아니면 Top 6 + 마틴 회복
+  // 정책: 사용자가 헤더에서 선택한 방(selectedRoomIds)만 자동 배팅 대상.
+  // - 선택 없음 → [] (안전 가드: 자동 배팅 안 함)
+  // - 선택 있음 + 활성 필터 있음 → 선택된 방 중 필터 매칭된 방 (+ 선택된 방 중 마틴 회복/연승 방은 우선 포함)
+  // - 선택 있음 + 필터 없음 → 선택된 방 전체
   // NOTE: roomDataVersion을 의존성에 추가하여 방 데이터 업데이트 후 실시간으로 재계산
   const filteredBettingRoomIds = useMemo(() => {
-    const allRooms = Array.from(rooms.values())
-    const MIN_PREDICTIONS = 5 // 최소 예측 수
-    const TOP_N = 6 // 상위 N개 방
-    const maxConcurrentBets = settings.maxConcurrentBets ?? 0
+    // 0. 사용자 선택이 없으면 절대 배팅하지 않음
+    if (selectedRoomIds.size === 0) {
+      console.log(`[AutoMode] 🔒 선택된 방 없음 → 자동 배팅 중단`)
+      return []
+    }
 
-    // 1. 마틴 회복 중인 방 ID 수집 (martinLevel > 0) - 항상 포함
+    // 1. 선택된 방 중 마틴 회복/연승 ID 수집 (선택 외 방은 제외)
     const martinRecoveryRoomIds = new Set<string>()
-    // 🆕 v2.26: 연승 중인 방 ID 수집 (consecutiveWins > 0) - 패배할 때까지 계속 배팅
     const winStreakRoomIds = new Set<string>()
     autoModeRoomStates.forEach((state: any, roomId: string) => {
-      if (state.martinLevel > 0) {
-        martinRecoveryRoomIds.add(roomId)
-      }
-      if (state.consecutiveWins > 0) {
-        winStreakRoomIds.add(roomId)
-      }
+      if (!selectedRoomIds.has(roomId)) return
+      if (state.martinLevel > 0) martinRecoveryRoomIds.add(roomId)
+      if (state.consecutiveWins > 0) winStreakRoomIds.add(roomId)
     })
 
-    // 🆕 v2.24: maxConcurrentBets=0이면 전체 방 배팅 (예측모드처럼)
-    if (maxConcurrentBets === 0) {
-      const allRoomIds = allRooms.map(r => r.id)
-      console.log(`[AutoMode] 🔄 전체 방 배팅 모드 (v${roomDataVersion}): ${allRoomIds.length}개 방`)
-      return allRoomIds
-    }
+    // 2. 활성 필터가 있으면 선택된 방 중 매칭된 방만, 없으면 선택된 방 전체
+    const selectedRooms = Array.from(rooms.values()).filter(r => selectedRoomIds.has(r.id))
 
-    // 2. 커스텀 필터가 선택되어 있으면 → 기존 패턴 매칭 로직 사용
+    let matchedIds: string[]
     if (activeFilters.length > 0) {
-      // 방 설정에서 선택된 방이 없으면 전체 방 대상
-      let roomList = selectedRoomIds.size === 0
-        ? allRooms
-        : allRooms.filter(room => selectedRoomIds.has(room.id))
-
-      // 패턴 필터 적용
-      roomList = roomList.filter(room => {
-        const state = roomStates.get(room.id) || null
-        return activeFilters.some(filterType => matchesFilter(room, state, filterType))
-      })
-
-      // 패턴 매칭 방 + 마틴 회복 방 합치기
-      const patternMatchIds = roomList.map(r => r.id)
-      const resultSet = new Set([...patternMatchIds, ...martinRecoveryRoomIds])
-      const result = Array.from(resultSet)
-
-      console.log(`[AutoMode] 🔄 패턴필터 재계산 (v${roomDataVersion}): ${activeFilters[0]}, 패턴매칭=${patternMatchIds.length}개, 마틴회복=${martinRecoveryRoomIds.size}개, 총=${result.length}개/${allRooms.length}개`)
-      return result
+      matchedIds = selectedRooms
+        .filter(room => {
+          const state = roomStates.get(room.id) || null
+          return activeFilters.some(filterType => matchesFilter(room, state, filterType))
+        })
+        .map(r => r.id)
+    } else {
+      matchedIds = selectedRooms.map(r => r.id)
     }
 
-    // 3. 커스텀 필터 없음 → Top 6 추천 방 사용
-    interface RankedRoom {
-      roomId: string
-      score: number
-      total: number  // 예측 수 (백업 정렬용)
-    }
-    const ranked: RankedRoom[] = []
-    const backupRooms: RankedRoom[] = []  // 🆕 예측 부족 방 백업 리스트
+    // 3. 매칭 + 마틴 회복 + 연승 방 합치기 (중복 제거)
+    const result = Array.from(new Set([...winStreakRoomIds, ...matchedIds, ...martinRecoveryRoomIds]))
 
-    allRooms.forEach(room => {
-      const state = roomStates.get(room.id)
-      if (!state) return
-
-      // 🆕 v2.26: Top6 선정 기준 강화
-      // 1. 연패 1 이상 제외 (연패 중인 방은 제외)
-      if (state.stats.consecutiveLosses >= 1) return
-
-      // 2. 최근 5게임 승률 50% 미만 제외
-      const recent5WinRate = calcRecentWinRate(state.history, 5)
-      if (recent5WinRate < 50) return
-
-      // 추천 점수 계산
-      const score = calcRecommendScore(
-        state.stats.consecutiveWins,
-        state.stats.consecutiveLosses,
-        recent5WinRate,
-        state.stats.winRate,
-        state.stats.total
-      )
-
-      // 예측 수 체크: 5개 미만이면 백업 리스트에
-      if (state.stats.total < MIN_PREDICTIONS) {
-        // 최소 1게임 이상은 있어야 백업에 포함
-        if (state.stats.total >= 1) {
-          backupRooms.push({ roomId: room.id, score, total: state.stats.total })
-        }
-        return
-      }
-
-      ranked.push({ roomId: room.id, score, total: state.stats.total })
-    })
-
-    // 점수 기준 정렬 후 상위 6개
-    let top6Ids = ranked
-      .sort((a, b) => b.score - a.score)
-      .slice(0, TOP_N)
-      .map(r => r.roomId)
-
-    // 🆕 v2.24: 6개 미만이면 백업 리스트에서 채움 (예측 수 + 점수 기준)
-    if (top6Ids.length < TOP_N && backupRooms.length > 0) {
-      const neededCount = TOP_N - top6Ids.length
-      // 백업 리스트: 예측 수 많은 순 → 점수 높은 순
-      const backupSorted = backupRooms
-        .sort((a, b) => b.total - a.total || b.score - a.score)
-        .slice(0, neededCount)
-        .map(r => r.roomId)
-      top6Ids = [...top6Ids, ...backupSorted]
-      console.log(`[AutoMode] 🔄 백업 방 ${backupSorted.length}개 추가 (Top6 부족분 충당)`)
-    }
-
-    // 4. Top 6 + 연승 방 + 마틴 회복 방 합치기 (중복 제거)
-    // 🆕 v2.26: 연승 방 우선 포함 - 이긴 방은 패배할 때까지 계속 배팅
-    const resultSet = new Set([...winStreakRoomIds, ...top6Ids, ...martinRecoveryRoomIds])
-    const result = Array.from(resultSet)
-
-    console.log(`[AutoMode] 🔄 Top${TOP_N} 재계산 (v${roomDataVersion}): 연승=${winStreakRoomIds.size}개, Top${TOP_N}=${top6Ids.length}개, 마틴회복=${martinRecoveryRoomIds.size}개, 총=${result.length}개/${allRooms.length}개`)
+    console.log(`[AutoMode] 🔄 선택방 기반 배팅 대상 (v${roomDataVersion}): 선택=${selectedRoomIds.size}, 매칭=${matchedIds.length}, 마틴회복=${martinRecoveryRoomIds.size}, 연승=${winStreakRoomIds.size}, 총=${result.length}`)
     return result
-  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, roomDataVersion, calcRecommendScore, calcRecentWinRate, settings.maxConcurrentBets])
+  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, roomDataVersion])
 
   // 필터된 방 목록과 현재 패턴 필터를 서비스에 전달
   useEffect(() => {
@@ -618,7 +507,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
         // Validate betAmount for result logs
         const resultBetAmount = typeof betAmount === 'number' && !isNaN(betAmount) ? betAmount : 0
-        const predText = prediction ? (prediction === 'B' ? '뱅커' : '플레이어') : '-'
+        const predText = prediction ? (prediction === 'B' ? '뱅커' : prediction === 'P' ? '플레이어' : '타이') : '-'
         const winText = winner ? (winner === 'B' ? '뱅커' : winner === 'P' ? '플레이어' : '타이') : '-'
 
         // 방별 배팅 로그 업데이트 (pending → 결과로 치환)
@@ -966,8 +855,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                     left: rect.left,
                   }}
                 >
-                  <FilterThresholdInputs />
-                  <div className="auto-mode__header-filter-divider" />
                   <button
                     className={`auto-mode__header-filter-item ${activeFilters.length === 0 ? 'active' : ''}`}
                     onClick={() => { clearFilters(); setShowFilterDropdown(false) }}
@@ -976,17 +863,37 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                     <span className="filter-count">{selectedRoomPatternCounts.all}</span>
                   </button>
                   {availableFilters.map(filter => {
+                    const isActive = activeFilters.includes(filter.type)
                     return (
-                      <button
+                      <div
                         key={filter.type}
-                        className={`auto-mode__header-filter-item ${activeFilters.includes(filter.type) ? 'active' : ''}`}
-                        onClick={() => toggleFilter(filter.type)}
+                        className={`auto-mode__header-filter-item ${isActive ? 'active' : ''}`}
                       >
-                        <span>{filter.label}</span>
-                        <span className="filter-count">{selectedRoomPatternCounts[filter.type] || 0}</span>
-                      </button>
+                        <button
+                          type="button"
+                          className="auto-mode__header-filter-item-toggle"
+                          onClick={() => toggleFilter(filter.type)}
+                        >
+                          <span>{filter.label}</span>
+                          <span className="filter-count">{selectedRoomPatternCounts[filter.type] || 0}</span>
+                        </button>
+                        <PatternBetDirectionSelect patternType={filter.type} />
+                        <PatternBetStrategySelect patternType={filter.type} />
+                      </div>
                     )
                   })}
+                  <div className="auto-mode__header-filter-divider" />
+                  <button
+                    type="button"
+                    className="auto-mode__header-filter-manage"
+                    onClick={() => { setShowPatternModal(true); setShowFilterDropdown(false) }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                    <span>커스텀 패턴 추가/관리</span>
+                  </button>
                 </div>
               )
             })()}
@@ -1369,18 +1276,14 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         patterns={customPatterns}
         selectedPattern={activeFilters[0] || 'all'}
         onCreate={(data) => {
-          console.log('[AutoModePanel] onCreate called:', data)
-          const result = patternManager.add({
+          patternManager.add({
             name: data.name,
             sequence: data.sequence,
             enabled: data.enabled,
             description: data.description,
             betDirection: data.betDirection
           })
-          console.log('[AutoModePanel] patternManager.add result:', result)
-          console.log('[AutoModePanel] current customPatterns:', customPatterns)
-          console.log('[AutoModePanel] current availableFilters:', availableFilters)
-          alert(`패턴 "${data.name}" 저장 완료!`)
+          showSuccess(`패턴 "${data.name}" 저장 완료`)
         }}
         onUpdate={(id, data) => {
           patternManager.update(id, {
@@ -1390,13 +1293,18 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
             description: data.description,
             betDirection: data.betDirection
           })
-          alert(`패턴 "${data.name}" 수정 완료!`)
+          showSuccess(`패턴 "${data.name}" 수정 완료`)
         }}
         onDelete={(id) => {
-          console.log('[AutoModePanel] onDelete called with id:', id)
+          const target = customPatterns.find(p => p.id === id)
           patternManager.remove(id)
+          showSuccess(`패턴 "${target?.name ?? ''}" 삭제됨`)
         }}
-        onToggle={(id, enabled) => patternManager.toggle(id, enabled)}
+        onToggle={(id, enabled) => {
+          patternManager.toggle(id, enabled)
+          const target = customPatterns.find(p => p.id === id)
+          showInfo(`패턴 "${target?.name ?? ''}" ${enabled ? '활성화' : '비활성화'}`)
+        }}
         onApply={(pattern) => {
           if ((pattern as string) === 'all') clearFilters()
           else toggleFilter(pattern as RoomFilterType)

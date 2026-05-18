@@ -4,7 +4,8 @@
 import type {
   RoomFilterType,
   PatternBetDirection,
-  PatternBetConfig
+  PatternBetConfig,
+  BetStrategyType,
 } from '../../domain/entities'
 import { DEFAULT_PATTERN_CONFIGS } from '../../domain/entities'
 import CustomPatternService from './CustomPatternService'
@@ -120,6 +121,44 @@ class PatternBettingServiceImpl {
     // 설정 후 확인
     const saved = this.getBetDirection(patternType)
     console.log(`[PatternBettingService] after setBetDirection: ${patternType} = ${saved}`)
+  }
+
+  // ==================== Bet Strategy ====================
+
+  /**
+   * Get per-filter betting strategy override.
+   * Returns undefined when the filter has no override; callers should fall
+   * back to the global `settings.betStrategy` in that case.
+   */
+  getBetStrategy(patternType: RoomFilterType): BetStrategyType | undefined {
+    if (this.isCustomPattern(patternType)) {
+      const customPattern = this.getCustomPatternById(patternType)
+      return customPattern?.betStrategy
+    }
+    return this.builtinConfigs.get(patternType)?.betStrategy
+  }
+
+  /**
+   * Resolve the effective betting strategy for a filter, applying the
+   * supplied global fallback when no per-filter override exists.
+   */
+  resolveBetStrategy(patternType: RoomFilterType, fallback: BetStrategyType): BetStrategyType {
+    return this.getBetStrategy(patternType) ?? fallback
+  }
+
+  /**
+   * Set the per-filter betting strategy. Passing `undefined` clears the
+   * override so that the filter falls back to the global strategy.
+   */
+  setBetStrategy(patternType: RoomFilterType, betStrategy: BetStrategyType | undefined): void {
+    if (this.isCustomPattern(patternType)) {
+      const patternId = this.getCustomPatternId(patternType)
+      if (patternId) {
+        CustomPatternService.updatePattern(patternId, { betStrategy })
+      }
+    } else {
+      this.updateBuiltinConfig(patternType, { betStrategy })
+    }
   }
 
   /**

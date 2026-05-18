@@ -321,8 +321,8 @@ function AutoModeListRow({
             <div className="col-predict">
                 {isBetting && activePrediction ? (
                     <div className="predict-group">
-                        <div className={`predict-badge ${activePrediction === 'B' ? 'banker' : 'player'}`}>
-                            {activePrediction === 'B' ? 'BANKER' : 'PLAYER'}
+                        <div className={`predict-badge ${activePrediction === 'B' ? 'banker' : activePrediction === 'P' ? 'player' : 'tie'}`}>
+                            {activePrediction === 'B' ? 'BANKER' : activePrediction === 'P' ? 'PLAYER' : 'TIE'}
                         </div>
                         <div className="predict-info">
                             {betAmount > 0 && <span className="bet-amt">{betAmount.toLocaleString()}</span>}

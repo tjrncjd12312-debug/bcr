@@ -1,0 +1,89 @@
+/* PatternBetDirectionSelect - Color-coded segmented control */
+
+.pbd-segment {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  margin-left: 8px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+  flex-shrink: 0;
+}
+
+.pbd-segment__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted, #8a8a8a);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.pbd-segment--md .pbd-segment__btn {
+  min-width: 28px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.pbd-segment__btn:hover {
+  color: var(--text-primary, #fff);
+}
+
+/* ===== Inactive accent on hover (subtle preview of color) ===== */
+.pbd-segment__btn--ai:hover     { color: var(--gold, #d4af37); }
+.pbd-segment__btn--banker:hover { color: #ff7676; }
+.pbd-segment__btn--player:hover { color: #79b8ff; }
+.pbd-segment__btn--tie:hover    { color: #6ee7b7; }
+.pbd-segment__btn--skip:hover   { color: #cccccc; }
+
+/* ===== Active state per variant ===== */
+.pbd-segment__btn.is-active {
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25) inset;
+}
+
+.pbd-segment__btn--ai.is-active {
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.95), rgba(212, 175, 55, 0.75));
+  border-color: rgba(212, 175, 55, 0.85);
+  color: #1a1500;
+}
+
+.pbd-segment__btn--banker.is-active {
+  background: linear-gradient(180deg, #e63946, #b8222e);
+  border-color: rgba(255, 100, 100, 0.55);
+  color: #fff;
+}
+
+.pbd-segment__btn--player.is-active {
+  background: linear-gradient(180deg, #2c7be5, #1c5fbf);
+  border-color: rgba(120, 180, 255, 0.55);
+  color: #fff;
+}
+
+.pbd-segment__btn--tie.is-active {
+  background: linear-gradient(180deg, #10b981, #047857);
+  border-color: rgba(110, 231, 183, 0.55);
+  color: #fff;
+}
+
+.pbd-segment__btn--skip.is-active {
+  background: linear-gradient(180deg, #4a4a52, #2e2e34);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #d0d0d0;
+}
+
+.pbd-segment__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--gold-muted, rgba(212, 175, 55, 0.35));
+}

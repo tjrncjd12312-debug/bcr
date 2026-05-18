@@ -27,14 +27,44 @@ const DEFAULT_SETTINGS: VirtualBetSettings = {
   martingale: DEFAULT_MARTINGALE,
 }
 
+// Persistence key for the user-configured initial balance. Only `initialBalance`
+// is persisted — runtime state (balance, bets, history) is session-scoped.
+const STORAGE_KEY = 'bcr-virtual-betting-initial-balance'
+
+function loadInitialBalanceFromStorage(fallback: number): number {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return fallback
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return fallback
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveInitialBalanceToStorage(value: number): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return
+    window.localStorage.setItem(STORAGE_KEY, String(value))
+  } catch {
+    // ignore (storage full / private mode / etc.)
+  }
+}
+
 type StateChangeCallback = (state: VirtualBettingState) => void
 type BetLogCallback = (log: VirtualBetLog) => void
 
 class VirtualBettingServiceImpl implements IVirtualBettingUseCase {
   private state: VirtualBettingState = {
     enabled: false,
-    settings: { ...DEFAULT_SETTINGS },
-    globalBalance: DEFAULT_SETTINGS.initialBalance,
+    settings: {
+      ...DEFAULT_SETTINGS,
+      initialBalance: loadInitialBalanceFromStorage(DEFAULT_SETTINGS.initialBalance),
+    },
+    // globalBalance starts at the persisted/default initialBalance so the
+    // very first read of getGlobalBalance() reflects the user's setting.
+    globalBalance: loadInitialBalanceFromStorage(DEFAULT_SETTINGS.initialBalance),
     roomStates: new Map(),
     betHistory: [],
     // Extended statistics
@@ -139,6 +169,7 @@ class VirtualBettingServiceImpl implements IVirtualBettingUseCase {
     // 기준 잔액 변경은 세션 리셋을 의미함
     if (settings.initialBalance !== undefined && settings.initialBalance !== oldInitialBalance) {
       console.log(`[VirtualBetting] Initial balance changed: ${oldInitialBalance} -> ${settings.initialBalance}, resetting session`)
+      saveInitialBalanceToStorage(settings.initialBalance)
       this.reset()
       return // reset already emits state change
     }
@@ -606,11 +637,12 @@ class VirtualBettingServiceImpl implements IVirtualBettingUseCase {
     this.stateManager.clear()
     this.betLogManager.clear()
 
-    // 2. 상태 초기화
+    // 2. 상태 초기화 (persisted initialBalance은 유지)
+    const persistedInitial = loadInitialBalanceFromStorage(DEFAULT_SETTINGS.initialBalance)
     this.state = {
       enabled: false,
-      settings: { ...DEFAULT_SETTINGS },
-      globalBalance: DEFAULT_SETTINGS.initialBalance,
+      settings: { ...DEFAULT_SETTINGS, initialBalance: persistedInitial },
+      globalBalance: persistedInitial,
       roomStates: new Map(),
       betHistory: [],
       totalBetAmount: 0,

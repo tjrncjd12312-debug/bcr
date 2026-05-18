@@ -27,6 +27,10 @@ static MULTIWIDGET_CLIENT: Lazy<&TokioMutex<EvolutionMultiSocket>> =
 /// Global Chrome process ID for cleanup on exit
 static CHROME_PID: AtomicU32 = AtomicU32::new(0);
 
+pub fn chrome_pid() -> u32 {
+    CHROME_PID.load(Ordering::SeqCst)
+}
+
 /// Global room tab target ID for reuse
 static ROOM_TAB_TARGET_ID: Mutex<Option<String>> = Mutex::new(None);
 
@@ -4289,11 +4293,26 @@ pub async fn navigate_pragmatic_room(
     }
     info!("🎲 Navigating to Pragmatic room: {}", room_id);
 
-    // First, try to get tableId from cache
-    let mut table_id_override = PRAGMATIC_TABLE_ID_BY_OPERATOR_GAME_ID
-        .lock()
-        .ok()
-        .and_then(|m| m.get(&room_id).cloned());
+    let requested_table_id = room_id.clone();
+    let mut operator_game_id = room_id.clone();
+
+    // ROSE room lists are keyed by Pragmatic tableId, while launcher URLs need
+    // operatorGameId. Resolve both directions so selecting "401" can still
+    // produce a valid Pragmatic launcher URL.
+    let mut table_id_override = PRAGMATIC_TABLE_ID_BY_OPERATOR_GAME_ID.lock().ok().and_then(|m| {
+        if let Some(table_id) = m.get(&room_id) {
+            return Some(table_id.clone());
+        }
+
+        for (op_id, table_id) in m.iter() {
+            if table_id == &requested_table_id {
+                operator_game_id = op_id.clone();
+                return Some(table_id.clone());
+            }
+        }
+
+        None
+    });
 
     // If no mapping found OR launcher URL is missing, try to capture from DOM dynamically
     // capture_pragmatic_table_mappings_from_dom also captures JSESSIONID now.
@@ -4313,7 +4332,8 @@ pub async fn navigate_pragmatic_room(
         // Find the mapping for our room_id
         if table_id_override.is_none() {
             for (table_id, op_id) in mappings {
-                if op_id == room_id {
+                if op_id == room_id || table_id == requested_table_id {
+                    operator_game_id = op_id.clone();
                     info!("🎲 Found tableId {} for operatorGameId {} from DOM", table_id, room_id);
                     table_id_override = Some(table_id);
                     break;
@@ -4330,7 +4350,7 @@ pub async fn navigate_pragmatic_room(
         .clone();
 
     if base_url.is_none() {
-        base_url = try_capture_pragmatic_launcher_url_from_open_pages(&room_id).await;
+        base_url = try_capture_pragmatic_launcher_url_from_open_pages(&operator_game_id).await;
         if let Some(ref captured) = base_url {
             if let Ok(mut guard) = PRAGMATIC_LAUNCHER_URL.lock() {
                 *guard = Some(captured.clone());
@@ -4356,7 +4376,7 @@ pub async fn navigate_pragmatic_room(
             .map(|(k, v)| {
                 if k == "operatorGameId" {
                     has_operator_game_id = true;
-                    (k.into_owned(), room_id.clone())
+                    (k.into_owned(), operator_game_id.clone())
                 } else if k == "tableId" {
                     has_table_id = true;
                     if let Some(ref table_id) = table_id_for_url {
@@ -4378,7 +4398,7 @@ pub async fn navigate_pragmatic_room(
         if !has_operator_game_id {
             parsed_url
                 .query_pairs_mut()
-                .append_pair("operatorGameId", &room_id);
+                .append_pair("operatorGameId", &operator_game_id);
         }
         if !has_table_id {
             if let Some(ref table_id) = table_id_for_url {
@@ -4393,19 +4413,23 @@ pub async fn navigate_pragmatic_room(
         let ws_url_for_room = PRAGMATIC_WS_URL_BY_OPERATOR_GAME_ID
             .lock()
             .ok()
-            .and_then(|m| m.get(&room_id).cloned())
+            .and_then(|m| {
+                m.get(&operator_game_id)
+                    .cloned()
+                    .or_else(|| m.get(&requested_table_id).cloned())
+            })
             .or_else(|| PRAGMATIC_LAST_WS_URL.lock().ok().and_then(|g| g.clone()));
 
         if let Some(ws_url) = ws_url_for_room {
             build_pragmatic_launcher_url_for_operator_game_id(
                 &ws_url,
-                &room_id,
+                &operator_game_id,
                 table_id_override.as_deref(),
             )
             .ok_or_else(|| "프라그마틱 런처 URL 생성에 실패했습니다.".to_string())?
         } else {
             let manager = state.manager.lock().await;
-            manager.construct_launcher_url(&room_id).ok_or_else(|| {
+            manager.construct_launcher_url(&requested_table_id).ok_or_else(|| {
                 "프라그마틱 세션이 없습니다. 프라그마틱 소켓이 먼저 캡처되었는지 확인해주세요."
                     .to_string()
             })?
@@ -4554,6 +4578,304 @@ pub async fn navigate_pragmatic_room(
 
 /// 🔥 ENHANCED: Block ALL Evolution WebSockets (game, lobby, multiwidget)
 /// Rust backend handles all Evolution connections to prevent session conflicts
+#[tauri::command]
+pub async fn click_pragmatic_room_in_lobby(mut room_id: String) -> Result<String, String> {
+    if room_id.starts_with("pragmatic:") {
+        room_id = room_id.replace("pragmatic:", "");
+    }
+    let requested_id = room_id.clone();
+    let mut operator_game_id = room_id.clone();
+    if let Ok(map) = PRAGMATIC_TABLE_ID_BY_OPERATOR_GAME_ID.lock() {
+        for (op_id, table_id) in map.iter() {
+            if table_id == &requested_id {
+                operator_game_id = op_id.clone();
+                break;
+            }
+        }
+    }
+
+    let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
+    let response = reqwest::get(&cdp_url)
+        .await
+        .map_err(|e| format!("Failed to connect to CDP: {}", e))?;
+    let pages: Vec<serde_json::Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse CDP response: {}", e))?;
+
+    let target_ws = pages
+        .iter()
+        .filter(|page| page.get("type").and_then(|v| v.as_str()) == Some("page"))
+        .filter_map(|page| {
+            let url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let ws = page.get("webSocketDebuggerUrl").and_then(|v| v.as_str())?;
+            let is_pragmatic = url.contains("pragmaticplaylive.net")
+                || url.contains("play.vg-asia1.com")
+                || url.contains("iwg711.com");
+            let score = if url.contains("/desktop/lobby") {
+                3
+            } else if url.contains("pragmaticplaylive.net") {
+                2
+            } else if is_pragmatic {
+                1
+            } else {
+                0
+            };
+            (score > 0).then_some((score, ws.to_string()))
+        })
+        .max_by_key(|(score, _)| *score)
+        .ok_or_else(|| "Pragmatic lobby page not found in Chrome.".to_string())?;
+
+    let (ws_stream, _) = tokio_tungstenite::connect_async(&target_ws.1)
+        .await
+        .map_err(|e| format!("Failed to connect to Pragmatic lobby CDP: {}", e))?;
+    let (mut ws_write, mut ws_read) = futures_util::StreamExt::split(ws_stream);
+    use futures_util::{SinkExt, StreamExt};
+
+    let room_id_json = serde_json::to_string(&operator_game_id).map_err(|e| e.to_string())?;
+    let table_id_json = serde_json::to_string(&requested_id).map_err(|e| e.to_string())?;
+    let script = format!(
+        r#"(function() {{
+  const roomId = {room_id_json};
+  const tableId = {table_id_json};
+  const ids = [roomId, tableId].filter(Boolean).map(String);
+  window.__BCR_ORIG_OPEN__ = window.__BCR_ORIG_OPEN__ || window.open;
+  window.open = function(url) {{
+    if (url) {{
+      try {{ location.href = url; }} catch (e) {{}}
+    }}
+    return window;
+  }};
+
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 24 && r.height > 24 && s.visibility !== 'hidden' && s.display !== 'none';
+  }};
+  const attrs = (el) => Array.from(el.attributes || []).map(a => `${{a.name}}=${{a.value}}`).join(' ');
+  const textOf = (el) => `${{el.id || ''}} ${{attrs(el)}} ${{el.textContent || ''}}`.toLowerCase();
+  const clickTarget = (el) => el.closest('button,a,[role="button"],[tabindex]') || el;
+  const all = Array.from(document.querySelectorAll('button,a,[role="button"],[tabindex],article,section,div'));
+
+  let best = null;
+  let bestScore = 0;
+  for (const el of all) {{
+    if (!visible(el)) continue;
+    const hay = textOf(el);
+    let score = 0;
+    for (const id of ids) {{
+      const lower = id.toLowerCase();
+      if ((el.id || '').startsWith(id + '-')) score += 100;
+      if (hay.includes('tableid=' + id) || hay.includes('table-id=' + id)) score += 80;
+      if (hay.includes('operatorgameid=' + id) || hay.includes('operator-game-id=' + id)) score += 80;
+      if (hay.includes('tableid":"' + id) || hay.includes('tableid:' + id)) score += 60;
+      if (hay.includes('operatorgameid":"' + id) || hay.includes('operatorgameid:' + id)) score += 60;
+      if (hay.includes(lower)) score += 18;
+    }}
+    if (/[\uAC00-\uD7A3]/.test(hay) || hay.includes('baccarat')) score += 8;
+    if (score > bestScore) {{
+      best = el;
+      bestScore = score;
+    }}
+  }}
+
+  if (!best) {{
+    return JSON.stringify({{ ok: false, reason: 'room-card-not-found', roomId, url: location.href }});
+  }}
+
+  const target = clickTarget(best);
+  target.scrollIntoView({{ block: 'center', inline: 'center' }});
+  setTimeout(() => target.click(), 120);
+  return JSON.stringify({{
+    ok: true,
+    roomId,
+    score: bestScore,
+    clickedText: (target.textContent || '').trim().slice(0, 120),
+    clickedId: target.id || best.id || '',
+    url: location.href
+  }});
+}})()"#
+    );
+
+    let bring_to_front = serde_json::json!({
+        "id": 51,
+        "method": "Page.bringToFront"
+    });
+    let _ = ws_write
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            bring_to_front.to_string(),
+        ))
+        .await;
+
+    let eval = serde_json::json!({
+        "id": 52,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": script,
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    });
+    ws_write
+        .send(tokio_tungstenite::tungstenite::Message::Text(eval.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send Runtime.evaluate: {}", e))?;
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(message) = ws_read.next().await {
+            let text = match message {
+                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => text,
+                Ok(_) => continue,
+                Err(e) => return Err(e.to_string()),
+            };
+            let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            if json.get("id").and_then(|v| v.as_i64()) == Some(52) {
+                return Ok(json);
+            }
+        }
+        Err("CDP socket closed".to_string())
+    })
+    .await
+    .map_err(|_| "Timed out waiting for Pragmatic lobby click result".to_string())??;
+
+    let value = result
+        .get("result")
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.get("value"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("Invalid click result: {}", result))?;
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(value).map_err(|e| format!("Invalid click payload: {}", e))?;
+    if parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(value.to_string())
+    } else {
+        Err(parsed
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Pragmatic room click failed")
+            .to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn refresh_pragmatic_lobby_rooms_from_dom() -> Result<Vec<serde_json::Value>, String> {
+    use futures_util::{SinkExt, StreamExt};
+
+    let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
+    let response = reqwest::get(&cdp_url)
+        .await
+        .map_err(|e| format!("Failed to connect to CDP: {}", e))?;
+    let pages: Vec<serde_json::Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse CDP response: {}", e))?;
+
+    let target_ws = pages
+        .iter()
+        .filter(|page| page.get("type").and_then(|v| v.as_str()) == Some("page"))
+        .filter_map(|page| {
+            let url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let ws = page.get("webSocketDebuggerUrl").and_then(|v| v.as_str())?;
+            let score = if url.contains("client.pragmaticplaylive.net/desktop/lobby") {
+                4
+            } else if url.contains("pragmaticplaylive.net") {
+                3
+            } else if url.contains("play.vg-asia1.com") {
+                2
+            } else {
+                0
+            };
+            (score > 0).then_some((score, ws.to_string()))
+        })
+        .max_by_key(|(score, _)| *score)
+        .ok_or_else(|| "Pragmatic lobby page not found in Chrome.".to_string())?;
+
+    let (ws_stream, _) = tokio_tungstenite::connect_async(&target_ws.1)
+        .await
+        .map_err(|e| format!("Failed to connect to Pragmatic lobby CDP: {}", e))?;
+    let (mut ws_write, mut ws_read) = futures_util::StreamExt::split(ws_stream);
+
+    let script = r#"(function() {
+  const rooms = new Map();
+  const namePattern = /[\uAC00-\uD7A3]|baccarat/i;
+  const clean = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+  const findName = (el) => {
+    let node = el;
+    for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
+      const lines = clean(node.innerText || node.textContent || '').split(' ').filter(Boolean);
+      const joined = clean(node.innerText || node.textContent || '');
+      const candidates = joined.split(/\n| {2,}/).map(clean).filter(Boolean);
+      const found = candidates.find((line) => namePattern.test(line) && !/[₩$]/.test(line));
+      if (found) return found;
+      const compact = lines.slice(0, 8).join(' ');
+      if (namePattern.test(compact)) return compact;
+    }
+    return '';
+  };
+
+  document.querySelectorAll('[id]').forEach((el) => {
+    const match = String(el.id || '').match(/^(\d+)-(.+)/);
+    if (!match) return;
+    const tableId = match[1];
+    const operatorGameId = match[2];
+    const name = findName(el);
+    if (!name) return;
+    rooms.set(tableId, {
+      id: tableId,
+      name,
+      status: 'active',
+      history: [],
+      operatorGameId
+    });
+  });
+
+  return JSON.stringify(Array.from(rooms.values()));
+})()"#;
+
+    let eval = serde_json::json!({
+        "id": 71,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": script,
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    });
+
+    ws_write
+        .send(tokio_tungstenite::tungstenite::Message::Text(eval.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send Runtime.evaluate: {}", e))?;
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+        while let Some(message) = ws_read.next().await {
+            let text = match message {
+                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => text,
+                Ok(_) => continue,
+                Err(e) => return Err(e.to_string()),
+            };
+            let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            if json.get("id").and_then(|v| v.as_i64()) == Some(71) {
+                return Ok(json);
+            }
+        }
+        Err("CDP socket closed".to_string())
+    })
+    .await
+    .map_err(|_| "Timed out waiting for Pragmatic lobby DOM rooms".to_string())??;
+
+    let value = result
+        .get("result")
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.get("value"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("Invalid DOM room result: {}", result))?;
+
+    serde_json::from_str::<Vec<serde_json::Value>>(value)
+        .map_err(|e| format!("Invalid DOM room payload: {}", e))
+}
+
 const WS_BLOCKER_SCRIPT: &str = r#"
     (function() {
         if (window.__BCR_ALL_WS_BLOCKED__) return 'already_blocked';
