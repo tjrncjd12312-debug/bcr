@@ -9,6 +9,7 @@ import FilterThresholdsService, { type FilterThresholds } from '../../../../appl
 import { FreshShoeToggle } from '../../common/FreshShoeToggle'
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
+import { StatCard } from '../../common/StatCard'
 import './AutoModeSettingsDialog.css'
 
 type SettingsTab = 'general' | 'strategy' | 'safety'
@@ -257,35 +258,35 @@ export function AutoModeSettingsDialog({
           {/* 현재 상태 */}
           <div className="ams-section">
             <div className="ams-section-title">현재 상태</div>
-            <div className="ams-stats-grid">
-              <div className="ams-stat-card">
-                <span className="ams-stat-label">{settings.isVirtualMode ? '가상 잔액' : '잔액'}</span>
-                <span className="ams-stat-value">
-                  {settings.isVirtualMode
+            <div className="settings-stat-grid">
+              <StatCard
+                label={settings.isVirtualMode ? '가상 잔액' : '잔액'}
+                value={
+                  settings.isVirtualMode
                     ? currentVirtualBalance.toLocaleString()
-                    : realBalance !== null ? realBalance.toLocaleString() : '-'}
-                </span>
-              </div>
-              <div className="ams-stat-card">
-                <span className="ams-stat-label">승률</span>
-                <span className={`ams-stat-value ${winRate >= 50 ? 'positive' : winRate > 0 ? 'negative' : ''}`}>
-                  {winRate}%
-                </span>
-              </div>
-              <div className="ams-stat-card">
-                <span className="ams-stat-label">승/패</span>
-                <span className="ams-stat-value">
-                  <span className="positive">{totalWins}</span>
-                  <span className="ams-stat-divider">/</span>
-                  <span className="negative">{totalLosses}</span>
-                </span>
-              </div>
-              <div className="ams-stat-card">
-                <span className="ams-stat-label">손익</span>
-                <span className={`ams-stat-value ${cumulativeProfit > 0 ? 'positive' : cumulativeProfit < 0 ? 'negative' : ''}`}>
-                  {cumulativeProfit > 0 ? '+' : ''}{cumulativeProfit.toLocaleString()}
-                </span>
-              </div>
+                    : realBalance !== null ? realBalance.toLocaleString() : '-'
+                }
+              />
+              <StatCard
+                label="승률"
+                value={`${winRate}%`}
+                tone={winRate >= 50 ? 'positive' : winRate > 0 ? 'negative' : 'neutral'}
+              />
+              <StatCard
+                label="승/패"
+                value={
+                  <>
+                    <span style={{ color: 'var(--status-success)' }}>{totalWins}</span>
+                    <span style={{ margin: '0 4px', color: 'var(--text-muted)' }}>/</span>
+                    <span style={{ color: 'var(--status-danger)' }}>{totalLosses}</span>
+                  </>
+                }
+              />
+              <StatCard
+                label="손익"
+                value={`${cumulativeProfit > 0 ? '+' : ''}${cumulativeProfit.toLocaleString()}`}
+                tone={cumulativeProfit > 0 ? 'positive' : cumulativeProfit < 0 ? 'negative' : 'neutral'}
+              />
             </div>
           </div>
 

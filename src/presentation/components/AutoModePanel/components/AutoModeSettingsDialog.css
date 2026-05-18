@@ -93,52 +93,6 @@
   text-align: center;
 }
 
-/* Stats Grid */
-.ams-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-
-.ams-stat-card {
-  background: var(--modal-elevated);
-  border: 1px solid var(--modal-border);
-  border-radius: var(--radius-md);
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
-.ams-stat-card .ams-stat-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.ams-stat-card .ams-stat-value {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-}
-
-.ams-stat-card .ams-stat-value.positive,
-.ams-stat-card .ams-stat-value .positive {
-  color: var(--status-success);
-}
-
-.ams-stat-card .ams-stat-value.negative,
-.ams-stat-card .ams-stat-value .negative {
-  color: var(--status-danger);
-}
-
-.ams-stat-divider {
-  margin: 0 4px;
-  color: var(--text-muted);
-}
-
 /* Strategy Grid */
 .ams-strategy-grid {
   display: grid;
@@ -467,10 +421,6 @@
   .ams-input-row {
     grid-template-columns: 1fr;
     gap: 14px;
-  }
-
-  .ams-stats-grid {
-    grid-template-columns: 1fr 1fr;
   }
 
   .ams-strategy-grid {
