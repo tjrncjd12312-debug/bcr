@@ -1,0 +1,29 @@
+/* FreshShoeToggle.css — preset toggle card used inside settings dialogs.
+ * Uses the same design tokens as SettingsDialogFrame for visual parity. */
+
+.fresh-shoe-toggle {
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px;
+  margin: 12px 0;
+  background: var(--modal-surface);
+}
+
+.fresh-shoe-toggle__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fresh-shoe-toggle__desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.fresh-shoe-toggle__warning {
+  color: var(--status-warning);
+}
