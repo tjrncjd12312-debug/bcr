@@ -14,8 +14,6 @@ import './AutoModeSettingsDialog.css'
 
 type SettingsTab = 'general' | 'strategy' | 'safety'
 
-// NOTE: 'rooms' 탭 제거됨 - 방 선택은 헤더에서 직접 수행
-
 const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: string }[] = [
   { value: 'martingale', label: '마틴게일', desc: '패배시 2배 증가' },
   { value: 'flat', label: '플랫', desc: '고정 금액 유지' },
@@ -67,15 +65,13 @@ export function AutoModeSettingsDialog({
     return FilterThresholdsService.onChange(setThresholds)
   }, [])
 
-  // ✅ FIX: currentVirtualBalance를 cumulativeProfit 기반으로 계산 (헤더와 동일한 로직)
-  // VirtualBettingService.getGlobalBalance()는 동기화 문제가 있어 사용하지 않음
+  // currentVirtualBalance must equal the header's calculation; do not switch
+  // to VirtualBettingService.getGlobalBalance() — it has a sync race.
   const currentVirtualBalance = virtualBalance + cumulativeProfit
 
   useEffect(() => {
     if (isOpen) {
-      // 다이얼로그 열릴 때 초기 잔액 + 필터 임계값 동기화
       setVirtualBalance(VirtualBettingService.getSettings().initialBalance)
-      setThresholds(FilterThresholdsService.get())
     }
   }, [isOpen])
 
@@ -86,22 +82,16 @@ export function AutoModeSettingsDialog({
     FilterThresholdsService.set({ [key]: n } as Partial<FilterThresholds>)
   }
 
-  // 가상 잔액 변경 핸들러
   const handleVirtualBalanceChange = (newBalance: number) => {
     setVirtualBalance(newBalance)
     VirtualBettingService.updateSettings({ initialBalance: newBalance })
-    // ✅ FIX: setCurrentVirtualBalance 제거 - cumulativeProfit 기반으로 자동 계산됨
     onResetStats()
   }
 
-  // 가상 잔액 리셋 핸들러
   const handleResetVirtualBalance = () => {
     VirtualBettingService.reset()
-    // ✅ FIX: setCurrentVirtualBalance 제거 - onResetStats()가 cumulativeProfit을 0으로 리셋
     onResetStats()
   }
-
-  // NOTE: roomList, enabledRoomIds 제거 - 방 선택은 헤더에서 처리
 
   const betPreview = useMemo(() => {
     const base = settings.baseBetAmount || 10000
@@ -137,13 +127,10 @@ export function AutoModeSettingsDialog({
   const totalRequired = useMemo(() => betPreview.reduce((sum, v) => sum + v, 0), [betPreview])
   
   const winRate = useMemo(() => {
-    return totalWins + totalLosses > 0 
-      ? Math.round((totalWins / (totalWins + totalLosses)) * 100) 
+    return totalWins + totalLosses > 0
+      ? Math.round((totalWins / (totalWins + totalLosses)) * 100)
       : 0
   }, [totalWins, totalLosses])
-
-  // NOTE: handleRoomToggle, handleSelectAllRooms, handleDeselectAllRooms 제거
-  // 방 선택 기능은 헤더의 RoomSelectorModal로 이동
 
   return (
     <SettingsDialogFrame
@@ -276,9 +263,9 @@ export function AutoModeSettingsDialog({
                 label="승/패"
                 value={
                   <>
-                    <span style={{ color: 'var(--status-success)' }}>{totalWins}</span>
-                    <span style={{ margin: '0 4px', color: 'var(--text-muted)' }}>/</span>
-                    <span style={{ color: 'var(--status-danger)' }}>{totalLosses}</span>
+                    <span className="settings-stat-card__wins">{totalWins}</span>
+                    <span className="settings-stat-card__sep">/</span>
+                    <span className="settings-stat-card__losses">{totalLosses}</span>
                   </>
                 }
               />
@@ -300,11 +287,8 @@ export function AutoModeSettingsDialog({
               <button
                 className="ams-btn-outline ams-btn-danger"
                 onClick={() => {
-                  // 1. AutoMode 통계 초기화
                   onResetStats()
-                  // 2. VirtualBetting 상태 초기화 (잔액, 방별 상태, 히스토리)
                   VirtualBettingService.reset()
-                  // 3. 가상 잔액 UI 갱신
                   handleResetVirtualBalance()
                 }}
               >
@@ -390,12 +374,11 @@ export function AutoModeSettingsDialog({
             </div>
             <div className="ams-preview">
               <div className="ams-preview-steps">
-                {betPreview.map((amount, i) => (
-                  <div key={i} className="ams-preview-step">
-                    <span className="ams-preview-level">{i + 1}단계</span>
-                    {settings.betStrategy === 'custom' ? (
+                {betPreview.map((amount, i) =>
+                  settings.betStrategy === 'custom' ? (
+                    <div key={i} className="ams-preview-step">
                       <NumberFieldWithSuffix
-                        label={`${i + 1}단계 금액`}
+                        label={`${i + 1}단계`}
                         value={settings.customBetAmounts?.[i] ?? (settings.baseBetAmount || 10000)}
                         suffix="원"
                         min={1000}
@@ -408,11 +391,14 @@ export function AutoModeSettingsDialog({
                           onUpdateSettings({ customBetAmounts: newAmounts })
                         }}
                       />
-                    ) : (
+                    </div>
+                  ) : (
+                    <div key={i} className="ams-preview-step">
+                      <span className="ams-preview-level">{i + 1}단계</span>
                       <span className="ams-preview-amount">{amount.toLocaleString()}원</span>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  )
+                )}
               </div>
               <div className="ams-preview-total">
                 총 필요 자금: <strong>{totalRequired.toLocaleString()}원</strong>
@@ -420,7 +406,6 @@ export function AutoModeSettingsDialog({
             </div>
           </div>
 
-          {/* 🆕 v2.24: 동시 배팅 제한 설정 */}
           <div className="ams-section">
             <div className="ams-section-title">동시 배팅 제한</div>
             <div className="ams-input-row">

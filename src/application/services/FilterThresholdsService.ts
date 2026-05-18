@@ -61,7 +61,7 @@ class FilterThresholdsServiceImpl {
   }
 
   set(partial: Partial<FilterThresholds>): void {
-    this.values = {
+    const next: FilterThresholds = {
       tieDroughtThreshold: partial.tieDroughtThreshold !== undefined
         ? this.coerce(partial.tieDroughtThreshold, this.values.tieDroughtThreshold, 1, 200)
         : this.values.tieDroughtThreshold,
@@ -72,6 +72,14 @@ class FilterThresholdsServiceImpl {
         ? this.coerce(partial.freshShoeMaxGameNumber, this.values.freshShoeMaxGameNumber, 1, 200)
         : this.values.freshShoeMaxGameNumber,
     }
+    if (
+      next.tieDroughtThreshold === this.values.tieDroughtThreshold &&
+      next.freshRoomGames === this.values.freshRoomGames &&
+      next.freshShoeMaxGameNumber === this.values.freshShoeMaxGameNumber
+    ) {
+      return
+    }
+    this.values = next
     this.save()
     this.emit()
   }

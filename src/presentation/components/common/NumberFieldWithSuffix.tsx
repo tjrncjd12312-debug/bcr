@@ -42,6 +42,7 @@ export function NumberFieldWithSuffix({
             if (raw === '') return
             const n = Number(raw)
             if (!Number.isFinite(n)) return
+            if (n === value) return
             onChange(n)
           }}
         />

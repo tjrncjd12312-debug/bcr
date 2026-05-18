@@ -172,3 +172,6 @@
 }
 .settings-stat-card.positive .settings-stat-card__value { color: var(--status-success); }
 .settings-stat-card.negative .settings-stat-card__value { color: var(--status-danger); }
+.settings-stat-card__wins   { color: var(--status-success); }
+.settings-stat-card__losses { color: var(--status-danger); }
+.settings-stat-card__sep    { color: var(--text-muted); margin: 0 4px; }
