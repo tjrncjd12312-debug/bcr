@@ -268,6 +268,7 @@ export type RoomFilterType =
   | 'banker_dominant'    // 뱅커 우세 (recent 10 games, B > P)
   | 'player_dominant'    // 플레이어 우세 (recent 10 games, P > B)
   | 'tie_drought'        // Tie 미발생 N게임 이상 (default N=20)
+  | 'tie_frequent'       // 최근 TIE_FREQUENT_WINDOW판 안에 Tie ≥ N (default N=2)
   | 'no_tie_room'        // 이 방의 히스토리에 Tie 0건
   | 'fresh_room'         // 방 입장 직후 N게임 이내 (default N=5)
   | 'fresh_shoe'         // 카지노 슈가 막 시작된 방
@@ -275,6 +276,10 @@ export type RoomFilterType =
 
 /** Tie 미발생 임계 게임 수 (tie_drought 필터용) */
 export const TIE_DROUGHT_THRESHOLD = 20
+/** Tie 자주 출현 — 관측 윈도우(고정 30판) (tie_frequent 필터용) */
+export const TIE_FREQUENT_WINDOW = 30
+/** Tie 자주 출현 — 최소 횟수 임계값 (tie_frequent 필터용) */
+export const TIE_FREQUENT_MIN_COUNT = 2
 /** 새 방 진입 직후 N게임 (fresh_room 필터용) */
 export const FRESH_ROOM_GAMES = 5
 /** 카지노 슈가 막 시작된 직후 N게임 (fresh_shoe 필터용) */

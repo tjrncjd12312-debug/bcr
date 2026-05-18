@@ -12,6 +12,7 @@ type ThresholdKey = keyof FilterThresholds
 
 const FILTER_TO_KEY: Partial<Record<RoomFilterType, { key: ThresholdKey; suffix: string }>> = {
   tie_drought: { key: 'tieDroughtThreshold', suffix: '게임' },
+  tie_frequent: { key: 'tieFrequentMinCount', suffix: '번' },
   fresh_room: { key: 'freshRoomGames', suffix: '게임' },
   fresh_shoe: { key: 'freshShoeMaxGameNumber', suffix: '게임' },
 }

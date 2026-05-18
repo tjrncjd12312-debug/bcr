@@ -1,18 +1,25 @@
 // FilterThresholdsService - User-configurable filter threshold values with localStorage persistence
 // Presentation-friendly application service (no React dependency)
 
-import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES, FRESH_SHOE_MAX_GAME_NUMBER } from '../../domain/entities'
+import {
+  TIE_DROUGHT_THRESHOLD,
+  TIE_FREQUENT_MIN_COUNT,
+  FRESH_ROOM_GAMES,
+  FRESH_SHOE_MAX_GAME_NUMBER,
+} from '../../domain/entities'
 
 const STORAGE_KEY = 'bcr-filter-thresholds'
 
 export interface FilterThresholds {
   tieDroughtThreshold: number
+  tieFrequentMinCount: number
   freshRoomGames: number
   freshShoeMaxGameNumber: number
 }
 
 const DEFAULTS: FilterThresholds = {
   tieDroughtThreshold: TIE_DROUGHT_THRESHOLD,
+  tieFrequentMinCount: TIE_FREQUENT_MIN_COUNT,
   freshRoomGames: FRESH_ROOM_GAMES,
   freshShoeMaxGameNumber: FRESH_SHOE_MAX_GAME_NUMBER,
 }
@@ -33,6 +40,7 @@ class FilterThresholdsServiceImpl {
       const parsed = JSON.parse(raw) as Partial<FilterThresholds>
       this.values = {
         tieDroughtThreshold: this.coerce(parsed.tieDroughtThreshold, DEFAULTS.tieDroughtThreshold, 1, 200),
+        tieFrequentMinCount: this.coerce(parsed.tieFrequentMinCount, DEFAULTS.tieFrequentMinCount, 1, 30),
         freshRoomGames: this.coerce(parsed.freshRoomGames, DEFAULTS.freshRoomGames, 1, 200),
         freshShoeMaxGameNumber: this.coerce(parsed.freshShoeMaxGameNumber, DEFAULTS.freshShoeMaxGameNumber, 1, 200),
       }
@@ -65,6 +73,9 @@ class FilterThresholdsServiceImpl {
       tieDroughtThreshold: partial.tieDroughtThreshold !== undefined
         ? this.coerce(partial.tieDroughtThreshold, this.values.tieDroughtThreshold, 1, 200)
         : this.values.tieDroughtThreshold,
+      tieFrequentMinCount: partial.tieFrequentMinCount !== undefined
+        ? this.coerce(partial.tieFrequentMinCount, this.values.tieFrequentMinCount, 1, 30)
+        : this.values.tieFrequentMinCount,
       freshRoomGames: partial.freshRoomGames !== undefined
         ? this.coerce(partial.freshRoomGames, this.values.freshRoomGames, 1, 200)
         : this.values.freshRoomGames,
@@ -74,6 +85,7 @@ class FilterThresholdsServiceImpl {
     }
     if (
       next.tieDroughtThreshold === this.values.tieDroughtThreshold &&
+      next.tieFrequentMinCount === this.values.tieFrequentMinCount &&
       next.freshRoomGames === this.values.freshRoomGames &&
       next.freshShoeMaxGameNumber === this.values.freshShoeMaxGameNumber
     ) {

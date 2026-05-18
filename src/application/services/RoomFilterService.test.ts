@@ -297,4 +297,48 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(room, null, 'fresh_shoe')).toBe(true)
     })
   })
+
+  describe('tie_frequent filter', () => {
+    // Window is fixed at TIE_FREQUENT_WINDOW = 30 most-recent games.
+    // threshold = tieFrequentMinCount (default 2).
+
+    beforeEach(() => {
+      FilterThresholdsService.set({ tieFrequentMinCount: 2 })
+    })
+
+    it('matches when ties in the last 30 games >= threshold', () => {
+      // 2 ties in 10 games — meets default threshold of 2
+      const room = createRoom('r1', createHistory('BPTBPTBPBP'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+    })
+
+    it('does NOT match when tie count is below threshold', () => {
+      // 1 tie in 10 games — below threshold of 2
+      const room = createRoom('r2', createHistory('BPTBPBPBPB'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+
+    it('counts only the most recent 30 games (older ties beyond window are ignored)', () => {
+      FilterThresholdsService.set({ tieFrequentMinCount: 3 })
+      // newest-first history: first 30 chars have 2 ties, then older ties beyond the window
+      // 30 newest: 'BPBPTBPBPBPTBPBPBPBPBPBPBPBPBP' (2 T's at indexes 4 and 11)
+      // appended: 'TTTTT' — these are OLDER games, beyond the 30-window
+      const room = createRoom('r3', createHistory('BPBPTBPBPBPTBPBPBPBPBPBPBPBPBPTTTTT'))
+      // Only 2 T's in the 30-game window → below threshold of 3 → no match
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+
+    it('reacts to threshold changes from FilterThresholdsService', () => {
+      const room = createRoom('r4', createHistory('TBPTBPBP')) // 2 ties
+      FilterThresholdsService.set({ tieFrequentMinCount: 2 })
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+      FilterThresholdsService.set({ tieFrequentMinCount: 3 })
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+
+    it('does NOT match when history has no ties', () => {
+      const room = createRoom('r5', createHistory('BPBPBPBPBP'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+  })
 })

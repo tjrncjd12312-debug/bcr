@@ -10,7 +10,7 @@ import type {
   RoomPredictionState,
   CustomPattern,
 } from '../../domain/entities'
-import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES } from '../../domain/entities'
+import { TIE_DROUGHT_THRESHOLD, TIE_FREQUENT_WINDOW, FRESH_ROOM_GAMES } from '../../domain/entities'
 import { toWinnerArray } from '../../domain/utils/converters'
 import CustomPatternService from './CustomPatternService'
 import FilterThresholdsService from './FilterThresholdsService'
@@ -73,6 +73,12 @@ const BUILT_IN_FILTERS: RoomFilter[] = [
     description: `최근 ${TIE_DROUGHT_THRESHOLD}게임 동안 Tie 미발생`,
   },
   {
+    type: 'tie_frequent',
+    enabled: false,
+    label: '타이 자주',
+    description: `최근 ${TIE_FREQUENT_WINDOW}판 안에 Tie ≥ N`,
+  },
+  {
     type: 'no_tie_room',
     enabled: false,
     label: 'Tie 없는 방',
@@ -115,7 +121,7 @@ class RoomFilterServiceImpl {
   }
 
   getAvailableFilters(): RoomFilter[] {
-    const { tieDroughtThreshold, freshRoomGames, freshShoeMaxGameNumber } = FilterThresholdsService.get()
+    const { tieDroughtThreshold, tieFrequentMinCount, freshRoomGames, freshShoeMaxGameNumber } = FilterThresholdsService.get()
 
     // 1) 내장 필터 - 임계값을 라벨/설명에 반영
     const builtin = BUILT_IN_FILTERS.map(filter => {
@@ -124,6 +130,9 @@ class RoomFilterServiceImpl {
       if (filter.type === 'tie_drought') {
         label = `타이 가뭄 (${tieDroughtThreshold})`
         description = `최근 ${tieDroughtThreshold}게임 동안 Tie 미발생`
+      } else if (filter.type === 'tie_frequent') {
+        label = `타이 자주 (≥${tieFrequentMinCount})`
+        description = `최근 ${TIE_FREQUENT_WINDOW}판 안에 Tie가 ${tieFrequentMinCount}번 이상 나온 방`
       } else if (filter.type === 'fresh_room') {
         label = `신규 방 (≤${freshRoomGames})`
         description = `방 진입 후 ${freshRoomGames}게임 이내`
@@ -337,6 +346,13 @@ class RoomFilterServiceImpl {
         const idx = winners.findIndex(w => w === 'T')
         const gamesSinceTie = idx < 0 ? winners.length : idx
         return gamesSinceTie >= tieDroughtThreshold
+      }
+
+      case 'tie_frequent': {
+        const { tieFrequentMinCount } = FilterThresholdsService.get()
+        const recent = winners.slice(0, TIE_FREQUENT_WINDOW)
+        const tieCount = recent.filter(w => w === 'T').length
+        return tieCount >= tieFrequentMinCount
       }
 
       case 'no_tie_room': {
