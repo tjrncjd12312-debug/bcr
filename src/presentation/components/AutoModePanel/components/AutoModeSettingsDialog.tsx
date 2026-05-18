@@ -7,6 +7,7 @@ import type { AutoModeSettings } from '../../../../application/services/AutoMode
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
 import FilterThresholdsService, { type FilterThresholds } from '../../../../application/services/FilterThresholdsService'
 import { FreshShoeToggle } from '../../common/FreshShoeToggle'
+import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import './AutoModeSettingsDialog.css'
 
@@ -191,20 +192,14 @@ export function AutoModeSettingsDialog({
             <div className="ams-section">
               <div className="ams-section-title">가상 잔액 설정</div>
               <div className="ams-input-row">
-                <div className="ams-input-group">
-                  <label>초기 잔액</label>
-                  <div className="ams-input-wrap">
-                    <input
-                      type="number"
-                      min="100000"
-                      step="100000"
-                      aria-label="초기 잔액"
-                      value={virtualBalance}
-                      onChange={(e) => handleVirtualBalanceChange(Number(e.target.value))}
-                    />
-                    <span className="ams-input-suffix">원</span>
-                  </div>
-                </div>
+                <NumberFieldWithSuffix
+                  label="초기 잔액"
+                  value={virtualBalance}
+                  suffix="원"
+                  min={100000}
+                  step={100000}
+                  onChange={handleVirtualBalanceChange}
+                />
                 <div className="ams-input-group">
                   <label>현재 잔액</label>
                   <div className="ams-virtual-balance-display">
@@ -229,48 +224,30 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">필터 임계값</div>
             <div className="ams-input-row">
-              <label className="ams-input-group">
-                <span>타이 미발생 (가뭄)</span>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="1"
-                    max="200"
-                    aria-label="타이 미발생 (가뭄)"
-                    value={thresholds.tieDroughtThreshold}
-                    onChange={(e) => handleThresholdChange('tieDroughtThreshold', e.target.value)}
-                  />
-                  <span className="ams-input-suffix">게임</span>
-                </div>
-              </label>
-              <label className="ams-input-group">
-                <span>신규 방 기준</span>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="1"
-                    max="200"
-                    aria-label="신규 방 기준"
-                    value={thresholds.freshRoomGames}
-                    onChange={(e) => handleThresholdChange('freshRoomGames', e.target.value)}
-                  />
-                  <span className="ams-input-suffix">게임</span>
-                </div>
-              </label>
-              <label className="ams-input-group">
-                <span>새 슈 기준</span>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="1"
-                    max="200"
-                    aria-label="새 슈 기준"
-                    value={thresholds.freshShoeMaxGameNumber}
-                    onChange={(e) => handleThresholdChange('freshShoeMaxGameNumber', e.target.value)}
-                  />
-                  <span className="ams-input-suffix">게임</span>
-                </div>
-              </label>
+              <NumberFieldWithSuffix
+                label="타이 미발생 (가뭄)"
+                value={thresholds.tieDroughtThreshold}
+                suffix="게임"
+                min={1}
+                max={200}
+                onChange={(n) => handleThresholdChange('tieDroughtThreshold', String(n))}
+              />
+              <NumberFieldWithSuffix
+                label="신규 방 기준"
+                value={thresholds.freshRoomGames}
+                suffix="게임"
+                min={1}
+                max={200}
+                onChange={(n) => handleThresholdChange('freshRoomGames', String(n))}
+              />
+              <NumberFieldWithSuffix
+                label="새 슈 기준"
+                value={thresholds.freshShoeMaxGameNumber}
+                suffix="게임"
+                min={1}
+                max={200}
+                onChange={(n) => handleThresholdChange('freshShoeMaxGameNumber', String(n))}
+              />
             </div>
             <div className="ams-hint">
               타이 가뭄: 최근 N게임 동안 타이 미발생인 방만 필터링 · 필터 드롭다운에서 '타이 가뭄' 활성화 시 적용
@@ -374,45 +351,34 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">배팅 금액</div>
             <div className="ams-input-row">
-              <div className="ams-input-group">
-                <label>기본 배팅금</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="1000"
-                    step="1000"
-                    value={settings.baseBetAmount || 10000}
-                    onChange={(e) => onUpdateSettings({ baseBetAmount: Number(e.target.value) })}
-                  />
-                  <span className="ams-input-suffix">원</span>
-                </div>
-              </div>
-              <div className="ams-input-group">
-                <label>최대 단계</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={settings.maxMartin || 5}
-                    onChange={(e) => {
-                      const newMaxMartin = Number(e.target.value)
-                      // 커스텀 전략일 때 배열 크기 조정
-                      if (settings.betStrategy === 'custom') {
-                        const baseAmount = settings.baseBetAmount || 10000
-                        const currentAmounts = settings.customBetAmounts || []
-                        const newAmounts = Array(newMaxMartin).fill(baseAmount).map((def, i) =>
-                          currentAmounts[i] ?? def
-                        )
-                        onUpdateSettings({ maxMartin: newMaxMartin, customBetAmounts: newAmounts })
-                      } else {
-                        onUpdateSettings({ maxMartin: newMaxMartin })
-                      }
-                    }}
-                  />
-                  <span className="ams-input-suffix">단계</span>
-                </div>
-              </div>
+              <NumberFieldWithSuffix
+                label="기본 배팅금"
+                value={settings.baseBetAmount || 10000}
+                suffix="원"
+                min={1000}
+                step={1000}
+                onChange={(n) => onUpdateSettings({ baseBetAmount: n })}
+              />
+              <NumberFieldWithSuffix
+                label="최대 단계"
+                value={settings.maxMartin || 5}
+                suffix="단계"
+                min={1}
+                max={100}
+                onChange={(n) => {
+                  // 커스텀 전략일 때 배열 크기 조정
+                  if (settings.betStrategy === 'custom') {
+                    const baseAmount = settings.baseBetAmount || 10000
+                    const currentAmounts = settings.customBetAmounts || []
+                    const newAmounts = Array(n).fill(baseAmount).map((def, i) =>
+                      currentAmounts[i] ?? def
+                    )
+                    onUpdateSettings({ maxMartin: n, customBetAmounts: newAmounts })
+                  } else {
+                    onUpdateSettings({ maxMartin: n })
+                  }
+                }}
+              />
             </div>
           </div>
 
@@ -427,22 +393,20 @@ export function AutoModeSettingsDialog({
                   <div key={i} className="ams-preview-step">
                     <span className="ams-preview-level">{i + 1}단계</span>
                     {settings.betStrategy === 'custom' ? (
-                      <div className="ams-input-wrap ams-preview-input">
-                        <input
-                          type="number"
-                          min="1000"
-                          step="1000"
-                          value={settings.customBetAmounts?.[i] ?? (settings.baseBetAmount || 10000)}
-                          onChange={(e) => {
-                            const baseAmount = settings.baseBetAmount || 10000
-                            const maxLevel = settings.maxMartin || 5
-                            const newAmounts = [...(settings.customBetAmounts || Array(maxLevel).fill(baseAmount))]
-                            newAmounts[i] = Number(e.target.value)
-                            onUpdateSettings({ customBetAmounts: newAmounts })
-                          }}
-                        />
-                        <span className="ams-input-suffix">원</span>
-                      </div>
+                      <NumberFieldWithSuffix
+                        label={`${i + 1}단계 금액`}
+                        value={settings.customBetAmounts?.[i] ?? (settings.baseBetAmount || 10000)}
+                        suffix="원"
+                        min={1000}
+                        step={1000}
+                        onChange={(n) => {
+                          const baseAmount = settings.baseBetAmount || 10000
+                          const maxLevel = settings.maxMartin || 5
+                          const newAmounts = [...(settings.customBetAmounts || Array(maxLevel).fill(baseAmount))]
+                          newAmounts[i] = n
+                          onUpdateSettings({ customBetAmounts: newAmounts })
+                        }}
+                      />
                     ) : (
                       <span className="ams-preview-amount">{amount.toLocaleString()}원</span>
                     )}
@@ -459,21 +423,16 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">동시 배팅 제한</div>
             <div className="ams-input-row">
-              <div className="ams-input-group" style={{ flex: 1 }}>
-                <label>최대 동시 배팅 수</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="0"
-                    value={settings.maxConcurrentBets ?? 0}
-                    onChange={(e) => onUpdateSettings({ maxConcurrentBets: Math.max(0, Number(e.target.value)) })}
-                  />
-                  <span className="ams-input-suffix">개</span>
-                </div>
-                <div className="ams-hint" style={{ fontSize: '0.75rem', color: '#888', marginTop: '4px' }}>
-                  0 = 전체 방 배팅 (동시배팅 제한없음)
-                </div>
-              </div>
+              <NumberFieldWithSuffix
+                label="최대 동시 배팅 수"
+                value={settings.maxConcurrentBets ?? 0}
+                suffix="개"
+                min={0}
+                onChange={(n) => onUpdateSettings({ maxConcurrentBets: Math.max(0, n) })}
+              />
+            </div>
+            <div className="ams-hint" style={{ fontSize: '0.75rem', color: '#888', marginTop: '4px' }}>
+              0 = 전체 방 배팅 (동시배팅 제한없음)
             </div>
           </div>
         </>
@@ -488,32 +447,22 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">손익 제한</div>
             <div className="ams-input-row">
-              <div className="ams-input-group">
-                <label>윈컷 (목표 수익)</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="0"
-                    step="10000"
-                    value={settings.winCutAmount || 0}
-                    onChange={(e) => onUpdateSettings({ winCutAmount: Number(e.target.value) })}
-                  />
-                  <span className="ams-input-suffix">원</span>
-                </div>
-              </div>
-              <div className="ams-input-group">
-                <label>로스컷 (최대 손실)</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="0"
-                    step="10000"
-                    value={settings.lossCutAmount || 0}
-                    onChange={(e) => onUpdateSettings({ lossCutAmount: Number(e.target.value) })}
-                  />
-                  <span className="ams-input-suffix">원</span>
-                </div>
-              </div>
+              <NumberFieldWithSuffix
+                label="윈컷 (목표 수익)"
+                value={settings.winCutAmount || 0}
+                suffix="원"
+                min={0}
+                step={10000}
+                onChange={(n) => onUpdateSettings({ winCutAmount: n })}
+              />
+              <NumberFieldWithSuffix
+                label="로스컷 (최대 손실)"
+                value={settings.lossCutAmount || 0}
+                suffix="원"
+                min={0}
+                step={10000}
+                onChange={(n) => onUpdateSettings({ lossCutAmount: n })}
+              />
             </div>
             <div className="ams-hint">0 = 무제한 (제한 없음)</div>
           </div>
@@ -522,19 +471,14 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">연패 제한</div>
             <div className="ams-input-row">
-              <div className="ams-input-group full">
-                <label>연패 기준 (해당 방 배팅 중지)</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="1"
-                    max="20"
-                    value={settings.globalMaxConsecutiveLosses || 5}
-                    onChange={(e) => onUpdateSettings({ globalMaxConsecutiveLosses: Number(e.target.value) })}
-                  />
-                  <span className="ams-input-suffix">연패</span>
-                </div>
-              </div>
+              <NumberFieldWithSuffix
+                label="연패 기준 (해당 방 배팅 중지)"
+                value={settings.globalMaxConsecutiveLosses || 5}
+                suffix="연패"
+                min={1}
+                max={20}
+                onChange={(n) => onUpdateSettings({ globalMaxConsecutiveLosses: n })}
+              />
             </div>
             <div className="ams-hint">설정한 연패 횟수 도달 시 해당 방 배팅 중지</div>
           </div>
@@ -543,19 +487,14 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">휴식 시간</div>
             <div className="ams-input-row">
-              <div className="ams-input-group full">
-                <label>연패 후 휴식</label>
-                <div className="ams-input-wrap">
-                  <input
-                    type="number"
-                    min="0"
-                    max="60"
-                    value={settings.restDurationMinutes || 0}
-                    onChange={(e) => onUpdateSettings({ restDurationMinutes: Number(e.target.value) })}
-                  />
-                  <span className="ams-input-suffix">분</span>
-                </div>
-              </div>
+              <NumberFieldWithSuffix
+                label="연패 후 휴식"
+                value={settings.restDurationMinutes || 0}
+                suffix="분"
+                min={0}
+                max={60}
+                onChange={(n) => onUpdateSettings({ restDurationMinutes: n })}
+              />
             </div>
             <div className="ams-hint">0 = 휴식 없이 바로 재개</div>
           </div>
