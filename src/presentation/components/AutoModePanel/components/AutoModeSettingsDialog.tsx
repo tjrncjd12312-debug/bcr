@@ -5,6 +5,7 @@ import React, { useEffect, useState, useMemo } from 'react'
 import type { BetStrategyType } from '../../../../domain/entities'
 import type { AutoModeSettings } from '../../../../application/services/AutoModeService'
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
+import FilterThresholdsService, { type FilterThresholds } from '../../../../application/services/FilterThresholdsService'
 import { getFreshShoePreset } from '../../../../application/di/setupContainer'
 import './AutoModeSettingsDialog.css'
 
@@ -65,6 +66,13 @@ export function AutoModeSettingsDialog({
     VirtualBettingService.getSettings().initialBalance
   )
 
+  // 필터 임계값 상태 - FilterThresholdsService와 양방향 동기화
+  const [thresholds, setThresholds] = useState<FilterThresholds>(() => FilterThresholdsService.get())
+
+  useEffect(() => {
+    return FilterThresholdsService.onChange(setThresholds)
+  }, [])
+
   // ✅ FIX: currentVirtualBalance를 cumulativeProfit 기반으로 계산 (헤더와 동일한 로직)
   // VirtualBettingService.getGlobalBalance()는 동기화 문제가 있어 사용하지 않음
   const currentVirtualBalance = virtualBalance + cumulativeProfit
@@ -72,12 +80,20 @@ export function AutoModeSettingsDialog({
   useEffect(() => {
     if (isOpen) {
       setAnimateIn(true)
-      // 다이얼로그 열릴 때 초기 잔액 동기화
+      // 다이얼로그 열릴 때 초기 잔액 + 필터 임계값 동기화
       setVirtualBalance(VirtualBettingService.getSettings().initialBalance)
+      setThresholds(FilterThresholdsService.get())
     } else {
       setAnimateIn(false)
     }
   }, [isOpen])
+
+  // 필터 임계값 변경 핸들러
+  const handleThresholdChange = (key: keyof FilterThresholds, raw: string) => {
+    const n = parseInt(raw, 10)
+    if (!Number.isFinite(n)) return
+    FilterThresholdsService.set({ [key]: n } as Partial<FilterThresholds>)
+  }
 
   // 가상 잔액 변경 핸들러
   const handleVirtualBalanceChange = (newBalance: number) => {
@@ -98,9 +114,12 @@ export function AutoModeSettingsDialog({
 
   const betPreview = useMemo(() => {
     const base = settings.baseBetAmount || 10000
-    const max = Math.min(settings.maxMartin || 5, 10) // 최대 10단계까지 지원
+    const max = Math.min(settings.maxMartin || 5, 100) // 최대 100단계까지 지원
     const result: number[] = []
-    const fib = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+    // Generate fibonacci multipliers up to `max` (1, 1, 2, 3, 5, 8, ...) so the
+    // preview matches MartingaleManager.calculateBetAmount for any allowed level.
+    const fib: number[] = [1, 1]
+    for (let i = 2; i < max; i++) fib.push(fib[i - 1] + fib[i - 2])
 
     for (let i = 0; i < max; i++) {
       switch (settings.betStrategy) {
@@ -221,6 +240,7 @@ export function AutoModeSettingsDialog({
                           type="number"
                           min="100000"
                           step="100000"
+                          aria-label="초기 잔액"
                           value={virtualBalance}
                           onChange={(e) => handleVirtualBalanceChange(Number(e.target.value))}
                         />
@@ -243,9 +263,61 @@ export function AutoModeSettingsDialog({
                       </div>
                     </div>
                   </div>
-                  <div className="ams-hint">초기 잔액 변경 시 자동으로 리셋됩니다</div>
+                  <div className="ams-hint">초기 잔액 변경 시 자동으로 리셋됩니다 · 다음 실행에도 저장됨</div>
                 </div>
               )}
+
+              {/* 필터 임계값 설정 (Tie 가뭄 / 신규 방 / Fresh Shoe 기준 게임수) */}
+              <div className="ams-section">
+                <div className="ams-section-title">필터 임계값</div>
+                <div className="ams-input-row">
+                  <label className="ams-input-group">
+                    <span>Tie 미발생 (가뭄)</span>
+                    <div className="ams-input-wrap">
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        aria-label="Tie 미발생 (가뭄)"
+                        value={thresholds.tieDroughtThreshold}
+                        onChange={(e) => handleThresholdChange('tieDroughtThreshold', e.target.value)}
+                      />
+                      <span className="ams-input-suffix">게임</span>
+                    </div>
+                  </label>
+                  <label className="ams-input-group">
+                    <span>신규 방 기준</span>
+                    <div className="ams-input-wrap">
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        aria-label="신규 방 기준"
+                        value={thresholds.freshRoomGames}
+                        onChange={(e) => handleThresholdChange('freshRoomGames', e.target.value)}
+                      />
+                      <span className="ams-input-suffix">게임</span>
+                    </div>
+                  </label>
+                  <label className="ams-input-group">
+                    <span>Fresh Shoe 기준</span>
+                    <div className="ams-input-wrap">
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        aria-label="Fresh Shoe 기준"
+                        value={thresholds.freshShoeMaxGameNumber}
+                        onChange={(e) => handleThresholdChange('freshShoeMaxGameNumber', e.target.value)}
+                      />
+                      <span className="ams-input-suffix">게임</span>
+                    </div>
+                  </label>
+                </div>
+                <div className="ams-hint">
+                  Tie 가뭄: 최근 N게임 동안 Tie 미발생인 방만 필터링 · 필터 드롭다운에서 '타이 가뭄' 활성화 시 적용
+                </div>
+              </div>
 
               {/* 현재 상태 */}
               <div className="ams-section">
@@ -382,7 +454,7 @@ export function AutoModeSettingsDialog({
                       <input
                         type="number"
                         min="1"
-                        max="10"
+                        max="100"
                         value={settings.maxMartin || 5}
                         onChange={(e) => {
                           const newMaxMartin = Number(e.target.value)
