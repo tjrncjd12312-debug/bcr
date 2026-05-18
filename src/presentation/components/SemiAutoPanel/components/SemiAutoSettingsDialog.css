@@ -41,63 +41,6 @@
   gap: 16px;
 }
 
-.sa-input-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.sa-dialog-input,
-.sa-dialog-select {
-  width: 100%;
-  background: var(--modal-elevated);
-  border: 1px solid var(--modal-border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s;
-  outline: none;
-}
-
-.sa-dialog-input:focus,
-.sa-dialog-select:focus {
-  border-color: var(--accent-primary);
-  background: var(--modal-bg);
-  box-shadow: 0 0 0 3px rgba(49, 130, 246, 0.15);
-}
-
-.sa-input-suffix {
-  position: absolute;
-  right: 14px;
-  color: var(--text-muted);
-  font-size: 12px;
-  pointer-events: none;
-}
-
-.sa-select-wrapper {
-  position: relative;
-}
-
-.sa-select-wrapper::after {
-  content: '';
-  position: absolute;
-  right: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 10px;
-  height: 6px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23a3a3a3' d='M5 6L0 1L1 0L5 4L9 0L10 1L5 6Z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  pointer-events: none;
-}
-
-.sa-dialog-select {
-  appearance: none;
-  padding-right: 36px;
-}
-
 /* Checkbox */
 .sa-checkbox-label {
   display: flex;
@@ -117,19 +60,6 @@
 .sa-checkbox-text {
   font-size: 14px;
   color: var(--text-primary);
-}
-
-/* Auto Betting Warning */
-.sa-auto-betting-warning {
-  margin-top: 8px;
-  padding: 12px 14px;
-  background: rgba(248, 113, 113, 0.12);
-  border: 1px solid rgba(248, 113, 113, 0.25);
-  border-radius: var(--radius-md);
-  color: var(--status-danger);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.5;
 }
 
 /* Buttons */
@@ -187,71 +117,6 @@
   color: var(--text-muted);
   margin: 4px 0 12px 0;
   line-height: 1.5;
-}
-
-/* Pattern List */
-.sa-pattern-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.sa-pattern-item {
-  background: var(--modal-elevated);
-  border-radius: var(--radius-md);
-  padding: 14px;
-  border: 1px solid var(--modal-border);
-  transition: all 0.2s;
-}
-
-.sa-pattern-item:hover {
-  border-color: rgba(255, 255, 255, 0.15);
-}
-
-.sa-pattern-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.sa-pattern-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.sa-pattern-options {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--modal-border);
-}
-
-.sa-pattern-option {
-  flex: 1;
-}
-
-.sa-dialog-select.small {
-  padding: 8px 32px 8px 12px;
-  font-size: 12px;
-  border-radius: var(--radius-sm);
-}
-
-.sa-checkbox-label.compact {
-  padding: 0;
-  gap: 10px;
-}
-
-.sa-checkbox-label.compact input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-}
-
-.sa-checkbox-text.small {
-  font-size: 12px;
-  white-space: nowrap;
 }
 
 /* Room List */
@@ -340,121 +205,6 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   BETTING STRATEGY STYLES
-   ═══════════════════════════════════════════════════════════════ */
-
-/* Strategy Selection Grid */
-.sa-strategy-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-
-.sa-strategy-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 16px 12px;
-  background: var(--modal-elevated);
-  border: 1px solid var(--modal-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.sa-strategy-btn:hover {
-  background: var(--bg-hover);
-  border-color: rgba(255, 255, 255, 0.15);
-}
-
-.sa-strategy-btn.active {
-  background: var(--accent-muted);
-  border-color: var(--accent-primary);
-  box-shadow: var(--shadow-glow-accent);
-}
-
-.sa-strategy-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.sa-strategy-btn.active .sa-strategy-label {
-  color: var(--accent-primary);
-}
-
-.sa-strategy-desc {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.sa-strategy-btn.active .sa-strategy-desc {
-  color: var(--text-secondary);
-}
-
-/* Bet Amount Preview */
-.sa-bet-preview {
-  margin-top: 16px;
-  padding: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--modal-border);
-}
-
-.sa-bet-preview-title {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.sa-bet-preview-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sa-bet-step {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 8px 12px;
-  background: var(--modal-elevated);
-  border-radius: var(--radius-sm);
-  min-width: 72px;
-}
-
-.sa-bet-step-level {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-bottom: 2px;
-}
-
-.sa-bet-step-amount {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-}
-
-/* Auto Betting Warning */
-.sa-auto-betting-warning {
-  margin-top: 8px;
-  padding: 10px 12px;
-  background: rgba(244, 67, 54, 0.1);
-  border: 1px solid rgba(244, 67, 54, 0.3);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  color: var(--status-danger);
-  font-weight: 500;
-}
-
-/* ═══════════════════════════════════════════════════════════════
    BALANCE DISPLAY STYLES
    ═══════════════════════════════════════════════════════════════ */
 
@@ -514,11 +264,5 @@
   .sa-setting-grid {
     grid-template-columns: 1fr;
     gap: 14px;
-  }
-
-  .sa-pattern-options {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
   }
 }
