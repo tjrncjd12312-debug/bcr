@@ -6,7 +6,7 @@ import type { BetStrategyType } from '../../../../domain/entities'
 import type { AutoModeSettings } from '../../../../application/services/AutoModeService'
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
 import FilterThresholdsService, { type FilterThresholds } from '../../../../application/services/FilterThresholdsService'
-import { getFreshShoePreset } from '../../../../application/di/setupContainer'
+import { FreshShoeToggle } from '../../common/FreshShoeToggle'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import './AutoModeSettingsDialog.css'
 
@@ -52,20 +52,6 @@ export function AutoModeSettingsDialog({
   realBalance,
 }: AutoModeSettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
-
-  // Fresh-Shoe Tie 마틴 프리셋 토글
-  const [freshShoeOn, setFreshShoeOn] = useState(() => {
-    const p = getFreshShoePreset()
-    return p ? p.isEnabled('auto') : false
-  })
-
-  const handleFreshShoeToggle = (next: boolean) => {
-    const p = getFreshShoePreset()
-    if (!p) return
-    if (next) p.enable('auto')
-    else p.disable('auto')
-    setFreshShoeOn(p.isEnabled('auto'))
-  }
 
   // 가상 잔액 상태 - VirtualBettingService에서 초기화
   const [virtualBalance, setVirtualBalance] = useState(() =>
@@ -355,26 +341,7 @@ export function AutoModeSettingsDialog({
       {/* ========== Tab: 배팅 전략 ========== */}
       {activeTab === 'strategy' && (
         <>
-          {/* Fresh-Shoe Tie 마틴 프리셋 토글 */}
-          <div style={{
-            border: '1px solid var(--color-border, #444)',
-            borderRadius: 8,
-            padding: 12,
-            margin: '12px 0',
-            background: 'var(--color-surface-2, #1c1c1c)',
-          }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-              <input
-                type="checkbox"
-                checked={freshShoeOn}
-                onChange={(e) => handleFreshShoeToggle(e.target.checked)}
-              />
-              새 슈 타이 마틴
-            </label>
-            <div style={{ fontSize: 12, color: 'var(--color-text-dim, #999)', marginTop: 6, lineHeight: 1.5 }}>
-              {getFreshShoePreset()?.getDescription() ?? '슈가 막 시작된 방에서만 타이 마틴 베팅. 적중/관망 타이/마틴 한도 시 다음 방으로.'}
-            </div>
-          </div>
+          <FreshShoeToggle scope="auto" />
 
           {/* 배팅 전략 선택 */}
           <div className="ams-section">

@@ -4,7 +4,7 @@ import type {
     RoomBetConfig,
 } from '../../../../domain/entities'
 import type { SemiAutoSettings } from '../../../../application/services/SemiAutoService'
-import { getFreshShoePreset } from '../../../../application/di/setupContainer'
+import { FreshShoeToggle } from '../../common/FreshShoeToggle'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import './SemiAutoSettingsDialog.css'
 
@@ -48,20 +48,6 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
     sessionProfit = 0,
 }) => {
     const [activeTab, setActiveTab] = useState<SettingsTab>('general')
-
-    // Fresh-Shoe Tie 마틴 프리셋 토글
-    const [freshShoeOn, setFreshShoeOn] = useState(() => {
-        const p = getFreshShoePreset()
-        return p ? p.isEnabled('semiauto') : false
-    })
-
-    const handleFreshShoeToggle = (next: boolean) => {
-        const p = getFreshShoePreset()
-        if (!p) return
-        if (next) p.enable('semiauto')
-        else p.disable('semiauto')
-        setFreshShoeOn(p.isEnabled('semiauto'))
-    }
 
     // Convert rooms Map to array for rendering
     const roomList = useMemo(() => Array.from(rooms.values()), [rooms])
@@ -131,30 +117,10 @@ export const SemiAutoSettingsDialog: React.FC<SemiAutoSettingsDialogProps> = ({
             {/* Tab 1: General Settings */}
             {activeTab === 'general' && (
                 <>
-                    {/* Fresh-Shoe Tie 마틴 프리셋 토글 */}
-                    <div style={{
-                        border: '1px solid var(--color-border, #444)',
-                        borderRadius: 8,
-                        padding: 12,
-                        margin: '12px 0',
-                        background: 'var(--color-surface-2, #1c1c1c)',
-                    }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-                            <input
-                                type="checkbox"
-                                checked={freshShoeOn}
-                                onChange={(e) => handleFreshShoeToggle(e.target.checked)}
-                            />
-                            새 슈 타이 마틴
-                        </label>
-                        <div style={{ fontSize: 12, color: 'var(--color-text-dim, #999)', marginTop: 6, lineHeight: 1.5 }}>
-                            {(getFreshShoePreset()?.getDescription() ?? '')}
-                            {' '}
-                            <strong style={{ color: 'var(--color-warn, #d97706)' }}>
-                                ⚠ 반자동 모드의 타이 베팅 강제는 후속 패치에서 지원. 현재 토글은 '새 슈' 필터와 이동 트리거만 활성화.
-                            </strong>
-                        </div>
-                    </div>
+                    <FreshShoeToggle
+                        scope="semiauto"
+                        warning="⚠ 반자동 모드의 타이 베팅 강제는 후속 패치에서 지원. 현재 토글은 '새 슈' 필터와 이동 트리거만 활성화."
+                    />
 
                     {/* Section 1: Balance Display */}
                     <div className="sa-dialog-section">
