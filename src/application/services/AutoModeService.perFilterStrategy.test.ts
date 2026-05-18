@@ -226,4 +226,42 @@ describe('AutoModeService — per-filter strategy override', () => {
     expect(sub.getAmount()).toBe(BASE_BET) // fibonacci[0] * baseBet = 1 * 1000
     expect(PatternBettingService.getBetStrategy('banker_dominant')).toBe('fibonacci')
   })
+
+  // 사용자 시나리오: "타이 자주 필터에 걸린 방에 타이 마틴으로 배팅"
+  // 1. tie_frequent 필터를 켜고
+  // 2. 그 필터의 배팅 방향을 T로 지정하고
+  // 3. 그 필터의 전략은 martingale (기본값)
+  // → 매칭되는 방에서 Tie 베팅이 나가고, level 0에서 baseBet 금액
+  it('honors tie_frequent filter + T direction + martingale strategy end-to-end', async () => {
+    // Tie 방향 + martingale 전략을 tie_frequent 필터에 지정
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+
+    // 최근 8판 중 Tie가 3번 → 기본 tieFrequentMinCount=2를 넘김 → 필터 매칭
+    const room = makeRoom('rTie', ['T', 'B', 'P', 'T', 'B', 'P', 'T', 'B'])
+    adapter.setRoom(room)
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rTie'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    // bet_placed 이벤트에서 betType과 betAmount 둘 다 캡처
+    let placedType: string | null = null
+    let placedAmount: number | null = null
+    const unsub = AutoModeService.onBetLog((ev: AutoModeBetLogEvent) => {
+      if (ev.roomId === 'rTie' && ev.type === 'bet_placed' && placedType === null) {
+        placedType = ev.betType ?? null
+        placedAmount = ev.betAmount ?? null
+      }
+    })
+
+    adapter.emitBettingPhase({ roomId: 'rTie', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    // 베팅 방향: 사용자가 T 지정 → 실제 베팅 타입도 Tie
+    expect(placedType).toBe('Tie')
+    // 마틴 전략 level 0 → baseBet 그대로
+    expect(placedAmount).toBe(BASE_BET)
+  })
 })
