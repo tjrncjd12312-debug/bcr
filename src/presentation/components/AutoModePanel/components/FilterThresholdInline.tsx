@@ -1,7 +1,9 @@
-// FilterThresholdInline - Per-row threshold input shown inside each filter
+// FilterThresholdInline - Per-row threshold input(s) shown inside each filter
 // dropdown item. Renders nothing for filter types that have no threshold.
-// Backed by FilterThresholdsService (same store the old global FilterThresholdInputs used),
-// so each filter row reads / writes only its own value.
+// Backed by FilterThresholdsService (same store the old global
+// FilterThresholdInputs used), so each filter row reads / writes only its
+// own value. Some filters (tie_frequent) need MORE than one input — the
+// component renders each slot with optional prefix/suffix text.
 
 import { useEffect, useState } from 'react'
 import type { RoomFilterType } from '../../../../domain/entities'
@@ -10,11 +12,29 @@ import './FilterThresholdInline.css'
 
 type ThresholdKey = keyof FilterThresholds
 
-const FILTER_TO_KEY: Partial<Record<RoomFilterType, { key: ThresholdKey; suffix: string }>> = {
-  tie_drought: { key: 'tieDroughtThreshold', suffix: '게임' },
-  tie_frequent: { key: 'tieFrequentMinCount', suffix: '번' },
-  fresh_room: { key: 'freshRoomGames', suffix: '게임' },
-  fresh_shoe: { key: 'freshShoeMaxGameNumber', suffix: '게임' },
+interface ThresholdSlot {
+  key: ThresholdKey
+  prefix?: string
+  suffix: string
+  min?: number
+  max?: number
+}
+
+const FILTER_TO_SLOTS: Partial<Record<RoomFilterType, ThresholdSlot[]>> = {
+  tie_drought: [
+    { key: 'tieDroughtThreshold', suffix: '게임' },
+  ],
+  tie_frequent: [
+    { key: 'tieFrequentWindow', prefix: '최근', suffix: '판 중', min: 5, max: 200 },
+    { key: 'tieFrequentMinCount', suffix: '번~', min: 1, max: 99 },
+    { key: 'tieFrequentMaxCount', suffix: '번', min: 1, max: 99 },
+  ],
+  fresh_room: [
+    { key: 'freshRoomGames', suffix: '게임' },
+  ],
+  fresh_shoe: [
+    { key: 'freshShoeMaxGameNumber', suffix: '게임' },
+  ],
 }
 
 interface FilterThresholdInlineProps {
@@ -22,23 +42,21 @@ interface FilterThresholdInlineProps {
 }
 
 export default function FilterThresholdInline({ filterType }: FilterThresholdInlineProps) {
-  const mapping = FILTER_TO_KEY[filterType]
-  const [value, setValue] = useState<number>(() =>
-    mapping ? FilterThresholdsService.get()[mapping.key] : 0
-  )
+  const slots = FILTER_TO_SLOTS[filterType]
+  const [values, setValues] = useState<FilterThresholds>(() => FilterThresholdsService.get())
 
   useEffect(() => {
-    if (!mapping) return
-    setValue(FilterThresholdsService.get()[mapping.key])
-    return FilterThresholdsService.onChange((v) => setValue(v[mapping.key]))
-  }, [mapping?.key])
+    if (!slots) return
+    setValues(FilterThresholdsService.get())
+    return FilterThresholdsService.onChange(setValues)
+  }, [slots])
 
-  if (!mapping) return null
+  if (!slots) return null
 
-  const handleChange = (raw: string) => {
+  const handleChange = (key: ThresholdKey, raw: string) => {
     const n = parseInt(raw, 10)
     if (!Number.isFinite(n)) return
-    FilterThresholdsService.set({ [mapping.key]: n } as Partial<FilterThresholds>)
+    FilterThresholdsService.set({ [key]: n } as Partial<FilterThresholds>)
   }
 
   return (
@@ -47,17 +65,24 @@ export default function FilterThresholdInline({ filterType }: FilterThresholdInl
       onClick={(e) => e.stopPropagation()}
       title="이 필터의 임계값"
     >
-      <input
-        className="filter-threshold-inline__input"
-        type="number"
-        min={1}
-        max={200}
-        value={value}
-        onChange={(e) => handleChange(e.target.value)}
-        onClick={(e) => e.stopPropagation()}
-        aria-label="필터 임계값"
-      />
-      <span className="filter-threshold-inline__suffix">{mapping.suffix}</span>
+      {slots.map((slot, idx) => (
+        <span key={slot.key} className="filter-threshold-inline__slot">
+          {slot.prefix && (
+            <span className="filter-threshold-inline__prefix">{slot.prefix}</span>
+          )}
+          <input
+            className="filter-threshold-inline__input"
+            type="number"
+            min={slot.min ?? 1}
+            max={slot.max ?? 200}
+            value={values[slot.key]}
+            onChange={(e) => handleChange(slot.key, e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={slots.length === 1 ? '필터 임계값' : `필터 임계값 ${idx + 1}`}
+          />
+          <span className="filter-threshold-inline__suffix">{slot.suffix}</span>
+        </span>
+      ))}
     </span>
   )
 }

@@ -1,11 +1,25 @@
-/* FilterThresholdInline - Compact per-row threshold input */
+/* FilterThresholdInline - Compact per-row threshold input(s).
+ * Some filters expose multiple slots in one row (e.g. tie_frequent has
+ * window + min + max); each slot has its own prefix/suffix. */
 
 .filter-threshold-inline {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   margin: 0 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.filter-threshold-inline__slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.filter-threshold-inline__prefix {
+  font-size: 10px;
+  color: var(--text-muted, #888);
 }
 
 .filter-threshold-inline__input {

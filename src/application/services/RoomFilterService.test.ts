@@ -340,5 +340,30 @@ describe('RoomFilterService', () => {
       const room = createRoom('r5', createHistory('BPBPBPBPBP'))
       expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
     })
+
+    it('respects a configurable window — only counts ties inside it', () => {
+      // 50-game window with 4 ties spread across the last 50 games
+      FilterThresholdsService.set({
+        tieFrequentWindow: 50,
+        tieFrequentMinCount: 4,
+      })
+      // 40 newest games with 4 ties + 20 older games (irrelevant)
+      const newest = 'BPBPTBPBPBPTBPBPBPBPBPBPTBPBPBPBPBPBPTBP' // 40 chars, 4 T's
+      const older = 'TTTTTTTTTTBPBPBPBPBP' // 20 chars (older, beyond 50 window)
+      const room = createRoom('rW', createHistory(newest + older))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+    })
+
+    it('honors max count — does NOT match once tie count exceeds the upper bound', () => {
+      // User wants "exactly 5 ties" → set both min and max to 5
+      FilterThresholdsService.set({
+        tieFrequentMinCount: 5,
+        tieFrequentMaxCount: 5,
+      })
+      const exactlyFiveTies = createRoom('rX', createHistory('TBPTBPTBPTBPTBPBP')) // 5 T's
+      const sixTies = createRoom('rY', createHistory('TBPTBPTBPTBPTBPBPT')) // 6 T's
+      expect(RoomFilterService.matchesFilter(exactlyFiveTies, null, 'tie_frequent')).toBe(true)
+      expect(RoomFilterService.matchesFilter(sixTies, null, 'tie_frequent')).toBe(false)
+    })
   })
 })
