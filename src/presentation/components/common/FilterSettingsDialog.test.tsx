@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { FilterSettingsDialog } from './FilterSettingsDialog'
+import PatternBettingService from '../../../application/services/PatternBettingService'
 import type { RoomFilter } from '../../../domain/entities'
 
 const isEnabled = vi.fn(() => false)
@@ -52,11 +53,12 @@ describe('FilterSettingsDialog', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders all four sections', () => {
+  it('renders all five sections', () => {
     renderDialog()
+    expect(screen.getByText('타이 자동 배팅')).toBeInTheDocument()
     expect(screen.getByText('활성 필터')).toBeInTheDocument()
-    expect(screen.getByText('타이 프리셋')).toBeInTheDocument()
     expect(screen.getByText('필터별 세부 설정')).toBeInTheDocument()
+    expect(screen.getByText('고급 — 새 슈 전용 타이 자동 이동')).toBeInTheDocument()
     expect(screen.getByText('커스텀 패턴')).toBeInTheDocument()
   })
 
@@ -116,5 +118,35 @@ describe('FilterSettingsDialog', () => {
     const { props } = renderDialog()
     fireEvent.click(screen.getByRole('button', { name: '확인' }))
     expect(props.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  // "한 번 클릭" 카드 (어르신 사용자용 진입점) 테스트
+  describe('타이 자동 배팅 quick toggle', () => {
+    it('shows OFF status when tie_frequent is not active', () => {
+      renderDialog({ activeFilters: [] })
+      expect(screen.getByText('꺼짐 — 켜면 자동으로 시작됩니다')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '켜기', pressed: false })).toBeInTheDocument()
+    })
+
+    it('clicking 켜기 activates the tie_frequent filter via toggleFilter', () => {
+      const { props } = renderDialog({ activeFilters: [] })
+      fireEvent.click(screen.getByRole('button', { name: '켜기' }))
+      expect(props.toggleFilter).toHaveBeenCalledWith('tie_frequent')
+    })
+
+    it('shows match count when 켜진 상태', () => {
+      // The quick card considers the toggle "on" only when all three are set:
+      //   tie_frequent filter active + direction=T + strategy=martingale.
+      PatternBettingService.setBetDirection('tie_frequent', 'T')
+      PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+
+      renderDialog({
+        activeFilters: ['tie_frequent'],
+        filterCounts: { all: 10, tie_frequent: 7 },
+      })
+
+      expect(screen.getByText(/작동 중.*7개/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '끄기', pressed: true })).toBeInTheDocument()
+    })
   })
 })

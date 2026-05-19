@@ -1,5 +1,95 @@
 /* FilterSettingsDialog — minimal layout. Chrome lives in SettingsDialogFrame.css. */
 
+/* "한 번 누르면 끝" 카드 — 어르신 사용자를 위한 prominent 진입점 */
+.filter-settings__quick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  margin-bottom: 24px;
+  background: var(--modal-elevated);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-lg);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.filter-settings__quick.is-on {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary), var(--shadow-glow-accent);
+}
+
+.filter-settings__quick-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.filter-settings__quick-title {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.filter-settings__quick-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.filter-settings__quick-desc strong {
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+.filter-settings__quick-btn {
+  flex-shrink: 0;
+  min-width: 84px;
+  padding: 10px 18px;
+  background: var(--modal-bg);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.filter-settings__quick-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+  transform: translateY(-1px);
+}
+
+.filter-settings__quick-btn:active {
+  transform: translateY(0);
+}
+
+.filter-settings__quick-btn.is-on {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
+.filter-settings__quick-btn.is-on:hover {
+  background: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+}
+
+.filter-settings__quick-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.filter-settings__quick.is-on .filter-settings__quick-status {
+  color: var(--status-success);
+  font-weight: 600;
+}
+
 .filter-settings__section {
   margin-bottom: 24px;
 }
