@@ -52,10 +52,8 @@ export function getRoomStatusChip(
       : { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }
   }
 
-  if (autoState?.lastPrediction?.prediction) {
-    return { text: '관망', tone: 'observing' }
-  }
-
+  // 사용자 요구: 필터에 걸린 방이면 배팅이 진행되어야 한다. lastPrediction이 있더라도
+  // 별도의 "관망" 상태는 표시하지 않고 그냥 대기로 통일한다(혼동 방지).
   return { text: '대기', tone: 'idle' }
 }
 

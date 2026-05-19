@@ -207,7 +207,11 @@ class AutoModeServiceImpl {
     // globalMaxConsecutiveLosses는 maxMartin과 항상 동일하게 유지 (하위 호환)
     this.settings.globalMaxConsecutiveLosses = this.settings.maxMartin
 
-    console.log('[AutoMode] Settings loaded, enabled forced to false for safety')
+    // MartingaleManager 내부 cap을 사용자 설정과 동기화 — 그렇지 않으면 recordLoss가
+    // 내부 기본값(5)에서 막혀 100단 설정해도 level이 5에서 더 안 올라간다.
+    this.martingaleManager.setMaxLevel(this.settings.maxMartin)
+
+    console.log('[AutoMode] Settings loaded, enabled forced to false for safety, maxMartin synced:', this.settings.maxMartin)
   }
 
   private state: Omit<AutoModeState, 'settings'> = {
@@ -578,6 +582,9 @@ class AutoModeServiceImpl {
     // 🔧 Bug Fix: maxMartin 변경 시 globalMaxConsecutiveLosses도 동기화 (하위 호환)
     if (newSettings.maxMartin !== undefined) {
       this.settings.globalMaxConsecutiveLosses = newSettings.maxMartin
+      // MartingaleManager 내부 cap도 같이 갱신 — 안 그러면 recordLoss가
+      // 내부 기본값에서 막혀 사용자가 설정한 단계까지 못 올라간다.
+      this.martingaleManager.setMaxLevel(newSettings.maxMartin)
     }
 
     // 🛡️ AutoBettingService 가상모드 동기화 - 실제 소켓 전송 차단
@@ -1146,33 +1153,21 @@ class AutoModeServiceImpl {
         return
       }
 
-      // 🆕 v2.24: 동시배팅 제한 체크 (사용자 설정 기반)
-      // 정책:
-      //   - 마틴 진행 중인 방(martinLevel > 0)은 동시 상한과 무관하게 항상 이어친다
-      //     (사용자 요구: "치는방이 있으면 그방을 계속 처야함 이길때까지").
-      //     예: maxBets=6, 다른 6방이 결과대기 중이라도 7번째 슬롯으로 들어가서 마틴을 계속한다.
-      //   - 신규 방(레벨 0)은 maxConcurrentBets 한도를 지키되, 결과대기 중인 다른
-      //     마틴 방의 슬롯은 예약(reservedMartinSlots)해 두어 침범하지 않는다.
-      // NOTE: 결과 처리 후의 최신 레벨로 재평가한다(직전 라운드 패배 직후 같은
-      //   방을 신규로 오인 차단 방지).
+      // 🆕 v2.25: 동시배팅 제한 체크 (사용자 설정 기반)
+      // 정책 (사용자 요구):
+      //   - 마틴 진행 중인 방은 동시 상한과 무관하게 항상 이어친다.
+      //   - 신규 방은 maxConcurrentBets 한도를 지키되, 슬롯이 비어있으면 즉시 채운다.
+      //     마틴 방이 잠깐 라운드 사이에 쉬는 동안에도 그 슬롯을 예약하지 않고
+      //     필터에 걸린 다른 신규 방으로 채운다. ("11개 필터 / 3 동시 → 항상 3 진행")
+      //     마틴 방이 라운드 도래 시 다시 들어오면 동시 상한을 잠깐 초과할 수 있다.
+      //   - 결과 처리 후의 최신 레벨로 재평가(stale isInMartinRecovery 방지).
       const currentBetCount = this.getActiveBettingCount()
       const maxBets = this.settings.maxConcurrentBets
       const isCurrentlyInMartin = roomState.martinLevel > 0
-      const reservedMartinSlots = !isCurrentlyInMartin
-        ? this.getPendingMartinRoomIds(roomId).length
-        : 0
-      const effectiveBetLimit = maxBets > 0 && reservedMartinSlots > 0
-        ? Math.max(0, maxBets - reservedMartinSlots)
-        : maxBets
 
-      if (!isCurrentlyInMartin && maxBets > 0) {
-        if (currentBetCount > effectiveBetLimit) {
-          const reservedText = reservedMartinSlots > 0
-            ? `, 마틴 이어치기 예약=${reservedMartinSlots}개`
-            : ''
-          console.log(`[AutoMode] 🚫 동시배팅 상한 초과: ${room.koreanName} (현재=${currentBetCount}/${maxBets}개${reservedText})`)
-          return
-        }
+      if (!isCurrentlyInMartin && maxBets > 0 && currentBetCount > maxBets) {
+        console.log(`[AutoMode] 🚫 동시배팅 상한 초과: ${room.koreanName} (현재=${currentBetCount}/${maxBets}개)`)
+        return
       }
 
       const maxDisplay = maxBets > 0 ? maxBets : '∞'
@@ -1587,29 +1582,30 @@ class AutoModeServiceImpl {
         }
         console.log(`[AutoMode] 실제 배팅 성공!`)
       }
+
+      // 배팅 실행 로그 — 락 해제 전에 emit해서 락 풀린 사이 같은 방으로 재진입이
+      //   발생하더라도 같은 bet_placed 가 중복 emit 되지 않도록 한다.
+      this.emitBetLog({
+        type: 'bet_placed',
+        roomId,
+        roomName: room.koreanName,
+        prediction: betCode,
+        betType,
+        betAmount,
+        martinLevel: roomState.martinLevel,
+        status: 'pending',
+        reasoning: prediction.reasoning,  // 패턴 정보 전달
+        timestamp: Date.now(),
+      })
+
+      const prevTotal = this.state.totalBetAmount
+      this.state.totalBetAmount += betAmount
+      console.log(`[AutoMode] 💵 totalBetAmount: ${prevTotal.toLocaleString()} → ${this.state.totalBetAmount.toLocaleString()}원 (+${betAmount.toLocaleString()}) | room: ${room.koreanName}`)
+      this.emitStateChange()
     } finally {
-      // 동시 배팅 방지: 락 해제
+      // 동시 배팅 방지: 락 해제 (emit 이후에 해제해서 중복 진입 차단)
       this.bettingInProgress.delete(roomId)
     }
-
-    // 배팅 실행 로그
-    this.emitBetLog({
-      type: 'bet_placed',
-      roomId,
-      roomName: room.koreanName,
-      prediction: betCode,
-      betType,
-      betAmount,
-      martinLevel: roomState.martinLevel,
-      status: 'pending',
-      reasoning: prediction.reasoning,  // 패턴 정보 전달
-      timestamp: Date.now(),
-    })
-
-    const prevTotal = this.state.totalBetAmount
-    this.state.totalBetAmount += betAmount
-    console.log(`[AutoMode] 💵 totalBetAmount: ${prevTotal.toLocaleString()} → ${this.state.totalBetAmount.toLocaleString()}원 (+${betAmount.toLocaleString()}) | room: ${room.koreanName}`)
-    this.emitStateChange()
   }
 
   /**
