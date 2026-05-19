@@ -10,7 +10,6 @@ import type {
   RoomContext,
 } from './types'
 import type { IMartingaleManager } from './MartingaleManager'
-import type { IRestPeriodManager } from './RestPeriodManager'
 
 // ==================== Gates ====================
 
@@ -53,13 +52,10 @@ export interface IBettingDecisionService {
 
 export class BettingDecisionService implements IBettingDecisionService {
   private martingaleManager: IMartingaleManager
-  // NOTE: restPeriodManager는 더 이상 사용하지 않음 (ctx.rest 사용)
-  // 생성자 시그니처는 하위 호환성을 위해 유지
   private gates: BettingDecisionGates
 
   constructor(
     martingaleManager: IMartingaleManager,
-    _restPeriodManager: IRestPeriodManager,  // 미사용 - ctx.rest로 대체됨
     gates: BettingDecisionGates = {}
   ) {
     this.martingaleManager = martingaleManager
@@ -92,14 +88,7 @@ export class BettingDecisionService implements IBettingDecisionService {
       return { shouldBet: false, skipReason: '결과 대기 중' }
     }
 
-    // 3. 휴식 중인지 확인 (전달받은 ctx.rest 사용 - Codex 피드백)
-    if (ctx.rest.isResting || (ctx.rest.restingUntil && ctx.rest.restingUntil > Date.now())) {
-      const remainingMs = ctx.rest.restingUntil ? ctx.rest.restingUntil - Date.now() : 0
-      const remaining = Math.ceil(remainingMs / 60000)
-      return { shouldBet: false, skipReason: `휴식 중 (${remaining}분 남음)` }
-    }
-
-    // 3.5. Fresh-Shoe 프리셋의 STOPPED 게이트
+    // 3. Fresh-Shoe 프리셋의 STOPPED 게이트
     if (this.gates.stoppedRoomsChecker?.(roomId)) {
       return { shouldBet: false, skipReason: 'Fresh-shoe 종료' }
     }
@@ -202,11 +191,6 @@ export class BettingDecisionService implements IBettingDecisionService {
       return { shouldBet: false, skipReason: '결과 대기 중' }
     }
 
-    // 휴식 중인지 확인 (ctx 사용 - Codex 피드백)
-    if (ctx.rest.isResting || (ctx.rest.restingUntil && ctx.rest.restingUntil > Date.now())) {
-      return { shouldBet: false, skipReason: '휴식 중' }
-    }
-
     // 패턴 매칭 확인
     const matchedPattern = settings.patternConfigs.find(
       (pc) => pc.enabled && matchesFilter(room, roomState, pc.patternType)
@@ -253,10 +237,9 @@ export class BettingDecisionService implements IBettingDecisionService {
 
 export function createBettingDecisionService(
   martingaleManager: IMartingaleManager,
-  restPeriodManager: IRestPeriodManager,
   gates: BettingDecisionGates = {}
 ): BettingDecisionService {
-  return new BettingDecisionService(martingaleManager, restPeriodManager, gates)
+  return new BettingDecisionService(martingaleManager, gates)
 }
 
 export default BettingDecisionService

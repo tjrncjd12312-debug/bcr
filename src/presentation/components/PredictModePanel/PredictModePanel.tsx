@@ -516,12 +516,19 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
 
 
     try {
+      let baseHost = 'invalid'
+      try {
+        baseHost = new URL(baseUrl).host
+      } catch {
+        // Keep diagnostics safe even if a caller provided a partial URL.
+      }
+      console.info('[PredictModePanel] CDP room tab only', { roomId, baseHost })
+
       await invoke('open_new_tab_cdp', { url: roomUrl })
     } catch (error) {
-      try {
-        await invoke('open_in_chrome_normal', { url: roomUrl })
-      } catch (fallbackError) {
-      }
+      const details = error instanceof Error ? error.message : String(error)
+      console.error('[PredictModePanel] CDP room tab open failed:', error)
+      alert(`방 이동에 실패했습니다: ${details}\n\nCDP 브라우저 세션이 끊겼습니다. 카지노 창을 다시 열어 새 세션을 캡처하세요.`)
     }
   }, [evolutionBaseUrl, user?.siteUrl, rooms])
 

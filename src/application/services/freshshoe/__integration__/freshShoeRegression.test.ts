@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { BettingDecisionService } from '../../automode/BettingDecisionService'
 import { MartingaleManager } from '../../automode/MartingaleManager'
-import { RestPeriodManager } from '../../automode/RestPeriodManager'
 import { DEFAULT_SETTINGS, createRoomContext, type AutoModeSettings } from '../../automode/types'
 import type { Prediction } from '../../../../domain/entities'
 
@@ -15,7 +14,7 @@ function settings(o: Partial<AutoModeSettings> = {}): AutoModeSettings {
 
 describe('Preset OFF regression — BettingDecisionService unchanged', () => {
   it("defaults forceBetDirection to 'auto' and bets per prediction", () => {
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager())
+    const svc = new BettingDecisionService(new MartingaleManager(5))
     const cases: Array<{ p: 'B' | 'P' | 'T'; expected: string }> = [
       { p: 'B', expected: 'Banker' },
       { p: 'P', expected: 'Player' },
@@ -28,7 +27,7 @@ describe('Preset OFF regression — BettingDecisionService unchanged', () => {
   })
 
   it("BettingDecisionService without gates option preserves backward behavior", () => {
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager())
+    const svc = new BettingDecisionService(new MartingaleManager(5))
     const ctx = createRoomContext('r1', 'Room')
     ctx.martingale.level = 5
     const d = svc.shouldBet('r1', pred('B'), settings({ maxMartin: 5 }), ctx)

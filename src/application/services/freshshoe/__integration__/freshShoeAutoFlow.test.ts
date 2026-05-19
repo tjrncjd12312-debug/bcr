@@ -3,7 +3,6 @@ import { MoveOnTieListener } from '../MoveOnTieListener'
 import { FreshShoeTieMartingalePreset } from '../FreshShoeTieMartingalePreset'
 import { BettingDecisionService } from '../../automode/BettingDecisionService'
 import { MartingaleManager } from '../../automode/MartingaleManager'
-import { RestPeriodManager } from '../../automode/RestPeriodManager'
 import { DEFAULT_SETTINGS, createRoomContext } from '../../automode/types'
 import type { Prediction } from '../../../../domain/entities'
 
@@ -56,7 +55,7 @@ describe('Fresh-Shoe Tie Martingale — Auto mode end-to-end', () => {
       getCurrentFocusedRoomId: () => null,
       onMartinReset: (id) => martin.resetLevel(id),
     })
-    svc = new BettingDecisionService(martin, new RestPeriodManager(), {})
+    svc = new BettingDecisionService(martin, {})
     preset = new FreshShoeTieMartingalePreset({
       filterService: filter as any,
       settingsBridge: {

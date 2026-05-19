@@ -87,7 +87,11 @@ function useAutoBetSettings() {
   useEffect(() => {
     return AutoModeService.onStateChange(next => setS(next.settings))
   }, [])
-  return { baseBetAmount: s.baseBetAmount, maxMartin: s.maxMartin }
+  return {
+    baseBetAmount: s.baseBetAmount,
+    maxMartin: s.maxMartin,
+    maxConcurrentBets: s.maxConcurrentBets ?? 0,
+  }
 }
 
 export function FilterSettingsDialog({
@@ -105,8 +109,15 @@ export function FilterSettingsDialog({
   // 타이 자동이 켜져 있으면 "전체"는 강제 OFF — 다른 필터로 빠지지 않도록.
   const isAllActive = !tieAutoOn && activeFilters.length === 0
   const { start: tieStart, window: tieWindow, min: tieMin, max: tieMax } = useTieFrequentControls()
-  const { baseBetAmount, maxMartin } = useAutoBetSettings()
+  const { baseBetAmount, maxMartin, maxConcurrentBets } = useAutoBetSettings()
   const tieMatchCount = filterCounts.tie_frequent ?? 0
+  const tieConcurrentLimit = maxConcurrentBets > 0
+    ? Math.min(tieMatchCount, maxConcurrentBets)
+    : tieMatchCount
+  const tieConcurrentLabel = maxConcurrentBets > 0
+    ? `동시 최대 ${maxConcurrentBets}개`
+    : '동시 제한 없음'
+  const isTieConcurrentLimited = tieAutoOn && maxConcurrentBets > 0 && maxConcurrentBets < tieMatchCount
 
   const handleTieAutoToggle = () => {
     if (tieAutoOn) {
@@ -125,10 +136,12 @@ export function FilterSettingsDialog({
       if (Number.isFinite(n)) FilterThresholdsService.set({ [key]: n })
     }
 
-  const setIntAutoSetting = (key: 'baseBetAmount' | 'maxMartin') =>
+  const setIntAutoSetting = (key: 'baseBetAmount' | 'maxMartin' | 'maxConcurrentBets') =>
     (raw: string) => {
       const n = parseInt(raw, 10)
-      if (Number.isFinite(n)) AutoModeService.updateSettings({ [key]: n })
+      if (Number.isFinite(n)) {
+        AutoModeService.updateSettings({ [key]: key === 'maxConcurrentBets' ? Math.max(0, n) : n })
+      }
     }
 
   return (
@@ -223,13 +236,29 @@ export function FilterSettingsDialog({
             onChange={(e) => setIntAutoSetting('maxMartin')(e.target.value)}
             aria-label="마틴 최대 단계"
           />
-          <span className="filter-settings__quick-row-label">단계까지</span>
+          <span className="filter-settings__quick-row-label">단계 · 동시</span>
+          <input
+            className="filter-settings__quick-count"
+            type="number"
+            min={0}
+            max={999}
+            value={maxConcurrentBets}
+            onChange={(e) => setIntAutoSetting('maxConcurrentBets')(e.target.value)}
+            aria-label="동시 배팅 최대 방 수"
+          />
+          <span className="filter-settings__quick-row-label">개까지</span>
+          <span className="filter-settings__quick-row-hint">0=제한 없음</span>
         </div>
         <div className="filter-settings__quick-status">
           {tieAutoOn
-            ? `✓ 작동 중 · 조건 맞는 방 ${tieMatchCount}개 · 타이에만 배팅 (다른 필터 안 섞임)`
+            ? `✓ 작동 중 · 조건 맞는 방 ${tieMatchCount}개 · 실제 진입 최대 ${tieConcurrentLimit}개 · ${tieConcurrentLabel}`
             : '꺼짐 — 위 숫자를 정한 뒤 켜기를 누르세요. 켜면 다른 필터는 모두 꺼집니다.'}
         </div>
+        {isTieConcurrentLimited && (
+          <div className="filter-settings__quick-warning">
+            조건은 {tieMatchCount}개지만 동시 배팅 제한이 {maxConcurrentBets}개라 실제 배팅은 한 번에 최대 {maxConcurrentBets}개만 진행됩니다.
+          </div>
+        )}
       </section>
 
       <section className="filter-settings__section">

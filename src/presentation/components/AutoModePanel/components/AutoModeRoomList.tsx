@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
 import type { RoomBetLog } from './AutoModeRoomGrid'
+import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount } from '../utils/autoModeStatus'
 import '../AutoModePanel.css'
 import './AutoModeList.css'
 
@@ -16,11 +17,13 @@ interface AutoModeRoomListProps {
     roomBetLogs: Map<string, RoomBetLog[]>
     roomTimers: Map<string, number>
     selectedPattern: RoomFilterType | 'all'
+    activeFilters?: RoomFilterType[]
     matchesFilter: (room: Room, state: RoomPredictionState | null, pattern: RoomFilterType) => boolean
     sortType: RoomSortType
     sortDirection?: SortDirection
     setSortType: (type: RoomSortType) => void
     roomDataVersion: number
+    filterSettingsSignature?: string
 }
 
 export function AutoModeRoomList({
@@ -34,11 +37,13 @@ export function AutoModeRoomList({
     roomBetLogs,
     roomTimers,
     selectedPattern,
+    activeFilters,
     matchesFilter,
     sortType,
     sortDirection = 'desc',
     setSortType,
     roomDataVersion,
+    filterSettingsSignature,
 }: AutoModeRoomListProps) {
     // Filter and sort logic (Duplicated from RoomGrid to ensure isolation)
     const filteredRooms = useMemo(() => {
@@ -54,10 +59,11 @@ export function AutoModeRoomList({
             roomList = roomList.filter(room => enabledRoomIds.has(room.id))
         }
 
-        if (selectedPattern !== 'all') {
+        const effectiveFilters = activeFilters ?? (selectedPattern === 'all' ? [] : [selectedPattern])
+        if (effectiveFilters.length > 0) {
             roomList = roomList.filter(room => {
                 const state = roomStates.get(room.id) || null
-                return matchesFilter(room, state, selectedPattern as RoomFilterType)
+                return effectiveFilters.some(filterType => matchesFilter(room, state, filterType))
             })
         }
 
@@ -156,7 +162,7 @@ export function AutoModeRoomList({
                 })
         }
         return roomList
-    }, [rooms, enabledRoomIds, selectedPattern, matchesFilter, roomStates, autoModeRoomStates, sortType, sortDirection, isAutoEnabled, roomDataVersion])
+    }, [rooms, enabledRoomIds, selectedPattern, activeFilters, matchesFilter, roomStates, autoModeRoomStates, sortType, sortDirection, isAutoEnabled, roomDataVersion, filterSettingsSignature])
 
     if (filteredRooms.length === 0) {
         return (
@@ -167,6 +173,8 @@ export function AutoModeRoomList({
             </div>
         )
     }
+
+    const filterLabel = getFilterShortLabel(activeFilters)
 
     return (
         <div className="auto-mode__list-container">
@@ -179,10 +187,11 @@ export function AutoModeRoomList({
                 <div className="col-stats sortable" onClick={() => setSortType('winRate')}>승률</div>
                 <div className="col-score">스코어 (P-B)</div>
                 <div className="col-trend">최근 기록</div>
+                <div className="col-filter">필터</div>
                 <div className="col-strategy sortable" onClick={() => setSortType('martin')}>
                     전략 단계
                 </div>
-                <div className="col-predict">예측/배팅</div>
+                <div className="col-predict">다음 배팅</div>
                 <div className="col-profit">손익</div>
             </div>
 
@@ -199,7 +208,8 @@ export function AutoModeRoomList({
                         isFlashing={flashingRooms.has(room.id)}
                         betLogs={roomBetLogs.get(room.id) || []}
                         timer={roomTimers.get(room.id) || 0}
-                        maxMartin={settings.maxMartin || 5}
+                        settings={settings}
+                        filterLabel={filterLabel}
                     />
                 ))}
             </div>
@@ -219,7 +229,8 @@ interface AutoModeListRowProps {
     isFlashing: boolean
     betLogs: RoomBetLog[]
     timer: number
-    maxMartin: number
+    settings: AutoModeSettings
+    filterLabel: string | null
 }
 
 function AutoModeListRow({
@@ -231,8 +242,10 @@ function AutoModeListRow({
     isFlashing,
     betLogs,
     timer,
-    maxMartin
+    settings,
+    filterLabel,
 }: AutoModeListRowProps) {
+    const maxMartin = settings.maxMartin || 5
     const prediction = isAutoEnabled ? autoState?.lastPrediction?.prediction : null
     const martinLevel = autoState?.martinLevel || 0
     const isBetting = autoState?.waitingForResult || false
@@ -240,7 +253,18 @@ function AutoModeListRow({
     const lastPrediction = autoState?.lastPrediction
     const patternName = lastPrediction?.reasoning || ''
     const betAmount = autoState?.lastBetAmount || 0
+    const displayMartinStep = (isBetting || betAmount > 0 || martinLevel > 0) ? martinLevel + 1 : null
+    const martinProgress = displayMartinStep
+        ? Math.min(100, (displayMartinStep / Math.max(1, maxMartin)) * 100)
+        : 0
     const winRate = predictionState?.stats?.winRate || 0
+    const statusChip = getRoomStatusChip(autoState, settings, isEnabled, isAutoEnabled)
+    const nextBetAmount = getNextBetAmount(settings, martinLevel, { isTieBet: filterLabel?.startsWith('Tie') ?? false })
+    // 필터 매칭 시 강제되는 방향: Tie 계열 필터면 'T', 아니면 lastPrediction 또는 미정
+    const nextDirection: 'B' | 'P' | 'T' | null =
+        activePrediction ??
+        (filterLabel?.startsWith('Tie') ? 'T' : null)
+    const isTieFilter = filterLabel?.startsWith('Tie') ?? false
 
     // Score
     const playerScore = room.gameState?.playerHand?.score
@@ -268,8 +292,7 @@ function AutoModeListRow({
 
             {/* 2. Status */}
             <div className="col-status">
-                <div className={`status-dot ${isEnabled ? (isBetting ? 'betting' : 'active') : 'disabled'}`} />
-                <span className="status-text">{isEnabled ? (isBetting ? '배팅중' : '대기중') : '정지'}</span>
+                <span className={`auto-status-chip compact ${statusChip.tone}`}>{statusChip.text}</span>
             </div>
 
             {/* 3. Timer */}
@@ -309,15 +332,27 @@ function AutoModeListRow({
                 </div>
             </div>
 
-            {/* 7. Strategy (Martin Progress) */}
-            <div className="col-strategy">
-                <div className="martin-bar-container">
-                    <div className={`martin-bar w-${Math.min(100, (martinLevel / maxMartin) * 100)} ${martinLevel > 2 ? 'danger' : ''}`}></div>
-                </div>
-                <span className="martin-text">{martinLevel > 0 ? `${martinLevel}단계` : '-'}</span>
+            {/* 7. Filter Match — 왜 풀에 들어왔는지 */}
+            <div className="col-filter">
+                {filterLabel ? (
+                    <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`}>{filterLabel}</span>
+                ) : (
+                    <span className="predict-none">-</span>
+                )}
             </div>
 
-            {/* 9. Prediction/Action - 배팅 중인 방만 표시 */}
+            {/* 8. Strategy (Martin Progress) */}
+            <div className="col-strategy">
+                <div className="martin-bar-container">
+                    <div
+                        className={`martin-bar ${martinLevel > 2 ? 'danger' : ''}`}
+                        style={{ width: `${martinProgress}%` }}
+                    ></div>
+                </div>
+                <span className="martin-text">{displayMartinStep ? `${displayMartinStep}/${maxMartin}단계` : `1/${maxMartin}단계`}</span>
+            </div>
+
+            {/* 9. Next Bet — 항상 표시: 배팅 중이면 실제 금액·예측, 아이들이면 다음 배팅금액·방향 */}
             <div className="col-predict">
                 {isBetting && activePrediction ? (
                     <div className="predict-group">
@@ -329,6 +364,14 @@ function AutoModeListRow({
                             {patternName && <span className="pattern-tag">{patternName}</span>}
                         </div>
                     </div>
+                ) : isAutoEnabled && isEnabled ? (
+                    <span className="auto-next-bet">
+                        <span className="auto-next-bet__label">다음</span>
+                        {nextDirection && (
+                            <span className={`auto-next-bet__dir ${nextDirection.toLowerCase()}`}>{nextDirection}</span>
+                        )}
+                        <span>{nextBetAmount.toLocaleString()}</span>
+                    </span>
                 ) : (
                     <span className="predict-none">-</span>
                 )}

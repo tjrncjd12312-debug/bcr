@@ -1,8 +1,9 @@
 // AutoModeRoomGrid - 옵션 C: 배팅 중심 카드 (히스토리 제거)
-// Features: 실시간 타이머, 배팅 정보, 마틴 레벨, 손익 표시, 휴식 카운트다운
-import { useMemo, useState, useEffect } from 'react'
+// Features: 실시간 타이머, 배팅 정보, 마틴 레벨, 손익 표시
+import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
+import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount } from '../utils/autoModeStatus'
 import '../AutoModePanel.css'
 
 type RoomBetStatus = 'pending' | 'win' | 'loss' | 'tie' | 'failed' | 'pass'
@@ -31,10 +32,12 @@ interface AutoModeRoomGridProps {
   roomBetLogs: Map<string, RoomBetLog[]>
   roomTimers: Map<string, number>  // 실시간 타이머
   selectedPattern: RoomFilterType | 'all'
+  activeFilters?: RoomFilterType[]
   matchesFilter: (room: Room, state: RoomPredictionState | null, pattern: RoomFilterType) => boolean
   sortType: RoomSortType
   sortDirection?: SortDirection  // 정렬 방향 (asc/desc)
   roomDataVersion: number  // 방 데이터 업데이트 시마다 증가 (실시간 업데이트 트리거)
+  filterSettingsSignature?: string
 }
 
 // memo 제거 - 실시간 업데이트 보장
@@ -49,10 +52,12 @@ export function AutoModeRoomGrid({
   roomBetLogs,
   roomTimers,
   selectedPattern,
+  activeFilters,
   matchesFilter,
   sortType,
   sortDirection = 'desc',
   roomDataVersion,
+  filterSettingsSignature,
 }: AutoModeRoomGridProps) {
   // Filter and sort rooms
   // 1. 설정에서 선택된 방이 있으면 → 그 방들만 표시
@@ -74,10 +79,11 @@ export function AutoModeRoomGrid({
     }
 
     // 패턴 필터 적용 (선택된 방 중에서 패턴 매칭되는 방만)
-    if (selectedPattern !== 'all') {
+    const effectiveFilters = activeFilters ?? (selectedPattern === 'all' ? [] : [selectedPattern])
+    if (effectiveFilters.length > 0) {
       roomList = roomList.filter(room => {
         const state = roomStates.get(room.id) || null
-        return matchesFilter(room, state, selectedPattern as RoomFilterType)
+        return effectiveFilters.some(filterType => matchesFilter(room, state, filterType))
       })
     }
 
@@ -179,7 +185,7 @@ export function AutoModeRoomGrid({
     }
 
     return roomList
-  }, [rooms, enabledRoomIds, selectedPattern, matchesFilter, roomStates, autoModeRoomStates, sortType, sortDirection, isAutoEnabled, roomDataVersion])
+  }, [rooms, enabledRoomIds, selectedPattern, activeFilters, matchesFilter, roomStates, autoModeRoomStates, sortType, sortDirection, isAutoEnabled, roomDataVersion, filterSettingsSignature])
 
   if (filteredRooms.length === 0) {
     return (
@@ -213,10 +219,8 @@ export function AutoModeRoomGrid({
           isFlashing={flashingRooms.has(room.id)}
           betLogs={roomBetLogs.get(room.id) || []}
           timer={roomTimers.get(room.id) || 0}
-          maxMartin={settings.maxMartin || 5}
-          baseBetAmount={settings.baseBetAmount || 10000}
-          betStrategy={settings.betStrategy || 'martingale'}
-          customBetAmounts={(settings as any).customBetAmounts}
+          settings={settings}
+          activeFilters={activeFilters}
         />
       ))}
     </div>
@@ -235,10 +239,8 @@ interface AutoModeRoomCardProps {
   isFlashing: boolean
   betLogs: RoomBetLog[]
   timer: number
-  maxMartin: number
-  baseBetAmount: number
-  betStrategy: 'martingale' | 'fibonacci' | 'paroli' | 'flat' | 'custom'
-  customBetAmounts?: number[]
+  settings: AutoModeSettings
+  activeFilters?: RoomFilterType[]
 }
 
 function AutoModeRoomCard({
@@ -249,70 +251,29 @@ function AutoModeRoomCard({
   isFlashing,
   betLogs,
   timer,
-  maxMartin,
-  baseBetAmount,
-  betStrategy,
-  customBetAmounts,
+  settings,
+  activeFilters,
 }: AutoModeRoomCardProps) {
+  const maxMartin = settings.maxMartin || 5
 
   // 오토 ON 상태일 때만 예측 표시
   const prediction = isAutoEnabled ? autoState?.lastPrediction?.prediction : null
   const martinLevel = autoState?.martinLevel || 0
-  const restingUntil = autoState?.restingUntil || null
   const isBetting = autoState?.waitingForResult || false
 
-  // 휴식 중 카운트다운 계산
-  const [restCountdown, setRestCountdown] = useState<number>(0)
-  const isResting = restingUntil !== null && restingUntil > Date.now()
+  // 상태 칩 + 필터 매칭 라벨 (공용 헬퍼)
+  const statusChip = useMemo(
+    () => getRoomStatusChip(autoState, settings, isEnabled, isAutoEnabled),
+    [autoState, settings, isEnabled, isAutoEnabled]
+  )
+  const filterLabel = useMemo(() => getFilterShortLabel(activeFilters), [activeFilters])
+  const isTieFilter = filterLabel?.startsWith('Tie') ?? false
 
-  useEffect(() => {
-    if (!restingUntil) {
-      setRestCountdown(0)
-      return
-    }
-
-    const updateCountdown = () => {
-      const remaining = Math.max(0, restingUntil - Date.now())
-      setRestCountdown(remaining)
-    }
-
-    updateCountdown()
-    const interval = setInterval(updateCountdown, 1000)
-    return () => clearInterval(interval)
-  }, [restingUntil])
-
-  const formatRestTime = (ms: number) => {
-    const totalSeconds = Math.ceil(ms / 1000)
-    const minutes = Math.floor(totalSeconds / 60)
-    const seconds = totalSeconds % 60
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`
-  }
-
-  // 현재 배팅 금액 (전략별 계산)
-  const currentBetAmount = useMemo(() => {
-    switch (betStrategy) {
-      case 'flat':
-        return baseBetAmount
-      case 'fibonacci': {
-        const fib = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
-        return baseBetAmount * (fib[martinLevel] || fib[fib.length - 1])
-      }
-      case 'paroli':
-        return baseBetAmount * Math.pow(2, martinLevel)
-      case 'custom': {
-        if (customBetAmounts && customBetAmounts.length > martinLevel) {
-          const customAmount = customBetAmounts[martinLevel]
-          if (typeof customAmount === 'number' && customAmount > 0) {
-            return customAmount
-          }
-        }
-        return baseBetAmount
-      }
-      case 'martingale':
-      default:
-        return baseBetAmount * Math.pow(2, martinLevel)
-    }
-  }, [baseBetAmount, martinLevel, betStrategy, customBetAmounts])
+  // 현재 마틴 레벨에서 다음 배팅 금액 (공용 헬퍼 — AutoModeService와 동일 로직)
+  const currentBetAmount = useMemo(
+    () => getNextBetAmount(settings, martinLevel, { isTieBet: isTieFilter }),
+    [settings, martinLevel, isTieFilter]
+  )
 
   // 방별 세션 손익 계산
   const sessionProfit = useMemo(() => {
@@ -331,8 +292,6 @@ function AutoModeRoomCard({
 
   if (!isEnabled) {
     statusClass = 'disabled'
-  } else if (isResting) {
-    statusClass = 'resting'
   } else if (isBetting) {
     statusClass = 'betting'
   } else if (prediction) {
@@ -394,11 +353,11 @@ function AutoModeRoomCard({
         <div className="auto-mode__room-header-left">
           <div className={`auto-mode__status-dot-indicator ${statusClass}`} />
           <div className="auto-mode__room-name">{room.koreanName || room.name}</div>
-
+          <span className={`auto-status-chip ${statusChip.tone}`}>{statusChip.text}</span>
         </div>
 
         {/* Timer Ring */}
-        {timer > 0 && !isResting && (
+        {timer > 0 && (
           <div className="auto-mode__timer-ring-wrapper">
             <svg className="auto-mode__timer-svg" width="24" height="24">
               <circle
@@ -425,6 +384,13 @@ function AutoModeRoomCard({
         )}
       </div>
 
+      {/* 1.5. Filter Reason — 왜 이 방이 풀에 들어왔는지 */}
+      {filterLabel && (
+        <div className="auto-mode__room-meta">
+          <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`}>{filterLabel}</span>
+        </div>
+      )}
+
       {/* 2. Main Game Area */}
       <div className="auto-mode__room-game-area">
 
@@ -440,20 +406,8 @@ function AutoModeRoomCard({
           </div>
         )}
 
-        {/* Rest Overlay */}
-        {isResting && (
-          <div className="auto-mode__bet-action-overlay">
-            <div className="auto-mode__bet-action-badge">
-              ⏸ 휴식
-            </div>
-            <div className="auto-mode__bet-action-amount">
-              {formatRestTime(restCountdown)} 후 재개
-            </div>
-          </div>
-        )}
-
         {/* Pass Overlay (Recent) */}
-        {!isBetting && !isResting && betLogs.length > 0 && betLogs[0].status === 'pass' && (Date.now() - betLogs[0].timestamp < 3000) && (
+        {!isBetting && betLogs.length > 0 && betLogs[0].status === 'pass' && (Date.now() - betLogs[0].timestamp < 3000) && (
           <div className="auto-mode__bet-action-overlay pass-overlay">
             <div className="auto-mode__bet-action-badge pass">
               패스
@@ -569,7 +523,7 @@ function AutoModeRoomCard({
         </div>
         <div className="auto-mode__room-card-footer-info">
           <span className={`auto-mode__room-card-footer-martin ${martinLevel <= 1 ? 'safe' : martinLevel <= 3 ? 'warn' : 'danger'}`}>
-            Lv.{martinLevel}
+            Lv.{martinLevel + 1}
           </span>
           <span className={`auto-mode__room-card-footer-pnl ${sessionProfit > 0 ? 'positive' : sessionProfit < 0 ? 'negative' : ''}`}>
             {sessionProfit >= 0 ? '+' : ''}{sessionProfit >= 10000 || sessionProfit <= -10000 ? `${Math.round(sessionProfit / 1000)}K` : sessionProfit.toLocaleString()}

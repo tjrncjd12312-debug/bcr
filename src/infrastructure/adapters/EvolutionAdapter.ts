@@ -402,6 +402,11 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
         return { type: msgType, data: data.args }
       }
 
+      if (msgType === 'game.state' && data.args) {
+        this.handleGameState(data.args)
+        return { type: msgType, data: data.args }
+      }
+
       // ✅ widget.resolved - 게임 결과 확정 (멀티위젯)
       if (msgType === 'widget.resolved' && data.args) {
         this.handleGameState(data.args)
@@ -411,6 +416,21 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       // ✅ 멀티소켓 게임 결과 이벤트 (game.result, baccarat.result, baccarat.gameResult)
       if ((msgType === 'game.result' || msgType === 'baccarat.result' || msgType === 'baccarat.gameResult') && data.args) {
         this.handleGameState(data.args)
+        return { type: msgType, data: data.args }
+      }
+
+      if (msgType === 'lobby.historyUpdated' && data.args) {
+        this.handleLobbyHistoryUpdated(data.args)
+        return { type: msgType, data: data.args }
+      }
+
+      if (data.args?.historyUpdated) {
+        this.handleLobbyHistoryUpdated(data.args.historyUpdated)
+        return { type: 'lobby.historyUpdated', data: data.args.historyUpdated }
+      }
+
+      if (msgType === 'lobby.histories' && data.args) {
+        this.handleLobbyHistories(data.args)
         return { type: msgType, data: data.args }
       }
 
@@ -436,6 +456,11 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       if (msgType === 'lobby.categories' && data.args?.categories) {
         this.handleLobbyCategories(data.args.categories)
         return { type: 'lobby.categories', data: data.args }
+      }
+
+      if (msgType === 'widget.availableTables' && data.args?.availableTables) {
+        this.handleAvailableTables(data.args.availableTables)
+        return { type: msgType, data: data.args }
       }
 
       // lobby.balanceUpdated - 잔액 업데이트 (다양한 형식 지원)
@@ -505,6 +530,112 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     if (updatedRooms.length > 0) {
       this.emitRoomUpdate(Array.from(this.rooms.values()))
     }
+  }
+
+  private handleAvailableTables(tables: Array<Record<string, unknown>>): void {
+    const updatedRooms: Room[] = []
+
+    tables.forEach((table) => {
+      const tableId = (table.tableId || table.id || table.table_id) as string | undefined
+      const tableName = (table.tableName || table.name || table.table_name) as string | undefined
+      if (!tableId) return
+
+      const room = this.ensureRoom(tableId, tableName)
+      if (room) updatedRooms.push(room)
+    })
+
+    if (updatedRooms.length > 0) {
+      this.emitRoomUpdate(Array.from(this.rooms.values()))
+    }
+  }
+
+  private handleLobbyHistories(args: Record<string, unknown>): void {
+    const source = ((args as any).histories || args) as unknown
+
+    if (Array.isArray(source)) {
+      source.forEach((entry) => this.handleLobbyHistoryUpdated(entry))
+      return
+    }
+
+    if (!source || typeof source !== 'object') return
+
+    Object.entries(source as Record<string, unknown>).forEach(([tableId, value]) => {
+      if (Array.isArray(value)) {
+        this.handleLobbyHistoryUpdated({ tableId, history: value })
+      } else if (value && typeof value === 'object') {
+        this.handleLobbyHistoryUpdated({ tableId, ...(value as Record<string, unknown>) })
+      }
+    })
+  }
+
+  private handleLobbyHistoryUpdated(raw: unknown): void {
+    if (!raw || typeof raw !== 'object') return
+
+    const data = ((raw as any).historyUpdated || raw) as Record<string, unknown>
+    const tableId =
+      (data.tableId as string | undefined) ||
+      (data.table_id as string | undefined) ||
+      ((data.table as Record<string, unknown> | undefined)?.id as string | undefined)
+
+    if (!tableId) return
+
+    const historyData = this.extractHistoryData(data)
+    if (historyData && historyData.length > 0) {
+      this.processShoeHistory(tableId, { ...data, tableId }, historyData)
+      return
+    }
+
+    const winner = this.extractWinner(data)
+    if (winner) {
+      const result = (data.result || data.gameResult || data) as Record<string, unknown>
+      this.handleGameState({
+        tableId,
+        result: {
+          winner,
+          playerScore: result.playerScore ?? result.pScore,
+          bankerScore: result.bankerScore ?? result.bScore,
+          playerPair: result.playerPair ?? result.pPair,
+          bankerPair: result.bankerPair ?? result.bPair,
+        },
+      })
+    }
+  }
+
+  private extractHistoryData(data: Record<string, unknown>): Array<Record<string, unknown>> | undefined {
+    const keys = ['history_v2', 'history', 'results', 'roadmap', 'shoe'] as const
+    for (const key of keys) {
+      const value = data[key]
+      if (Array.isArray(value)) return value as Array<Record<string, unknown>>
+    }
+
+    const roads = data.roads as Record<string, unknown> | undefined
+    if (roads) {
+      const bigRoad = roads.bigRoad || roads.roadmap
+      if (Array.isArray(bigRoad)) return bigRoad as Array<Record<string, unknown>>
+    }
+
+    return undefined
+  }
+
+  private extractWinner(data: Record<string, unknown>): Winner | null {
+    const fromString = (raw: unknown): Winner | null => {
+      if (typeof raw !== 'string') return null
+      const s = raw.toLowerCase()
+      if (s.startsWith('b')) return 'B'
+      if (s.startsWith('p')) return 'P'
+      if (s.startsWith('t')) return 'T'
+      return null
+    }
+
+    const direct = fromString(data.winner) || fromString(data.outcome)
+    if (direct) return direct
+
+    const result = data.result as Record<string, unknown> | undefined
+    const fromResult = result ? fromString(result.winner) || fromString(result.outcome) : null
+    if (fromResult) return fromResult
+
+    const gameResult = data.gameResult as Record<string, unknown> | undefined
+    return gameResult ? fromString(gameResult.winner) || fromString(gameResult.outcome) : null
   }
 
   // ==================== Balance Updated ====================
@@ -759,11 +890,10 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
 
   private processShoeHistory(tableId: string, args: Record<string, unknown>, historyData: Array<Record<string, unknown>>): void {
     // ROOM_MAPPING에 없는 테이블은 무시 (라이트닝 등 제외)
-    const koreanName = ROOM_MAPPING[tableId]
-    if (!koreanName) return
+    let room: Room | undefined = this.rooms.get(tableId)
+    const koreanName = room?.koreanName || ROOM_MAPPING[tableId] || tableId
 
     // First check if room already exists (may have been created by tableState)
-    let room: Room | undefined = this.rooms.get(tableId)
 
     // If not, try ensureRoom (for ROOM_MAPPING tables)
     if (!room) {

@@ -30,6 +30,7 @@ class MockCasinoAdapter implements ICasinoAdapter {
   private rooms: Map<string, Room> = new Map()
   private bettingPhaseCallbacks: Array<(event: BettingPhaseEvent) => void> = []
   private gameResultCallbacks: Array<(event: GameResultEvent) => void> = []
+  private historyUpdateCallbacks: Array<(roomId: string, history: RoadResult[]) => void> = []
 
   async connect(_config: any): Promise<void> {}
   async disconnect(): Promise<void> { this.rooms.clear() }
@@ -39,7 +40,10 @@ class MockCasinoAdapter implements ICasinoAdapter {
   getRooms(): Map<string, Room> { return this.rooms }
   setRoom(room: Room): void { this.rooms.set(room.id, room) }
   onRoomUpdate(): () => void { return () => {} }
-  onHistoryUpdate(): () => void { return () => {} }
+  onHistoryUpdate(cb: (roomId: string, history: RoadResult[]) => void): () => void {
+    this.historyUpdateCallbacks.push(cb)
+    return () => { this.historyUpdateCallbacks = this.historyUpdateCallbacks.filter(c => c !== cb) }
+  }
   onGameResult(cb: (e: GameResultEvent) => void): () => void {
     this.gameResultCallbacks.push(cb)
     return () => { this.gameResultCallbacks = this.gameResultCallbacks.filter(c => c !== cb) }
@@ -50,6 +54,9 @@ class MockCasinoAdapter implements ICasinoAdapter {
   }
   emitBettingPhase(e: BettingPhaseEvent): void { this.bettingPhaseCallbacks.forEach(cb => cb(e)) }
   emitGameResult(e: GameResultEvent): void { this.gameResultCallbacks.forEach(cb => cb(e)) }
+  emitHistoryUpdate(roomId: string, history: RoadResult[]): void {
+    this.historyUpdateCallbacks.forEach(cb => cb(roomId, history))
+  }
 }
 
 function makeHistory(winners: Array<'B' | 'P' | 'T'>): RoadResult[] {
@@ -143,6 +150,46 @@ describe('AutoModeService — Tie bet propagation', () => {
     expect(captured!.betAmount).toBe(BASE_BET)
   })
 
+  it('uses the BettingDecision direction and settles results against the actual placed bet', async () => {
+    PatternBettingService.setBetDirection('banker_dominant', 'B')
+    AutoModeService.updateSettings({ forceBetDirection: 'tie_only' })
+
+    let room = makeRoom('rForced', ['B', 'B', 'B', 'P', 'B'])
+    adapter.setRoom(room)
+
+    let placed: AutoModeBetLogEvent | null = null
+    let result: AutoModeBetLogEvent | null = null
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.roomId !== 'rForced') return
+      if (ev.type === 'bet_placed') placed = ev
+      if (ev.type === 'bet_result' && ev.winner === 'T') result = ev
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rForced'], 'banker_dominant')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rForced', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    expect(placed).not.toBeNull()
+    expect(placed!.betType).toBe('Tie')
+    expect(placed!.prediction).toBe('T')
+
+    room = { ...room, history: makeHistory(['T', ...room.history.map(h => h.winner)]) }
+    adapter.setRoom(room)
+    adapter.emitGameResult({ roomId: 'rForced', winner: 'T', playerScore: 7, bankerScore: 7 })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(result).not.toBeNull()
+    expect(result!.won).toBe(true)
+    expect(result!.prediction).toBe('T')
+    expect(result!.profit).toBe(BASE_BET * 8)
+  })
+
   // 사용자 시나리오: "그방에서 성공하면 같은 필터 조건을 물색해서 똑같이 마틴쳐야함"
   // 흐름:
   //   1) 두 방 A, B 모두 tie_frequent(0~0, 처음 5판) 매칭
@@ -150,7 +197,7 @@ describe('AutoModeService — Tie bet propagation', () => {
   //   3) A의 같은 시점 B에는 BettingPhase 와도 락에 막혀 베팅 안 됨
   //   4) A에 타이 결과 → A 적중, martinLevel 리셋, A 히스토리에 T 추가되어 필터 깨짐
   //   5) 락 해제 후 B의 BettingPhase → 같은 필터 매칭하므로 B에 새 마틴 시작
-  it('after a win in the locked room, the next BettingPhase from another matching room starts a fresh martingale there', async () => {
+  it('places Tie bets for each active matching tie-auto room while each room owns its own martingale', async () => {
     // 새 슈 시작 후 첫 5판 무타이를 보고 베팅하는 시나리오
     FilterThresholdsService.set({
       tieFrequentStart: 1,
@@ -190,7 +237,9 @@ describe('AutoModeService — Tie bet propagation', () => {
     adapter.emitBettingPhase({ roomId: 'rB', remainingSeconds: 10, phase: 'start' })
     await flush()
     await flush()
-    expect(bBets).toHaveLength(0)
+    expect(bBets).toHaveLength(1)
+    expect(bBets[0].betType).toBe('Tie')
+    expect(bBets[0].betAmount).toBe(BASE_BET)
 
     // A에 타이 적중 — 히스토리에 T 추가하고 GameResult emit
     const winningRoomA: Room = {
@@ -211,6 +260,509 @@ describe('AutoModeService — Tie bet propagation', () => {
     expect(bBets).toHaveLength(1)
     expect(bBets[0].betType).toBe('Tie')
     expect(bBets[0].betAmount).toBe(BASE_BET) // 새 시퀀스 → level 0 = baseBet
+  })
+
+  it('places first tie-auto bets in all three active rooms', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+
+    adapter.setRoom(makeRoom('r1', ['B']))
+    adapter.setRoom(makeRoom('r2', ['P']))
+    adapter.setRoom(makeRoom('r3', ['B', 'P']))
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['r1', 'r2', 'r3'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    adapter.emitBettingPhase({ roomId: 'r1', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'r2', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'r3', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(bets.map(b => b.roomId).sort()).toEqual(['r1', 'r2', 'r3'])
+    expect(bets.every(b => b.betType === 'Tie')).toBe(true)
+    expect(bets.every(b => b.betAmount === BASE_BET)).toBe(true)
+  })
+
+  it('continues a losing martingale room immediately with the same direction, bypassing new AI prediction', async () => {
+    const requestPredictionForRoom = vi.fn()
+      .mockResolvedValueOnce({
+        roomId: 'rAiMartin',
+        prediction: 'B',
+        confidence: 0.9,
+        reasoning: 'first AI pick',
+        isSkip: false,
+        timestamp: Date.now(),
+      })
+      .mockResolvedValue({
+        roomId: 'rAiMartin',
+        prediction: 'P',
+        confidence: 0.1,
+        reasoning: 'would change direction',
+        isSkip: false,
+        timestamp: Date.now(),
+      })
+    container.replace('multiRoomPredictionPort', {
+      requestPredictionForRoom,
+      requestBestRoomSelection: vi.fn(async () => null),
+    })
+    AutoModeService.updateSettings({
+      betStrategy: 'martingale',
+      forceBetDirection: 'auto',
+      maxMartin: 2,
+      maxConcurrentBets: 0,
+    })
+
+    let room: Room = { ...makeRoom('rAiMartin', ['B', 'P', 'B']), remainingSeconds: 0 }
+    adapter.setRoom(room)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.roomId === 'rAiMartin' && ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rAiMartin'], 'all')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rAiMartin', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets).toHaveLength(1)
+    expect(bets[0].betType).toBe('Banker')
+    expect(bets[0].betAmount).toBe(BASE_BET)
+
+    adapter.emitBettingPhase({ roomId: 'rAiMartin', remainingSeconds: 0, phase: 'end' })
+    room = {
+      ...room,
+      history: makeHistory(['P', ...room.history.map(h => h.winner)]),
+      remainingSeconds: 10,
+    }
+    adapter.setRoom(room)
+    adapter.emitGameResult({ roomId: 'rAiMartin', winner: 'P', playerScore: 9, bankerScore: 1 })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(bets).toHaveLength(2)
+    expect(bets[1].betType).toBe('Banker')
+    expect(bets[1].prediction).toBe('B')
+    expect(bets[1].betAmount).toBe(BASE_BET * 2)
+    expect(requestPredictionForRoom).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps betting the locked tie-auto room at the max martingale level until a Tie win', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 2 })
+
+    let room = makeRoom('rKeep', ['B'])
+    adapter.setRoom(room)
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rKeep'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.roomId === 'rKeep' && ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    adapter.emitBettingPhase({ roomId: 'rKeep', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets).toHaveLength(1)
+    expect(bets[0].betAmount).toBe(BASE_BET)
+
+    room = { ...room, history: makeHistory(['P', ...room.history.map(h => h.winner)]) }
+    adapter.setRoom(room)
+    adapter.emitGameResult({ roomId: 'rKeep', winner: 'P', playerScore: 8, bankerScore: 2 })
+    await flush()
+    await flush()
+
+    adapter.emitBettingPhase({ roomId: 'rKeep', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets).toHaveLength(2)
+    expect(bets[1].betAmount).toBe(BASE_BET * 2)
+
+    room = { ...room, history: makeHistory(['B', ...room.history.map(h => h.winner)]) }
+    adapter.setRoom(room)
+    adapter.emitGameResult({ roomId: 'rKeep', winner: 'B', playerScore: 1, bankerScore: 9 })
+    await flush()
+    await flush()
+
+    adapter.emitBettingPhase({ roomId: 'rKeep', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(bets).toHaveLength(3)
+    expect(bets[2].betType).toBe('Tie')
+    expect(bets[2].betAmount).toBe(BASE_BET * 2)
+  })
+
+  it('keeps losing tie-auto rooms active even if a refreshed filter list omits them', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 5 })
+
+    let lockedRoom = makeRoom('rLocked', ['B'])
+    const otherRoom = makeRoom('rOther', ['B'])
+    adapter.setRoom(lockedRoom)
+    adapter.setRoom(otherRoom)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rLocked'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rLocked', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets).toHaveLength(1)
+    expect(bets[0].roomId).toBe('rLocked')
+    expect(bets[0].betAmount).toBe(BASE_BET)
+
+    adapter.emitBettingPhase({ roomId: 'rLocked', remainingSeconds: 0, phase: 'end' })
+    await flush()
+    lockedRoom = { ...lockedRoom, history: makeHistory(['P', ...lockedRoom.history.map(h => h.winner)]) }
+    adapter.setRoom(lockedRoom)
+    adapter.emitGameResult({ roomId: 'rLocked', winner: 'P', playerScore: 9, bankerScore: 0 })
+    await flush()
+    await flush()
+
+    AutoModeService.setActiveBettingRooms(['rOther'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rOther', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'rLocked', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(bets).toHaveLength(3)
+    expect(bets[1].roomId).toBe('rLocked')
+    expect(bets[1].betType).toBe('Tie')
+    expect(bets[1].betAmount).toBe(BASE_BET * 2)
+    expect(bets[2].roomId).toBe('rOther')
+    expect(bets[2].betType).toBe('Tie')
+    expect(bets[2].betAmount).toBe(BASE_BET)
+  })
+
+  it('immediately retries a ready tie-auto martingale room during a late filter refresh', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 5, maxConcurrentBets: 1 })
+
+    let retryRoom: Room = { ...makeRoom('rRetryNow', ['B']), remainingSeconds: 0 }
+    const otherRoom: Room = { ...makeRoom('rOtherNow', ['B']), remainingSeconds: 10 }
+    adapter.setRoom(retryRoom)
+    adapter.setRoom(otherRoom)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rRetryNow'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rRetryNow', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets.map(b => b.roomId)).toEqual(['rRetryNow'])
+
+    adapter.emitBettingPhase({ roomId: 'rRetryNow', remainingSeconds: 0, phase: 'end' })
+    await flush()
+
+    retryRoom = {
+      ...retryRoom,
+      history: makeHistory(['P', ...retryRoom.history.map(h => h.winner)]),
+      remainingSeconds: 0,
+    }
+    adapter.setRoom(retryRoom)
+    adapter.emitGameResult({ roomId: 'rRetryNow', winner: 'P', playerScore: 9, bankerScore: 1 })
+    await flush()
+    await flush()
+    expect(bets.map(b => b.roomId)).toEqual(['rRetryNow'])
+
+    retryRoom = { ...retryRoom, remainingSeconds: 2 }
+    adapter.setRoom(retryRoom)
+
+    AutoModeService.setActiveBettingRooms(['rOtherNow'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+    await flush()
+    unsub()
+
+    expect(bets.map(b => b.roomId)).toEqual(['rRetryNow', 'rRetryNow'])
+    expect(bets[1].betType).toBe('Tie')
+    expect(bets[1].betAmount).toBe(BASE_BET * 2)
+  })
+
+  it('checks the losing room timer first and retries the same tie-auto room', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 5, maxConcurrentBets: 2 })
+
+    let otherRoom: Room = { ...makeRoom('rOtherMartin', ['B']), remainingSeconds: 0 }
+    let retryRoom: Room = { ...makeRoom('rRetrySame', ['B']), remainingSeconds: 0 }
+    adapter.setRoom(otherRoom)
+    adapter.setRoom(retryRoom)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rOtherMartin', 'rRetrySame'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rOtherMartin', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets.map(b => b.roomId)).toEqual(['rOtherMartin'])
+
+    adapter.emitBettingPhase({ roomId: 'rOtherMartin', remainingSeconds: 0, phase: 'end' })
+    otherRoom = {
+      ...otherRoom,
+      history: makeHistory(['P', ...otherRoom.history.map(h => h.winner)]),
+      remainingSeconds: 0,
+    }
+    adapter.setRoom(otherRoom)
+    adapter.emitGameResult({ roomId: 'rOtherMartin', winner: 'P', playerScore: 9, bankerScore: 1 })
+    await flush()
+    await flush()
+    expect(bets.map(b => b.roomId)).toEqual(['rOtherMartin'])
+
+    adapter.emitBettingPhase({ roomId: 'rRetrySame', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets.map(b => b.roomId)).toEqual(['rOtherMartin', 'rRetrySame'])
+
+    AutoModeService.updateSettings({ maxConcurrentBets: 1 })
+
+    adapter.emitBettingPhase({ roomId: 'rRetrySame', remainingSeconds: 0, phase: 'end' })
+    otherRoom = { ...otherRoom, remainingSeconds: 10 }
+    retryRoom = {
+      ...retryRoom,
+      history: makeHistory(['P', ...retryRoom.history.map(h => h.winner)]),
+      remainingSeconds: 2,
+    }
+    adapter.setRoom(otherRoom)
+    adapter.setRoom(retryRoom)
+    adapter.emitGameResult({ roomId: 'rRetrySame', winner: 'P', playerScore: 8, bankerScore: 2 })
+    await flush()
+    await flush()
+    unsub()
+
+    // 사용자 요구: 마틴 진행 중인 방은 동시 상한과 무관하게 계속 친다.
+    // 따라서 rRetrySame이 마틴으로 재시도되는 시점에 이미 마틴 중이던 rOtherMartin도
+    // 함께 다음 라운드를 친다(max=1이라도 마틴은 슬롯을 침범한다).
+    // 핵심 검증: rRetrySame이 마틴 2단계로 재시도되었는지.
+    const firstThree = bets.slice(0, 3).map(b => b.roomId)
+    expect(firstThree).toEqual(['rOtherMartin', 'rRetrySame', 'rRetrySame'])
+    expect(bets[2].betType).toBe('Tie')
+    expect(bets[2].betAmount).toBe(BASE_BET * 2)
+  })
+
+  it('reserves maxConcurrentBets slots for locked tie-auto martingale rooms', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 5, maxConcurrentBets: 3 })
+
+    let lockedRoom = makeRoom('rLockedCap', ['B'])
+    adapter.setRoom(lockedRoom)
+    adapter.setRoom(makeRoom('rNew1', ['B']))
+    adapter.setRoom(makeRoom('rNew2', ['P']))
+    adapter.setRoom(makeRoom('rNew3', ['B', 'P']))
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rLockedCap'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rLockedCap', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets.map(b => b.roomId)).toEqual(['rLockedCap'])
+
+    lockedRoom = { ...lockedRoom, history: makeHistory(['P', ...lockedRoom.history.map(h => h.winner)]) }
+    adapter.setRoom(lockedRoom)
+    adapter.emitGameResult({ roomId: 'rLockedCap', winner: 'P', playerScore: 9, bankerScore: 1 })
+    await flush()
+    await flush()
+
+    AutoModeService.setActiveBettingRooms(['rNew1', 'rNew2', 'rNew3'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    adapter.emitBettingPhase({ roomId: 'rNew1', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'rNew2', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'rNew3', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'rLockedCap', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(bets.map(b => b.roomId).sort()).toEqual(['rLockedCap', 'rLockedCap', 'rNew1', 'rNew2'])
+    expect(bets.filter(b => b.roomId === 'rNew3')).toHaveLength(0)
+    const lockedBets = bets.filter(b => b.roomId === 'rLockedCap')
+    expect(lockedBets[lockedBets.length - 1]?.betAmount).toBe(BASE_BET * 2)
+  })
+
+  it('settles a first-hand tie-auto bet from history updates when no GameResult event is emitted', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 55,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 3 })
+
+    let room = makeRoom('rFirstHand', [])
+    adapter.setRoom(room)
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rFirstHand'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const results: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.roomId !== 'rFirstHand') return
+      if (ev.type === 'bet_placed') bets.push(ev)
+      if (ev.type === 'bet_result' && (ev.status === 'loss' || ev.status === 'win')) results.push(ev)
+    })
+
+    adapter.emitBettingPhase({ roomId: 'rFirstHand', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets).toHaveLength(1)
+    expect(bets[0].betType).toBe('Tie')
+    expect(bets[0].betAmount).toBe(BASE_BET)
+
+    adapter.emitBettingPhase({ roomId: 'rFirstHand', remainingSeconds: 0, phase: 'end' })
+    await flush()
+
+    room = { ...room, history: makeHistory(['B']) }
+    adapter.setRoom(room)
+    adapter.emitHistoryUpdate('rFirstHand', room.history)
+    await flush()
+    await flush()
+
+    expect(results).toHaveLength(1)
+    expect(results[0].status).toBe('loss')
+    expect(results[0].winner).toBe('B')
+
+    adapter.emitBettingPhase({ roomId: 'rFirstHand', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(bets).toHaveLength(2)
+    expect(bets[1].betType).toBe('Tie')
+    expect(bets[1].betAmount).toBe(BASE_BET * 2)
+  })
+
+  it('does not settle an empty-shoe pending bet from an ambiguous multi-result snapshot', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 55,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 3 })
+
+    let room = makeRoom('rAmbiguousFirstHand', [])
+    adapter.setRoom(room)
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rAmbiguousFirstHand'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const results: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.roomId !== 'rAmbiguousFirstHand') return
+      if (ev.type === 'bet_placed') bets.push(ev)
+      if (ev.type === 'bet_result' && (ev.status === 'loss' || ev.status === 'win')) results.push(ev)
+    })
+
+    adapter.emitBettingPhase({ roomId: 'rAmbiguousFirstHand', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(bets).toHaveLength(1)
+
+    room = { ...room, history: makeHistory(['B', 'P']) }
+    adapter.setRoom(room)
+    adapter.emitHistoryUpdate('rAmbiguousFirstHand', room.history)
+    await flush()
+    await flush()
+
+    adapter.emitBettingPhase({ roomId: 'rAmbiguousFirstHand', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(results).toHaveLength(0)
+    expect(bets).toHaveLength(1)
   })
 
   it('forces the global tie_drought built-in filter direction (default T) when matched', async () => {

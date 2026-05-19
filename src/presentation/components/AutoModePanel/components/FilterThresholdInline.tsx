@@ -25,9 +25,10 @@ const FILTER_TO_SLOTS: Partial<Record<RoomFilterType, ThresholdSlot[]>> = {
     { key: 'tieDroughtThreshold', suffix: '게임' },
   ],
   tie_frequent: [
-    { key: 'tieFrequentWindow', prefix: '최근', suffix: '판 중', min: 5, max: 200 },
-    { key: 'tieFrequentMinCount', suffix: '번~', min: 1, max: 99 },
-    { key: 'tieFrequentMaxCount', suffix: '번', min: 1, max: 99 },
+    { key: 'tieFrequentStart', prefix: '시작', suffix: '번째부터', min: 1, max: 200 },
+    { key: 'tieFrequentWindow', suffix: '판 안에 타이', min: 1, max: 200 },
+    { key: 'tieFrequentMinCount', suffix: '번~', min: 0, max: 99 },
+    { key: 'tieFrequentMaxCount', suffix: '번', min: 0, max: 99 },
   ],
   fresh_room: [
     { key: 'freshRoomGames', suffix: '게임' },

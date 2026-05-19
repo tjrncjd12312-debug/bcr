@@ -419,22 +419,6 @@ export function AutoModeSettingsDialog({
             <div className="ams-hint">설정한 연패 횟수 도달 시 해당 방 배팅 중지</div>
           </div>
 
-          {/* 휴식 시간 */}
-          <div className="ams-section">
-            <div className="ams-section-title">휴식 시간</div>
-            <div className="settings-field-row">
-              <NumberFieldWithSuffix
-                label="연패 후 휴식"
-                value={settings.restDurationMinutes || 0}
-                suffix="분"
-                min={0}
-                max={60}
-                onChange={(n) => onUpdateSettings({ restDurationMinutes: n })}
-              />
-            </div>
-            <div className="ams-hint">0 = 휴식 없이 바로 재개</div>
-          </div>
-
           {/* 중지 시 마틴 리셋 */}
           <div className="ams-section">
             <div className="ams-section-title">중지 시 마틴 처리</div>

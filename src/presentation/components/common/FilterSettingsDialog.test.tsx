@@ -161,17 +161,20 @@ describe('FilterSettingsDialog', () => {
       expect(FilterThresholdsService.get().tieFrequentMaxCount).toBe(5)
     })
 
-    it('writes baseBetAmount + maxMartin through AutoModeService.updateSettings', async () => {
+    it('writes baseBetAmount + maxMartin + maxConcurrentBets through AutoModeService.updateSettings', async () => {
       const AutoModeService = (await import('../../../application/services/AutoModeService')).default
       renderDialog({ activeFilters: ['tie_frequent'] })
 
       const amount = screen.getByLabelText('기본 배팅 금액') as HTMLInputElement
       const martin = screen.getByLabelText('마틴 최대 단계') as HTMLInputElement
+      const concurrent = screen.getByLabelText('동시 배팅 최대 방 수') as HTMLInputElement
       fireEvent.change(amount, { target: { value: '20000' } })
       fireEvent.change(martin, { target: { value: '7' } })
+      fireEvent.change(concurrent, { target: { value: '3' } })
 
       expect(AutoModeService.getState().settings.baseBetAmount).toBe(20000)
       expect(AutoModeService.getState().settings.maxMartin).toBe(7)
+      expect(AutoModeService.getState().settings.maxConcurrentBets).toBe(3)
     })
 
     it('clicking 켜기 activates the tie_frequent filter via toggleFilter', () => {
@@ -193,6 +196,21 @@ describe('FilterSettingsDialog', () => {
 
       expect(screen.getByText(/작동 중.*7개/)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '끄기', pressed: true })).toBeInTheDocument()
+    })
+
+    it('warns when matched tie rooms exceed the concurrent betting limit', async () => {
+      const AutoModeService = (await import('../../../application/services/AutoModeService')).default
+      PatternBettingService.setBetDirection('tie_frequent', 'T')
+      PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+      AutoModeService.updateSettings({ maxConcurrentBets: 1 })
+
+      renderDialog({
+        activeFilters: ['tie_frequent'],
+        filterCounts: { all: 10, tie_frequent: 7 },
+      })
+
+      expect(screen.getByText(/조건은 7개지만 동시 배팅 제한이 1개/)).toBeInTheDocument()
+      expect(screen.getByText(/실제 진입 최대 1개/)).toBeInTheDocument()
     })
   })
 })

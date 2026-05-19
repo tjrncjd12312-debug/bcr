@@ -133,6 +133,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   const [timeSinceLastBet, setTimeSinceLastBet] = useState<string>('')
   const [roomBetLogs, setRoomBetLogs] = useState<Map<string, RoomBetLog[]>>(new Map())
   const logIdRef = useRef(0)
+  const autoFilterClearRef = useRef(0)
 
   // viewMode 변경 시 localStorage에 저장
   useEffect(() => {
@@ -293,16 +294,23 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     return counts
   }, [selectedRoomIds, rooms, roomStates, availableFilters, matchesFilter, roomDataVersion])
 
+  const filterSettingsSignature = useMemo(() => {
+    return availableFilters
+      .map(filter => `${filter.type}:${filter.label}:${filter.description}`)
+      .join('|')
+  }, [availableFilters])
+
   // 배팅 대상 방 필터링 로직:
-  // 정책: 사용자가 헤더에서 선택한 방(selectedRoomIds)만 자동 배팅 대상.
-  // - 선택 없음 → [] (안전 가드: 자동 배팅 안 함)
+  // 정책: 선택된 방이 있으면 그 범위만, 없으면 활성 필터가 있을 때 전체 바카라 방 중 매칭 방만 자동 배팅 대상.
+  // - 선택 없음 + 필터 없음 → [] (안전 가드: 자동 배팅 안 함)
+  // - 선택 없음 + 활성 필터 있음 → 전체 바카라 방 중 필터 매칭된 방
   // - 선택 있음 + 활성 필터 있음 → 선택된 방 중 필터 매칭된 방 (+ 선택된 방 중 마틴 회복/연승 방은 우선 포함)
   // - 선택 있음 + 필터 없음 → 선택된 방 전체
-  // NOTE: roomDataVersion을 의존성에 추가하여 방 데이터 업데이트 후 실시간으로 재계산
+  // NOTE: roomDataVersion + filterSettingsSignature를 의존성에 추가하여 방 데이터/필터 설정 변경 후 실시간으로 재계산
   const filteredBettingRoomIds = useMemo(() => {
-    // 0. 사용자 선택이 없으면 절대 배팅하지 않음
-    if (selectedRoomIds.size === 0) {
-      console.log(`[AutoMode] 🔒 선택된 방 없음 → 자동 배팅 중단`)
+    // 0. 사용자 선택도 필터도 없으면 절대 배팅하지 않음
+    if (selectedRoomIds.size === 0 && activeFilters.length === 0) {
+      console.log(`[AutoMode] 🔒 선택된 방/필터 없음 → 자동 배팅 중단`)
       return []
     }
 
@@ -315,19 +323,21 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       if (state.consecutiveWins > 0) winStreakRoomIds.add(roomId)
     })
 
-    // 2. 활성 필터가 있으면 선택된 방 중 매칭된 방만, 없으면 선택된 방 전체
-    const selectedRooms = Array.from(rooms.values()).filter(r => selectedRoomIds.has(r.id))
+    // 2. 활성 필터가 있으면 대상 범위 중 매칭된 방만, 없으면 선택된 방 전체
+    const targetRooms = selectedRoomIds.size > 0
+      ? Array.from(rooms.values()).filter(r => selectedRoomIds.has(r.id))
+      : baccaratRoomList
 
     let matchedIds: string[]
     if (activeFilters.length > 0) {
-      matchedIds = selectedRooms
+      matchedIds = targetRooms
         .filter(room => {
           const state = roomStates.get(room.id) || null
           return activeFilters.some(filterType => matchesFilter(room, state, filterType))
         })
         .map(r => r.id)
     } else {
-      matchedIds = selectedRooms.map(r => r.id)
+      matchedIds = targetRooms.map(r => r.id)
     }
 
     // 3. 매칭 + 마틴 회복 + 연승 방 합치기 (중복 제거)
@@ -335,7 +345,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
     console.log(`[AutoMode] 🔄 선택방 기반 배팅 대상 (v${roomDataVersion}): 선택=${selectedRoomIds.size}, 매칭=${matchedIds.length}, 마틴회복=${martinRecoveryRoomIds.size}, 연승=${winStreakRoomIds.size}, 총=${result.length}`)
     return result
-  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, roomDataVersion])
+  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, baccaratRoomList, roomDataVersion, filterSettingsSignature])
 
   // 필터된 방 목록과 현재 패턴 필터를 서비스에 전달
   useEffect(() => {
@@ -401,7 +411,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       if (type === 'bet_placed') {
         // 배팅 실행 로그 (가상/실제 구분 없이 내용만)
         const placedLabel = settings.isVirtualMode ? '배팅' : '주문'
-        const betLabel = betType === 'Banker' ? '뱅커' : '플레이어'
+        const betLabel = betType === 'Banker' ? '뱅커' : betType === 'Player' ? '플레이어' : '타이'
         // 마틴 단계 표시 (플랫은 단계 표시 안함)
         const martinText = martinLevel > 0 && settings.betStrategy !== 'flat'
           ? ` [마틴 ${martinLevel + 1}단계]`
@@ -577,7 +587,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
             cumulativeProfit: effectiveCumulativeProfit,
             playerScore,
             bankerScore,
-            winner: winner as 'P' | 'B',
+            winner: winner as 'P' | 'B' | 'T',
           })
           return
         }
@@ -654,16 +664,67 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     return `필터 (${activeFilters.length})`
   }, [activeFilters, availableFilters, customPatterns])
 
+  const currentStrategyLabel = useMemo(() => {
+    switch (settings.betStrategy) {
+      case 'fibonacci':
+        return '피보나치'
+      case 'paroli':
+        return '파롤리'
+      case 'flat':
+        return '플랫'
+      case 'custom':
+        return '커스텀'
+      case 'martingale':
+      default:
+        return '마틴'
+    }
+  }, [settings.betStrategy])
+
+  const targetScopeLabel = selectedRoomIds.size > 0
+    ? `${selectedRoomIds.size}개 선택`
+    : `전체 ${baccaratRoomList.length}개`
+  const targetMatchLabel = activeFilters.length > 0
+    ? `${filteredBettingRoomIds.length}개 매칭`
+    : '필터 없음'
+  const concurrentLimitLabel = settings.maxConcurrentBets > 0
+    ? `${settings.maxConcurrentBets}개`
+    : '무제한'
+
+  const clearAutoModeFilters = useCallback(() => {
+    autoFilterClearRef.current = Date.now()
+    clearFilters()
+  }, [clearFilters])
+
+  const toggleAutoModeFilter = useCallback((filterType: RoomFilterType) => {
+    const followsDialogClear = Date.now() - autoFilterClearRef.current < 100
+    autoFilterClearRef.current = 0
+
+    if (followsDialogClear) {
+      toggleFilter(filterType)
+      return
+    }
+
+    const isOnlyActive = activeFilters.length === 1 && activeFilters[0] === filterType
+    clearFilters()
+    if (!isOnlyActive) {
+      toggleFilter(filterType)
+    }
+  }, [activeFilters, clearFilters, toggleFilter])
+
   const handleToggle = useCallback(() => {
     // 시작하려는 경우 방 선택 확인
     if (!enabled) {
       console.log(`[AutoModePanel] 🎮 handleToggle - 시작 시도, selectedRooms: ${selectedRoomIds.size}개, filteredRooms: ${filteredBettingRoomIds.length}개, pattern: ${activeFilters.length > 0 ? activeFilters[0] : 'all'}`)
-      if (activeFilters.length === 0 && selectedRoomIds.size === 0) {
-        alert('배팅할 방을 먼저 선택해주세요.\n\n헤더의 [방] 버튼을 눌러 방을 선택하거나, 패턴을 선택하세요.')
+      if (filteredBettingRoomIds.length === 0) {
+        if (activeFilters.length === 0) {
+          alert('베팅할 방을 먼저 선택하거나 필터를 선택해 주세요.')
+        } else {
+          alert('현재 필터 조건에 맞는 방이 없습니다.\n\n필터 기준을 조정하거나 방 선택 범위를 확인해 주세요.')
+        }
         return
       }
       const filterLabel = activeFilters.length === 0 ? 'AI 자동' : getCurrentFilterLabel()
-      addHistoryLog('-', `오토 시작 (${selectedRoomIds.size}방, ${filterLabel})`, 'info')
+      addHistoryLog('-', `오토 시작 (${filteredBettingRoomIds.length}방, ${filterLabel})`, 'info')
     } else {
       console.log(`[AutoModePanel] 🎮 handleToggle - 정지`)
       addHistoryLog('-', '오토 배팅 정지', 'info')
@@ -824,7 +885,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 <rect x="3" y="14" width="7" height="7" rx="1" />
                 <rect x="14" y="14" width="7" height="7" rx="1" />
               </svg>
-              <span>방 {selectedRoomIds.size > 0 ? `(${selectedRoomIds.size})` : `(${rooms.size})`}</span>
+              <span>방 {selectedRoomIds.size > 0 ? `(${selectedRoomIds.size})` : `(${baccaratRoomList.length})`}</span>
             </button>
           )}
 
@@ -1094,6 +1155,33 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         </div>
       </header >
 
+      {isConnected && (
+        <div className={`auto-mode__target-strip ${filteredBettingRoomIds.length === 0 ? 'is-empty' : ''}`}>
+          <div className="auto-mode__target-item">
+            <span className="auto-mode__target-label">대상</span>
+            <strong>{targetScopeLabel}</strong>
+            <span className="auto-mode__target-sub">{selectedRoomIds.size > 0 ? '선택 범위' : '전체 기준'}</span>
+          </div>
+          <div className="auto-mode__target-item">
+            <span className="auto-mode__target-label">조건</span>
+            <strong>{getCurrentFilterLabel()}</strong>
+            <span className="auto-mode__target-sub">{targetMatchLabel}</span>
+          </div>
+          <div className="auto-mode__target-item">
+            <span className="auto-mode__target-label">베팅</span>
+            <strong>{(settings.baseBetAmount || 0).toLocaleString()}원</strong>
+            <span className="auto-mode__target-sub">{currentStrategyLabel} · {settings.maxMartin || 0}단계</span>
+          </div>
+          <div className="auto-mode__target-item">
+            <span className="auto-mode__target-label">동시</span>
+            <strong>{concurrentLimitLabel}</strong>
+            <span className="auto-mode__target-sub">
+              {currentBettingInfo.bettingRoomCount > 0 ? `${currentBettingInfo.bettingRoomCount}개 진행` : '대기'}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       {
         !isConnected ? (
@@ -1128,10 +1216,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   roomBetLogs={roomBetLogs}
                   roomTimers={roomTimers}
                   selectedPattern={activeFilters.length > 0 ? activeFilters[0] : 'all'}
+                  activeFilters={activeFilters}
                   matchesFilter={matchesFilter}
                   sortType={sortType}
                   sortDirection={sortDirection}
                   roomDataVersion={roomDataVersion}
+                  filterSettingsSignature={filterSettingsSignature}
                 />
               ) : viewMode === 'list' ? (
                 <AutoModeRoomList
@@ -1146,11 +1236,13 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   roomBetLogs={roomBetLogs}
                   roomTimers={roomTimers}
                   selectedPattern={activeFilters.length > 0 ? activeFilters[0] : 'all'}
+                  activeFilters={activeFilters}
                   matchesFilter={matchesFilter}
                   sortType={sortType}
                   sortDirection={sortDirection}
                   setSortType={setSortType}
                   roomDataVersion={roomDataVersion}
+                  filterSettingsSignature={filterSettingsSignature}
                 />
               ) : (
                 // mosaic view
@@ -1167,9 +1259,11 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   roomTimers={roomTimers}
                   enabledRoomIds={enabledRoomIds}
                   selectedPattern={activeFilters.length > 0 ? activeFilters[0] : 'all'}
+                  activeFilters={activeFilters}
                   matchesFilter={matchesFilter}
                   sortType={sortType}
                   sortDirection={sortDirection}
+                  filterSettingsSignature={filterSettingsSignature}
                 />
               )}
             </main>
@@ -1248,7 +1342,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         }}
         onApply={(pattern) => {
           if ((pattern as string) === 'all') clearFilters()
-          else toggleFilter(pattern as RoomFilterType)
+          else toggleAutoModeFilter(pattern as RoomFilterType)
           setShowPatternModal(false)
         }}
       />
@@ -1273,8 +1367,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         onClose={() => setShowFilterDialog(false)}
         availableFilters={availableFilters}
         activeFilters={activeFilters}
-        toggleFilter={toggleFilter}
-        clearFilters={clearFilters}
+        toggleFilter={toggleAutoModeFilter}
+        clearFilters={clearAutoModeFilters}
         filterCounts={selectedRoomPatternCounts}
         onOpenPatternManager={() => {
           setShowPatternModal(true)

@@ -320,6 +320,13 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
     })
 
+    it('labels the 0-0 condition as a shoe interval tie-none filter', () => {
+      const filter = RoomFilterService.getAvailableFilters().find(f => f.type === 'tie_frequent')
+      expect(filter?.label).toContain('타이 없음')
+      expect(filter?.label).not.toContain('타이 자주')
+      expect(filter?.description).toContain('1~5번째 게임')
+    })
+
     it('does NOT match 0-0 once a tie appears within the first 5 games', () => {
       // chronological order has T in game 3: P, B, T, P, B
       // newest-first: B P T B P
@@ -334,10 +341,15 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
     })
 
-    it('does NOT match when room history is shorter than start + window - 1', () => {
-      // Only 3 games — can't evaluate first 5 yet
+    it('matches 0-0 while the configured shoe window is still in progress', () => {
+      // Only 3 games, but the first 5-game window has no ties so far.
       const room = createRoom('r4', createHistory('BPB'))
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+    })
+
+    it('matches 0-0 before the first completed result when the window starts at game 1', () => {
+      const room = createRoom('rFirst', createHistory(''))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
     })
 
     it('respects a configurable start offset (e.g. skip the first 2 games)', () => {

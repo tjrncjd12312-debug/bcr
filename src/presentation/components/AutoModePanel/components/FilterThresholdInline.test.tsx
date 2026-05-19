@@ -14,6 +14,10 @@ describe('FilterThresholdInline', () => {
     // localStorage at construction, so after clear() we just reset to defaults.
     FilterThresholdsService.set({
       tieDroughtThreshold: 20,
+      tieFrequentStart: 1,
+      tieFrequentWindow: 57,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
       freshRoomGames: 5,
       freshShoeMaxGameNumber: 5,
     })
@@ -47,5 +51,26 @@ describe('FilterThresholdInline', () => {
     const input = screen.getByLabelText('필터 임계값') as HTMLInputElement
     fireEvent.change(input, { target: { value: '8' } })
     expect(FilterThresholdsService.get().freshShoeMaxGameNumber).toBe(8)
+  })
+
+  it('renders shoe-based start/window/range controls for tie_frequent', () => {
+    render(<FilterThresholdInline filterType="tie_frequent" />)
+
+    const inputs = screen.getAllByRole('spinbutton') as HTMLInputElement[]
+    expect(inputs.map(input => input.value)).toEqual(['1', '57', '0', '0'])
+    expect(screen.getByText('시작')).toBeInTheDocument()
+    expect(screen.getByText('번째부터')).toBeInTheDocument()
+    expect(screen.getByText('판 안에 타이')).toBeInTheDocument()
+    expect(screen.queryByText('최근')).not.toBeInTheDocument()
+
+    fireEvent.change(inputs[0], { target: { value: '2' } })
+    fireEvent.change(inputs[1], { target: { value: '60' } })
+    fireEvent.change(inputs[2], { target: { value: '0' } })
+    fireEvent.change(inputs[3], { target: { value: '1' } })
+
+    expect(FilterThresholdsService.get().tieFrequentStart).toBe(2)
+    expect(FilterThresholdsService.get().tieFrequentWindow).toBe(60)
+    expect(FilterThresholdsService.get().tieFrequentMinCount).toBe(0)
+    expect(FilterThresholdsService.get().tieFrequentMaxCount).toBe(1)
   })
 })

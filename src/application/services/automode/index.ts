@@ -13,13 +13,6 @@ export {
   type IMartingaleManager,
 } from './MartingaleManager'
 
-export {
-  RestPeriodManager,
-  getRestPeriodManager,
-  resetRestPeriodManager,
-  type IRestPeriodManager,
-} from './RestPeriodManager'
-
 // ==================== Services ====================
 export {
   BettingDecisionService,

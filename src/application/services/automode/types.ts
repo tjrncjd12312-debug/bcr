@@ -59,11 +59,7 @@ export interface AutoModeSettings {
   winCutAmount: number
   lossCutAmount: number
   baseUrl: string
-  restDurationMinutes: number
   patternConfigs: PatternBetConfig[]
-  // 휴식 설정
-  enableRestAfterLoss: boolean
-  restAfterLossCount: number
 }
 
 export const DEFAULT_SETTINGS: AutoModeSettings = {
@@ -85,10 +81,7 @@ export const DEFAULT_SETTINGS: AutoModeSettings = {
   winCutAmount: 0,
   lossCutAmount: 0,
   baseUrl: '',
-  restDurationMinutes: 10,
   patternConfigs: [],
-  enableRestAfterLoss: true,
-  restAfterLossCount: 5,  // maxMartin과 동일하게 설정 (AutoModeService와 동기화)
 }
 
 // ==================== Room Context (방별 런타임 상태) ====================
@@ -100,16 +93,6 @@ export interface MartingaleState {
   level: number
   consecutiveLosses: number
   consecutiveWins: number
-}
-
-/**
- * 방별 휴식 상태 - RestPeriodManager가 관리
- */
-export interface RestState {
-  restingUntil: number | null
-  isResting: boolean
-  restStartTime: number | null
-  restEndTime: number | null
 }
 
 /**
@@ -144,7 +127,6 @@ export interface RoomContext {
   roomName: string
   // 각 매니저의 상태
   martingale: MartingaleState
-  rest: RestState
   betting: BettingState
   inference: InferenceState
   // 통계
@@ -174,12 +156,6 @@ export function createRoomContext(roomId: string, roomName: string): RoomContext
       level: 0,
       consecutiveLosses: 0,
       consecutiveWins: 0,
-    },
-    rest: {
-      restingUntil: null,
-      isResting: false,
-      restStartTime: null,
-      restEndTime: null,
     },
     betting: {
       lastPrediction: null,
@@ -229,7 +205,6 @@ export interface RoomBettingState {
   lastBetTime: number | null
   lastBetHistoryLength: number | null
   lastResultTime: number | null
-  restingUntil: number | null
   resultInferenceRetries: number
   lastInferenceRetryTime: number | null
   wasVirtualBet?: boolean
@@ -255,7 +230,6 @@ export function toRoomBettingState(ctx: RoomContext): RoomBettingState {
     lastBetTime: ctx.betting.lastBetTime,
     lastBetHistoryLength: ctx.betting.lastBetHistoryLength,
     lastResultTime: ctx.betting.lastResultTime,
-    restingUntil: ctx.rest.restingUntil,
     resultInferenceRetries: ctx.inference.resultInferenceRetries,
     lastInferenceRetryTime: ctx.inference.lastInferenceRetryTime,
     wasVirtualBet: ctx.betting.wasVirtualBet,
@@ -273,12 +247,6 @@ export function fromRoomBettingState(state: RoomBettingState): RoomContext {
       level: state.martinLevel,
       consecutiveLosses: state.consecutiveLosses,
       consecutiveWins: state.consecutiveWins,
-    },
-    rest: {
-      restingUntil: state.restingUntil,
-      isResting: state.restingUntil !== null && state.restingUntil > Date.now(),
-      restStartTime: null,
-      restEndTime: state.restingUntil,
     },
     betting: {
       lastPrediction: state.lastPrediction,
@@ -363,7 +331,6 @@ export interface ResultOutcome {
   won: boolean
   profit: number
   newMartinLevel: number
-  shouldRest: boolean
 }
 
 /**
@@ -374,7 +341,6 @@ export interface BetResult {
   isTie: boolean
   profit: number
   newLevel: number
-  shouldRest: boolean
 }
 
 /**
@@ -399,7 +365,7 @@ export interface AutoModeBetLogEvent {
   type: 'prediction' | 'bet_placed' | 'bet_result'
   roomId: string
   roomName: string
-  prediction?: 'B' | 'P' | null
+  prediction?: 'B' | 'P' | 'T' | null
   betType?: BetType
   betAmount?: number
   martinLevel: number
@@ -452,6 +418,5 @@ export type BetLogCallback = (event: AutoModeBetLogEvent) => void
 
 export const STORAGE_KEYS = {
   SETTINGS: 'smart-helper:auto-mode-settings',
-  REST_PERIODS: 'smart-helper:room-rest-periods',
   SESSION: 'smart-helper:auto-mode-session',
 } as const

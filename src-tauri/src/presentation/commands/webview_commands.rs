@@ -917,7 +917,10 @@ pub async fn start_cdp_monitoring(
     // Reset all flags when starting CDP monitoring
     CDP_SHOULD_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
     MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
-    info!("🔄 Reset connection flags: CDP_SHOULD_STOP=false, MULTIWIDGET_CONNECTED=false");
+    if let Ok(mut lobby_id) = LOBBY_PAGE_ID.lock() {
+        *lobby_id = None;
+    }
+    info!("🔄 Reset connection flags: CDP_SHOULD_STOP=false, MULTIWIDGET_CONNECTED=false, LOBBY_PAGE_ID=None");
 
     let app_handle = app.clone();
 
@@ -1381,6 +1384,24 @@ async fn monitor_page_continuously(
                 page_id_owned
             );
             return Ok(evolution_found.load(Ordering::SeqCst));
+        }
+
+        if is_lobby_page {
+            let is_still_active_lobby = {
+                let lobby_id = LOBBY_PAGE_ID.lock().unwrap();
+                lobby_id
+                    .as_ref()
+                    .map(|id| id == &page_id_owned)
+                    .unwrap_or(false)
+            };
+
+            if !is_still_active_lobby {
+                info!(
+                    "Lobby monitor for page {} stopped because another lobby target is active",
+                    page_id_owned
+                );
+                return Ok(evolution_found.load(Ordering::SeqCst));
+            }
         }
 
         if reconnect_count > 0 {
@@ -4259,6 +4280,9 @@ pub async fn stop_cdp_monitoring() -> Result<(), String> {
         "🛑 Stopping CDP monitoring - Evolution session captured, switching to direct room sockets"
     );
     CDP_SHOULD_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lobby_id) = LOBBY_PAGE_ID.lock() {
+        *lobby_id = None;
+    }
     // Lane R2: belt-and-suspenders abort. The atomic flag is the primary
     // cooperative cancellation; aborting via the registry is the safety net
     // for a poller stuck in a syscall (e.g. blocked HTTP read).
@@ -4276,6 +4300,9 @@ pub async fn restart_cdp_monitoring() -> Result<(), String> {
     // Reset flags to allow reconnection
     CDP_SHOULD_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
     MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lobby_id) = LOBBY_PAGE_ID.lock() {
+        *lobby_id = None;
+    }
     info!("🔄 Reset connection flags for restart");
     Ok(())
 }

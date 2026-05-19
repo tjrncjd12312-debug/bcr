@@ -22,7 +22,6 @@ import {
   STORAGE_KEYS,
 } from './types'
 import { MartingaleManager, getMartingaleManager } from './MartingaleManager'
-import { RestPeriodManager, getRestPeriodManager } from './RestPeriodManager'
 import { BettingDecisionService, createBettingDecisionService } from './BettingDecisionService'
 import { ResultProcessor, createResultProcessor } from './ResultProcessor'
 
@@ -79,7 +78,6 @@ export class AutoModeOrchestrator implements IAutoModeOrchestrator {
 
   // 분리된 모듈
   private martingaleManager: MartingaleManager
-  private restPeriodManager: RestPeriodManager
   private bettingDecisionService: BettingDecisionService
   private resultProcessor: ResultProcessor
 
@@ -106,14 +104,11 @@ export class AutoModeOrchestrator implements IAutoModeOrchestrator {
 
     // 모듈 초기화
     this.martingaleManager = getMartingaleManager(this.settings.maxMartin)
-    this.restPeriodManager = getRestPeriodManager(clock)
     this.bettingDecisionService = createBettingDecisionService(
-      this.martingaleManager,
-      this.restPeriodManager
+      this.martingaleManager
     )
     this.resultProcessor = createResultProcessor(
-      this.martingaleManager,
-      this.restPeriodManager
+      this.martingaleManager
     )
   }
 
@@ -201,9 +196,6 @@ export class AutoModeOrchestrator implements IAutoModeOrchestrator {
     if (!ctx) {
       ctx = createRoomContext(roomId, roomName)
       this.roomContexts.set(roomId, ctx)
-
-      // RestPeriodManager에서 상태 복원
-      this.restPeriodManager.applyToContext(roomId, ctx)
     }
     return ctx
   }
@@ -444,7 +436,6 @@ export class AutoModeOrchestrator implements IAutoModeOrchestrator {
   // ==================== 리소스 정리 ====================
 
   dispose(): void {
-    this.restPeriodManager.dispose()
     this.stateChangeCallbacks.clear()
     this.betLogCallbacks.clear()
   }

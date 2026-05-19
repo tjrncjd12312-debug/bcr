@@ -96,6 +96,12 @@
   font-weight: 500;
 }
 
+.filter-settings__quick-row-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .filter-settings__quick-count,
 .filter-settings__quick-amount {
   padding: 6px 10px;
@@ -136,6 +142,17 @@
 .filter-settings__quick.is-on .filter-settings__quick-status {
   color: var(--status-success);
   font-weight: 600;
+}
+
+.filter-settings__quick-warning {
+  padding: 8px 10px;
+  background: rgba(255, 152, 0, 0.12);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--status-warning);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .filter-settings__section {

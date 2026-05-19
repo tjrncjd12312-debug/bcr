@@ -8,10 +8,12 @@ interface UseRoomFilterProps {
     bettingStates: Map<string, RoomBettingState>
     enabledRoomIds?: Set<string>
     selectedPattern: RoomFilterType | 'all'
+    activeFilters?: RoomFilterType[]
     matchesFilter?: (room: Room, state: RoomPredictionState | null, pattern: RoomFilterType) => boolean
     sortType: RoomSortType
     sortDirection: SortDirection
     roomDataVersion: number
+    filterSettingsSignature?: string
 }
 
 export const useRoomFilter = ({
@@ -20,10 +22,12 @@ export const useRoomFilter = ({
     bettingStates,
     enabledRoomIds,
     selectedPattern,
+    activeFilters,
     matchesFilter,
     sortType,
     sortDirection,
-    roomDataVersion
+    roomDataVersion,
+    filterSettingsSignature
 }: UseRoomFilterProps) => {
     return useMemo(() => {
         // 1. Basic Filtering (Baccarat only, excluding special ones)
@@ -40,10 +44,11 @@ export const useRoomFilter = ({
         }
 
         // 3. Pattern Filtering
-        if (selectedPattern !== 'all' && matchesFilter) {
+        const effectiveFilters = activeFilters ?? (selectedPattern === 'all' ? [] : [selectedPattern])
+        if (effectiveFilters.length > 0 && matchesFilter) {
             roomList = roomList.filter(room => {
                 const state = roomStates.get(room.id) || null
-                return matchesFilter(room, state, selectedPattern as RoomFilterType)
+                return effectiveFilters.some(filterType => matchesFilter(room, state, filterType))
             })
         }
 
@@ -144,5 +149,5 @@ export const useRoomFilter = ({
         }
 
         return roomList
-    }, [rooms, roomStates, bettingStates, enabledRoomIds, selectedPattern, matchesFilter, sortType, sortDirection, roomDataVersion])
+    }, [rooms, roomStates, bettingStates, enabledRoomIds, selectedPattern, activeFilters, matchesFilter, sortType, sortDirection, roomDataVersion, filterSettingsSignature])
 }

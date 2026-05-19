@@ -11,7 +11,6 @@ import type {
   SessionStats,
 } from './types'
 import type { IMartingaleManager } from './MartingaleManager'
-import type { IRestPeriodManager } from './RestPeriodManager'
 
 // ==================== Interface ====================
 
@@ -49,14 +48,11 @@ export interface IResultProcessor {
 
 export class ResultProcessor implements IResultProcessor {
   private martingaleManager: IMartingaleManager
-  private restPeriodManager: IRestPeriodManager
 
   constructor(
-    martingaleManager: IMartingaleManager,
-    restPeriodManager: IRestPeriodManager
+    martingaleManager: IMartingaleManager
   ) {
     this.martingaleManager = martingaleManager
-    this.restPeriodManager = restPeriodManager
   }
 
   // ==================== 결과 처리 ====================
@@ -67,7 +63,7 @@ export class ResultProcessor implements IResultProcessor {
     betType: BetType,
     betAmount: number,
     ctx: RoomContext,
-    settings: AutoModeSettings
+    _settings: AutoModeSettings
   ): BetResult {
     // 결과 판정
     const isWin = this.isWin(result, betType)
@@ -109,14 +105,6 @@ export class ResultProcessor implements IResultProcessor {
       ctx.martingale.consecutiveLosses++
       ctx.martingale.consecutiveWins = 0
       ctx.martingale.level = this.martingaleManager.getLevel(roomId)
-
-      // 연패 시 휴식 기간 시작
-      if (settings.enableRestAfterLoss && ctx.martingale.consecutiveLosses >= settings.restAfterLossCount) {
-        this.restPeriodManager.startRest(roomId, settings.restDurationMinutes)
-        ctx.rest.isResting = true
-        ctx.rest.restStartTime = Date.now()
-        ctx.rest.restEndTime = Date.now() + settings.restDurationMinutes * 60000
-      }
     }
 
     // 배팅 상태 리셋
@@ -130,7 +118,6 @@ export class ResultProcessor implements IResultProcessor {
       isTie,
       profit,
       newLevel: ctx.martingale.level,
-      shouldRest: ctx.rest.isResting,
     }
   }
 
@@ -256,10 +243,9 @@ export class ResultProcessor implements IResultProcessor {
 // ==================== Factory ====================
 
 export function createResultProcessor(
-  martingaleManager: IMartingaleManager,
-  restPeriodManager: IRestPeriodManager
+  martingaleManager: IMartingaleManager
 ): ResultProcessor {
-  return new ResultProcessor(martingaleManager, restPeriodManager)
+  return new ResultProcessor(martingaleManager)
 }
 
 export default ResultProcessor

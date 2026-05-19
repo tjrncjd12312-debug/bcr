@@ -142,7 +142,9 @@ class RoomFilterServiceImpl {
         const rangeText = tieFrequentMinCount === tieFrequentMaxCount
           ? (tieFrequentMinCount === 0 ? '한 번도 없음' : `정확히 ${tieFrequentMinCount}번`)
           : `${tieFrequentMinCount}~${tieFrequentMaxCount}번`
-        label = `타이 자주 (${rangeText})`
+        label = tieFrequentMinCount === 0 && tieFrequentMaxCount === 0
+          ? `타이 없음 (${rangeText})`
+          : `타이 자주 (${rangeText})`
         const endGame = tieFrequentStart + tieFrequentWindow - 1
         description = `${tieFrequentStart}~${endGame}번째 게임 사이에 Tie가 ${rangeText} 나온 방`
       } else if (filter.type === 'fresh_room') {
@@ -362,9 +364,11 @@ class RoomFilterServiceImpl {
 
       case 'tie_frequent': {
         const { tieFrequentWindow, tieFrequentStart, tieFrequentMinCount, tieFrequentMaxCount } = FilterThresholdsService.get()
-        // history is newest-first; we want games [start, start+window-1] from the start of the shoe.
-        const needed = tieFrequentStart + tieFrequentWindow - 1
-        if (winners.length < needed) return false
+        // history is newest-first; evaluate the configured shoe interval with
+        // the results seen so far. This lets "1~60 games, Tie 0~0" surface a
+        // brand-new/first-hand shoe immediately instead of waiting for all 60
+        // games to finish.
+        if (winners.length < tieFrequentStart - 1) return false
         const chrono = [...winners].reverse()
         const slice = chrono.slice(tieFrequentStart - 1, tieFrequentStart - 1 + tieFrequentWindow)
         const tieCount = slice.filter(w => w === 'T').length

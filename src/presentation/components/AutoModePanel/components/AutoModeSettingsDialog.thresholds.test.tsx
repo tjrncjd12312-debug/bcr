@@ -23,7 +23,6 @@ function baseSettings(): AutoModeSettings {
     winCutAmount: 0,
     lossCutAmount: 0,
     globalMaxConsecutiveLosses: 5,
-    restDurationMinutes: 0,
     resetMartinOnStop: true,
     maxConcurrentBets: 0,
     onlySelectedRooms: false,

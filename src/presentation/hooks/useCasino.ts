@@ -971,6 +971,14 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
     const roomUrl = `${baseUrl}/frontend/evo/r2/#category=baccarat&game=baccarat&table_id=${roomId}&lobby_launch_id=${launchId}`
 
     try {
+      let baseHost = 'invalid'
+      try {
+        baseHost = new URL(baseUrl).host
+      } catch {
+        // Keep diagnostics safe even if a caller provided a partial URL.
+      }
+      console.info('[useCasino] CDP room navigation only', { roomId, baseHost })
+
       // CDP로 기존 탭에서 네비게이션 + 게임 WebSocket 차단
       // Rust 멀티소켓과 충돌 방지
       await invoke('navigate_to_room_with_ws_block', { url: roomUrl })
@@ -988,14 +996,14 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
 
       showInfo('브라우저에서 방으로 이동합니다')
     } catch (error) {
-      // CDP 실패 시 일반 Chrome으로 열기 (fallback)
-      console.warn('[useCasino] CDP navigate failed, trying normal Chrome:', error)
-      try {
-        await invoke('open_in_chrome_normal', { url: roomUrl })
-        showInfo('새 창에서 방으로 이동합니다')
-      } catch (fallbackError) {
-        showError('CONNECTION_FAILED', '방 이동에 실패했습니다', fallbackError instanceof Error ? fallbackError.message : String(fallbackError))
-      }
+      const details = error instanceof Error ? error.message : String(error)
+      console.error('[useCasino] CDP room navigation failed:', error)
+      setStatus('error')
+      showError(
+        'CONNECTION_FAILED',
+        '방 이동에 실패했습니다',
+        `${details} / CDP 브라우저 세션이 끊겼습니다. 카지노 창을 다시 열어 새 세션을 캡처하세요.`
+      )
     }
   }, [rooms, provider, showWarning, showInfo, showError])
 

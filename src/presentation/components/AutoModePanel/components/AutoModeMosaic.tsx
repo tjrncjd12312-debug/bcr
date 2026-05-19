@@ -6,7 +6,9 @@ import type {
 } from '../../../../application/services/AutoModeService'
 import type { RoomBetLog } from './AutoModeRoomGrid'
 import './AutoModeMosaic.css'
+import '../AutoModePanel.css'
 import { useRoomFilter } from '../hooks/useRoomFilter'
+import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount, compactAmount } from '../utils/autoModeStatus'
 
 interface AutoModeMosaicProps {
   rooms: Room[]
@@ -23,9 +25,11 @@ interface AutoModeMosaicProps {
   roomTimers?: Map<string, number>
   enabledRoomIds?: Set<string>
   selectedPattern?: RoomFilterType | 'all'
+  activeFilters?: RoomFilterType[]
   matchesFilter?: (room: Room, state: RoomPredictionState | null, pattern: RoomFilterType) => boolean
   sortType?: RoomSortType
   sortDirection?: SortDirection
+  filterSettingsSignature?: string
 }
 
 export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
@@ -42,9 +46,11 @@ export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
   roomTimers,
   enabledRoomIds,
   selectedPattern = 'all',
+  activeFilters,
   matchesFilter,
   sortType = 'martin',
-  sortDirection = 'desc'
+  sortDirection = 'desc',
+  filterSettingsSignature
 }) => {
   // Logic Separation: Use Custom Hook for Filtering & Sorting
   const filteredAndSortedRooms = useRoomFilter({
@@ -53,10 +59,12 @@ export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
     bettingStates,
     enabledRoomIds,
     selectedPattern,
+    activeFilters,
     matchesFilter,
     sortType,
     sortDirection,
-    roomDataVersion
+    roomDataVersion,
+    filterSettingsSignature
   })
 
   const handleTileClick = useCallback((roomId: string) => {
@@ -68,6 +76,8 @@ export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
   }, [onSelectRoom, onToggleRoom])
 
   const maxMartin = settings.maxMartin ?? 10
+  const filterLabel = useMemo(() => getFilterShortLabel(activeFilters), [activeFilters])
+  const isAutoEnabled = settings.enabled ?? false
 
   if (filteredAndSortedRooms.length === 0) {
     return (
@@ -103,6 +113,10 @@ export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
             isSelected={selectedRoomId === room.id}
             onClick={() => handleTileClick(room.id)}
             timer={timer}
+            settings={settings}
+            filterLabel={filterLabel}
+            isEnabled={enabledRoomIds?.has(room.id) ?? true}
+            isAutoEnabled={isAutoEnabled}
           />
         )
       })}
@@ -121,6 +135,10 @@ interface MosaicTileProps {
   isSelected: boolean
   onClick: () => void
   timer?: number
+  settings: AutoModeSettings
+  filterLabel: string | null
+  isEnabled: boolean
+  isAutoEnabled: boolean
 }
 
 const MosaicTile: React.FC<MosaicTileProps> = ({
@@ -133,11 +151,14 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
   maxMartin,
   isSelected,
   onClick,
-  timer
+  timer,
+  settings,
+  filterLabel,
+  isEnabled,
+  isAutoEnabled,
 }) => {
   // === State Calculations ===
   const isBetting = bettingState?.waitingForResult ?? false
-  const isResting = (bettingState?.restingUntil ?? 0) > Date.now()
   const martinLevel = bettingState?.martinLevel ?? 0
 
   const RESULT_DISPLAY_DURATION = 4000
@@ -154,34 +175,33 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
   const winRate = roomState?.stats?.winRate ?? 0
   const recentProfit = recentResultLog?.profit ?? null
   const sessionProfit = betLogs.reduce((sum, log) => sum + (log.profit || 0), 0)
-
-  const betResults = betLogs
-    .filter(log => log.status === 'win' || log.status === 'loss')
-    .slice(0, 6)
-    .reverse()
-    .map(log => log.status === 'win' ? 'O' : 'X')
+  const roomHistory = room.history ?? []
+  const recentHistory = roomHistory.slice(0, 12).reverse()
 
   const timeLeft = timer ?? 0
   const timerClass = timeLeft <= 5 ? 'urgent' : timeLeft <= 10 ? 'warning' : ''
-  // const isIdleState = !isResting && !isBetting && !recentResultLog && !recentPassLog
+  // const isIdleState = !isBetting && !recentResultLog && !recentPassLog
 
   // Logic Separation: Use Custom Hook for Visual State -> Removed as per user request (Eye strain)
 
-  const statusDisplay = useMemo(() => {
-    if (isResting) return { text: '휴식', class: 'rest' }
-    if (isBetting) return { text: '배팅중', class: 'betting' }
-    if (recentResultLog?.status === 'win') return { text: '승', class: 'win' }
-    if (recentResultLog?.status === 'loss') return { text: '패', class: 'loss' }
-    if (recentPassLog) return { text: '패스', class: 'pass' }
+  // 최근 결과(승/패/패스)는 일시적이라 별도로 표시하고,
+  // 그 외는 공용 칩 헬퍼(getRoomStatusChip)로 통일한다. 모자이크는 brief=true로 짧게.
+  const statusChip = useMemo(() => {
+    if (recentResultLog?.status === 'win') return { text: '승', tone: 'observing' as const, isResult: true }
+    if (recentResultLog?.status === 'loss') return { text: '패', tone: 'martin' as const, isResult: true }
+    if (recentPassLog) return { text: '패스', tone: 'idle' as const, isResult: true }
+    const chip = getRoomStatusChip(bettingState ?? null, settings, isEnabled, isAutoEnabled, { brief: true })
+    return { ...chip, isResult: false }
+  }, [recentResultLog, recentPassLog, bettingState, settings, isEnabled, isAutoEnabled])
 
-    // Default Idle
-    return { text: '대기중', class: 'idle' }
-  }, [isResting, isBetting, recentResultLog, recentPassLog])
+  const nextBetAmount = useMemo(
+    () => getNextBetAmount(settings, martinLevel, { isTieBet: filterLabel?.startsWith('Tie') ?? false }),
+    [settings, martinLevel, filterLabel]
+  )
 
   const tileClass = useMemo(() => {
     const classes = ['mosaic-tile']
     if (isBetting) classes.push('betting')
-    else if (isResting) classes.push('resting')
     else if (recentResultLog?.status === 'win') classes.push('hot')
     else if (recentResultLog?.status === 'loss') classes.push('cold')
     else if (recentPassLog) classes.push('pass')
@@ -191,7 +211,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
     if (martinLevel >= 4) classes.push('danger')
     if (isSelected) classes.push('selected')
     return classes.join(' ')
-  }, [isBetting, isResting, recentResultLog, recentPassLog, martinLevel, isSelected])
+  }, [isBetting, recentResultLog, recentPassLog, martinLevel, isSelected])
 
   const martinWidth = Math.min(100, (martinLevel / maxMartin) * 100)
   const martinFillClass = `mosaic-martin-fill level-${Math.min(martinLevel, 10)}`
@@ -202,11 +222,10 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
   const martinLabelClass = martinLevel >= 4 ? 'danger' : martinLevel >= 2 ? 'warning' : ''
   const statusDotClass = useMemo(() => {
     if (isBetting) return 'betting'
-    if (isResting) return 'resting'
     if (lastStatus === 'win') return 'hot'
     if (lastStatus === 'loss') return 'cold'
     return 'idle'
-  }, [isBetting, isResting, lastStatus])
+  }, [isBetting, lastStatus])
   const lastBetAmount = lastLog?.betAmount ?? 0
 
   return (
@@ -222,6 +241,13 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
         )}
       </div>
 
+      {/* Filter Reason — 왜 이 방이 풀에 들어왔는지 */}
+      {filterLabel && (
+        <div className="mosaic-filter-row">
+          <span className={`auto-filter-reason ${filterLabel.startsWith('Tie') ? 'tie-tone' : ''}`}>{filterLabel}</span>
+        </div>
+      )}
+
       {/* Main Row */}
       <div className="mosaic-main">
         <div className={`mosaic-prediction-badge ${predictionBadge === 'B' ? 'banker' :
@@ -232,16 +258,15 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
         </div>
 
         <div className="mosaic-center-info">
-          <span className={`mosaic-status-text ${statusDisplay.class}`}>
-            {statusDisplay.text}
-          </span>
-          {isBetting && lastBetAmount > 0 && (
-            <span className="mosaic-bet-amount">{lastBetAmount.toLocaleString()}원</span>
-          )}
-          {!isBetting && recentProfit !== null && (
+          <span className={`auto-status-chip compact ${statusChip.tone}`}>{statusChip.text}</span>
+          {isBetting && lastBetAmount > 0 ? (
+            <span className="mosaic-bet-amount">{compactAmount(lastBetAmount)}원</span>
+          ) : recentProfit !== null ? (
             <span className={`mosaic-result-profit ${recentProfit > 0 ? 'positive' : 'negative'}`}>
-              {recentProfit > 0 ? '+' : ''}{recentProfit.toLocaleString()}원
+              {recentProfit > 0 ? '+' : ''}{compactAmount(recentProfit)}원
             </span>
+          ) : (
+            <span className="mosaic-bet-amount">→ {compactAmount(nextBetAmount)}원</span>
           )}
         </div>
 
@@ -255,10 +280,14 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
         <span className={`mosaic-session-profit ${sessionProfit > 0 ? 'positive' : sessionProfit < 0 ? 'negative' : ''}`}>
           {sessionProfit !== 0 ? (sessionProfit > 0 ? '+' : '') + sessionProfit.toLocaleString() : '-'}
         </span>
-        <div className="mosaic-ox-results">
-          {betResults.length > 0 ? betResults.map((r, i) => (
-            <span key={i} className={`mosaic-ox ${r === 'O' ? 'win' : 'loss'}`}>{r}</span>
-          )) : <span className="mosaic-ox-empty">-</span>}
+        <div className="mosaic-history-strip" aria-label="Recent game history">
+          {recentHistory.length > 0 ? recentHistory.map((h, i) => (
+            <span
+              key={`${i}-${h.winner}`}
+              className={`mosaic-history-dot ${h.winner.toLowerCase()}`}
+              title={h.winner}
+            />
+          )) : <span className="mosaic-history-empty">-</span>}
         </div>
       </div>
 
@@ -274,7 +303,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
           <span className={`mosaic-win-rate ${winRateClass}`}>
             {winRate > 0 ? `${winRate.toFixed(0)}%` : '-'}
           </span>
-          <span className="mosaic-game-count">({room.history.length}G)</span>
+          <span className="mosaic-game-count">({roomHistory.length}G)</span>
         </span>
       </div>
 

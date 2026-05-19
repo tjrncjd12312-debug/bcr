@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { BettingDecisionService } from './BettingDecisionService'
 import { MartingaleManager } from './MartingaleManager'
-import { RestPeriodManager } from './RestPeriodManager'
 import { DEFAULT_SETTINGS, createRoomContext, type AutoModeSettings } from './types'
 import type { Prediction } from '../../../domain/entities'
 
@@ -23,7 +22,7 @@ describe('BettingDecisionService.forceBetDirection', () => {
   let svc: BettingDecisionService
 
   beforeEach(() => {
-    svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager())
+    svc = new BettingDecisionService(new MartingaleManager(5))
   })
 
   it("returns betType='Tie' when forceBetDirection='tie_only' and prediction is 'B'", () => {
@@ -65,7 +64,7 @@ describe('BettingDecisionService gates', () => {
   it('emits martin_cap callback when level reaches maxMartin', () => {
     const martin = new MartingaleManager(5)
     const onMartinCap = vi.fn()
-    const svc = new BettingDecisionService(martin, new RestPeriodManager(), { onMartinCap })
+    const svc = new BettingDecisionService(martin, { onMartinCap })
     const ctx = createRoomContext('r1', 'Room')
     ctx.martingale.level = 5
     const d = svc.shouldBet('r1', prediction('B'), settings({ maxMartin: 5 }), ctx)
@@ -75,7 +74,7 @@ describe('BettingDecisionService gates', () => {
 
   it('does NOT emit martin_cap callback when level is below cap', () => {
     const onMartinCap = vi.fn()
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager(), { onMartinCap })
+    const svc = new BettingDecisionService(new MartingaleManager(5), { onMartinCap })
     const ctx = createRoomContext('r1', 'Room')
     ctx.martingale.level = 3
     svc.shouldBet('r1', prediction('B'), settings({ maxMartin: 5 }), ctx)
@@ -84,7 +83,7 @@ describe('BettingDecisionService gates', () => {
 
   it('blocks bet when stoppedRoomsChecker returns true', () => {
     const stoppedRoomsChecker = vi.fn((roomId: string) => roomId === 'r-stopped')
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager(), { stoppedRoomsChecker })
+    const svc = new BettingDecisionService(new MartingaleManager(5), { stoppedRoomsChecker })
     const d = svc.shouldBet('r-stopped', prediction('B'), settings(), createRoomContext('r-stopped', 'Room'))
     expect(d.shouldBet).toBe(false)
     expect(d.skipReason).toBe('Fresh-shoe 종료')
@@ -92,19 +91,19 @@ describe('BettingDecisionService gates', () => {
 
   it('allows bet when stoppedRoomsChecker returns false', () => {
     const stoppedRoomsChecker = vi.fn(() => false)
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager(), { stoppedRoomsChecker })
+    const svc = new BettingDecisionService(new MartingaleManager(5), { stoppedRoomsChecker })
     const d = svc.shouldBet('r1', prediction('B'), settings(), createRoomContext('r1', 'Room'))
     expect(d.shouldBet).toBe(true)
   })
 
   it('does not require gates option (backwards compatible)', () => {
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager())
+    const svc = new BettingDecisionService(new MartingaleManager(5))
     const d = svc.shouldBet('r1', prediction('B'), settings(), createRoomContext('r1', 'Room'))
     expect(d.shouldBet).toBe(true)
   })
 
   it('setStoppedRoomsChecker and setOnMartinCap allow post-construction wiring', () => {
-    const svc = new BettingDecisionService(new MartingaleManager(5), new RestPeriodManager())
+    const svc = new BettingDecisionService(new MartingaleManager(5))
     const checker = vi.fn((roomId: string) => roomId === 'r-stopped')
     const onCap = vi.fn()
     svc.setStoppedRoomsChecker(checker)

@@ -447,6 +447,59 @@
   flex-shrink: 0;
 }
 
+.auto-mode__target-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  flex-shrink: 0;
+  background: var(--border-subtle);
+  border-bottom: 1px solid var(--border);
+}
+
+.auto-mode__target-item {
+  min-width: 0;
+  padding: 8px 16px;
+  background: var(--bg-card);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: baseline;
+}
+
+.auto-mode__target-label {
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
+.auto-mode__target-item strong {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto-mode__target-sub {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto-mode__target-strip.is-empty .auto-mode__target-item:nth-child(2) strong,
+.auto-mode__target-strip.is-empty .auto-mode__target-item:nth-child(2) .auto-mode__target-sub {
+  color: var(--status-warning);
+}
+
 /* Room Stats Display */
 .auto-mode__room-stats {
   display: flex;
@@ -2768,6 +2821,20 @@
     flex-basis: auto;
     margin-left: auto;
   }
+
+  .auto-mode__target-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .auto-mode__target-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .auto-mode__target-item {
+    padding: 7px 12px;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3451,3 +3518,73 @@
   color: var(--text-secondary);
   font-weight: 500;
 }
+
+/* ============================================================
+   AUTO-MODE STATUS CHIP — Mosaic/Grid/List 공용
+   ============================================================ */
+.auto-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+}
+.auto-status-chip.idle { color: var(--text-muted); border-color: rgba(255, 255, 255, 0.08); }
+.auto-status-chip.observing { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 35%, transparent); background: color-mix(in srgb, var(--blue) 10%, transparent); }
+.auto-status-chip.betting { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 35%, transparent); background: color-mix(in srgb, var(--gold) 12%, transparent); }
+.auto-status-chip.pending { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 35%, transparent); background: color-mix(in srgb, var(--gold) 8%, transparent); }
+.auto-status-chip.martin { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.auto-status-chip.disabled { color: var(--text-muted); opacity: 0.6; }
+
+.auto-status-chip.compact {
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
+/* 필터 매칭 이유 라벨 (모든 뷰 공용) */
+.auto-filter-reason {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.auto-filter-reason.tie-tone {
+  color: color-mix(in srgb, var(--gold) 80%, white);
+  border-color: color-mix(in srgb, var(--gold) 30%, transparent);
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+
+/* 다음 배팅금액 강조 (Grid/Mosaic) */
+.auto-next-bet {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.auto-next-bet .auto-next-bet__label {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 10px;
+}
+.auto-next-bet .auto-next-bet__dir {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.auto-next-bet .auto-next-bet__dir.b { color: var(--red); }
+.auto-next-bet .auto-next-bet__dir.p { color: var(--blue); }
+.auto-next-bet .auto-next-bet__dir.t { color: var(--gold); }

@@ -91,7 +91,6 @@ export class PatternPredictionService implements IPatternPredictionService {
     config: PatternPredictionConfig
   ): Promise<Prediction | null> {
     const history = room.history
-    if (history.length < 3) return null
 
     // 현재 방에 매칭되는 패턴 찾기
     const matchedPattern = this.findMatchedPattern(room, currentFilter)
@@ -122,6 +121,8 @@ export class PatternPredictionService implements IPatternPredictionService {
         timestamp: Date.now(),
       }
     }
+
+    if (history.length < 3) return null
 
     // betDirection === 'ai' - AI 서버 예측 요청
     return this.requestAiPrediction(room, remainingSeconds, patternName, config)

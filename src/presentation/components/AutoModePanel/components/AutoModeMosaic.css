@@ -39,14 +39,14 @@
    ═══════════════════════════════════════════════════════════════ */
 
 .mosaic-tile {
-  height: 100px;
+  height: 108px;
   background: linear-gradient(180deg,
       var(--bg-surface) 0%,
       var(--bg-card) 100%);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   display: grid;
-  grid-template-rows: 18px 1fr 18px 14px;
+  grid-template-rows: 18px 1fr 22px 14px;
   overflow: hidden;
   cursor: pointer;
   position: relative;
@@ -262,8 +262,22 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+  overflow: hidden;
+}
+
+.mosaic-center-info .auto-status-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mosaic-filter-row {
+  display: flex;
+  align-items: center;
+  padding: 0 8px 2px;
+  min-height: 14px;
 }
 
 .mosaic-status-text {
@@ -303,9 +317,11 @@
 }
 
 .mosaic-bet-amount {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--accent-gold);
-  font-weight: 600;
+  font-weight: 700;
+  white-space: nowrap;
+  line-height: 1.2;
 }
 
 .mosaic-result-profit {
@@ -391,6 +407,45 @@
 }
 
 .mosaic-ox-empty {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.mosaic-history-strip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.mosaic-history-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: var(--border-color);
+}
+
+.mosaic-history-dot.b {
+  background: var(--banker-color);
+  box-shadow: 0 0 5px var(--banker-glow);
+}
+
+.mosaic-history-dot.p {
+  background: var(--player-color);
+  box-shadow: 0 0 5px var(--player-glow);
+}
+
+.mosaic-history-dot.t {
+  background: var(--tie-color, #10b981);
+  box-shadow: 0 0 5px rgba(16, 185, 129, 0.5);
+}
+
+.mosaic-history-empty {
   font-size: 9px;
   color: var(--text-muted);
 }
@@ -544,7 +599,7 @@
   }
 
   .mosaic-tile {
-    height: 110px;
+    height: 116px;
   }
 
   .mosaic-prediction-badge {
@@ -562,7 +617,7 @@
   }
 
   .mosaic-tile {
-    height: 90px;
+    height: 100px;
   }
 
   .mosaic-prediction-badge {

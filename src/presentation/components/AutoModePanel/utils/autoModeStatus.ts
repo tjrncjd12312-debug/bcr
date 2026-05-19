@@ -1,0 +1,191 @@
+// AutoModeStatus utilities — Mosaic/Grid/List 세 뷰가 공유하는 상태 칩/필터 라벨/다음 배팅금액 계산
+// Clean Architecture: Presentation Layer Utility (no React 의존성, pure functions)
+
+import type { AutoModeSettings, RoomBettingState } from '../../../../application/services/AutoModeService'
+import type { RoomFilterType } from '../../../../domain/entities'
+import FilterThresholdsService from '../../../../application/services/FilterThresholdsService'
+
+export type ChipTone = 'idle' | 'observing' | 'betting' | 'pending' | 'martin' | 'disabled'
+
+export interface RoomStatusChip {
+  text: string
+  tone: ChipTone
+}
+
+export interface RoomStatusChipOptions {
+  /** 모자이크처럼 좁은 칸은 brief=true로 짧게 표시 (예: 마틴 3단계 → M3) */
+  brief?: boolean
+}
+
+/**
+ * 방의 현재 상태를 한 줄 칩으로 요약.
+ */
+export function getRoomStatusChip(
+  autoState: RoomBettingState | null,
+  _settings: AutoModeSettings,
+  isEnabled: boolean,
+  isAutoEnabled: boolean,
+  options?: RoomStatusChipOptions,
+): RoomStatusChip {
+  const brief = options?.brief === true
+
+  if (!isEnabled) return { text: '정지', tone: 'disabled' }
+  if (!isAutoEnabled) return { text: '대기', tone: 'idle' }
+
+  const martinLevel = autoState?.martinLevel ?? 0
+  const waitingForResult = autoState?.waitingForResult ?? false
+
+  if (waitingForResult) {
+    if (martinLevel > 0) {
+      return brief
+        ? { text: `M${martinLevel + 1}*`, tone: 'martin' }
+        : { text: `마틴 ${martinLevel + 1} · 결과대기`, tone: 'martin' }
+    }
+    return brief
+      ? { text: '대기*', tone: 'pending' }
+      : { text: '결과대기', tone: 'pending' }
+  }
+
+  if (martinLevel > 0) {
+    return brief
+      ? { text: `M${martinLevel + 1}`, tone: 'martin' }
+      : { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }
+  }
+
+  if (autoState?.lastPrediction?.prediction) {
+    return { text: '관망', tone: 'observing' }
+  }
+
+  return { text: '대기', tone: 'idle' }
+}
+
+/**
+ * 현재 활성 필터를 짧은 라벨로 변환. 여러 필터일 경우 첫 번째만 라벨링.
+ * 예: tie_frequent + 임계값 (start=1, window=60, min=0, max=0) → "Tie 0/0 (1~60판)"
+ */
+export function getFilterShortLabel(
+  activeFilters: RoomFilterType[] | undefined,
+): string | null {
+  if (!activeFilters || activeFilters.length === 0) return null
+  const filter = activeFilters[0]
+
+  if (typeof filter === 'string' && filter.startsWith('custom:')) {
+    return '커스텀 패턴'
+  }
+
+  const thresholds = FilterThresholdsService.get()
+
+  switch (filter) {
+    case 'tie_frequent': {
+      const { tieFrequentStart, tieFrequentWindow, tieFrequentMinCount, tieFrequentMaxCount } = thresholds
+      const end = tieFrequentStart + tieFrequentWindow - 1
+      return `Tie ${tieFrequentMinCount}/${tieFrequentMaxCount} (${tieFrequentStart}~${end}판)`
+    }
+    case 'tie_drought':
+      return `Tie 없음 ≥${thresholds.tieDroughtThreshold}판`
+    case 'no_tie_room':
+      return 'Tie 0건'
+    case 'fresh_room':
+      return `신규 ≤${thresholds.freshRoomGames}판`
+    case 'fresh_shoe':
+      return `새 슈 ≤${thresholds.freshShoeMaxGameNumber}판`
+    case 'banker_dominant':
+      return 'B 우세'
+    case 'player_dominant':
+      return 'P 우세'
+    case 'alternating':
+      return '퐁당 (4+)'
+    case 'long_streak':
+      return '장줄 (4+)'
+    case 'short_streak':
+      return '단줄 (2~3)'
+    case 'after_tie':
+      return '타이 직후'
+    case 'winning_streak':
+      return '연승'
+    case 'losing_streak':
+      return '연패'
+    default:
+      return null
+  }
+}
+
+// 100단까지 안전하게 커버하는 피보나치 배열 (MartingaleManager와 동일 길이/값)
+const FIBONACCI_MULTIPLIERS: readonly number[] = (() => {
+  const arr: number[] = [1, 1]
+  for (let i = 2; i < 100; i++) arr.push(arr[i - 1] + arr[i - 2])
+  return arr
+})()
+
+export interface NextBetAmountOptions {
+  /** 추가 캡 (예: 테이블 최대 한도). 0 또는 미지정이면 캡 미적용. */
+  cap?: number
+  /** Tie 베팅이면 settings.tieMaxBetLimit를 추가로 캡으로 적용 */
+  isTieBet?: boolean
+}
+
+/**
+ * 현재 마틴 레벨 기준 다음 배팅 금액 계산. MartingaleManager.calculateBetAmount와 동일한 식.
+ * 실제 배팅 금액과 UI 표시가 어긋나지 않도록 한 곳에서만 식을 유지한다.
+ *
+ * 캡 우선순위: options.cap 와 settings.tieMaxBetLimit(Tie인 경우) 중 더 작은 값을 적용.
+ * 실제 배팅 경로에서는 AutoModeService가 마지막에 한 번 더 강제한다.
+ */
+export function getNextBetAmount(
+  settings: AutoModeSettings,
+  martinLevel: number,
+  options?: NextBetAmountOptions,
+): number {
+  const effectiveLevel = Math.min(martinLevel, Math.max(0, (settings.maxMartin || 1) - 1))
+  const base = settings.baseBetAmount || 0
+  let raw: number
+  switch (settings.betStrategy) {
+    case 'flat':
+      raw = base
+      break
+    case 'fibonacci': {
+      const idx = Math.min(effectiveLevel, FIBONACCI_MULTIPLIERS.length - 1)
+      raw = base * FIBONACCI_MULTIPLIERS[idx]
+      break
+    }
+    case 'paroli':
+      // MartingaleManager와 동일: 최대 2레벨까지만 배수 적용 (1, 2, 4)
+      raw = base * Math.pow(2, Math.min(effectiveLevel, 2))
+      break
+    case 'custom': {
+      const arr = settings.customBetAmounts
+      if (arr && arr.length > effectiveLevel) {
+        const v = arr[effectiveLevel]
+        if (typeof v === 'number' && v > 0) {
+          raw = v
+          break
+        }
+      }
+      raw = base
+      break
+    }
+    case 'martingale':
+    default:
+      raw = base * Math.pow(2, effectiveLevel)
+      break
+  }
+  // 캡 적용: options.cap 와 Tie 한도(Tie 베팅인 경우) 중 더 작은 값을 사용
+  let effectiveCap = 0
+  if (options?.cap && options.cap > 0) effectiveCap = options.cap
+  if (options?.isTieBet && settings.tieMaxBetLimit && settings.tieMaxBetLimit > 0) {
+    effectiveCap = effectiveCap > 0
+      ? Math.min(effectiveCap, settings.tieMaxBetLimit)
+      : settings.tieMaxBetLimit
+  }
+  if (effectiveCap > 0 && raw > effectiveCap) return effectiveCap
+  return raw
+}
+
+/**
+ * 큰 금액은 'K' 접미사로 압축 (Mosaic처럼 좁은 공간용).
+ */
+export function compactAmount(amount: number): string {
+  if (amount === 0) return '0'
+  if (Math.abs(amount) >= 10000) return `${Math.round(amount / 1000)}K`
+  return amount.toLocaleString()
+}
