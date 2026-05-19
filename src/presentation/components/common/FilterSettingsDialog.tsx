@@ -53,11 +53,12 @@ function useTieAutoState(activeFilters: RoomFilterType[]) {
   return isExclusiveTieFilter && direction === 'T' && strategy === 'martingale'
 }
 
-// Easy 카드의 필터 임계값(윈도우 + min/max 출현 횟수)을 실시간으로 따라가는 훅.
+// Easy 카드의 필터 임계값(시작 + 윈도우 + min/max 출현 횟수)을 실시간으로 따라가는 훅.
 function useTieFrequentControls() {
   const [values, setValues] = useState(() => {
     const v = FilterThresholdsService.get()
     return {
+      start: v.tieFrequentStart,
       window: v.tieFrequentWindow,
       min: v.tieFrequentMinCount,
       max: v.tieFrequentMaxCount,
@@ -67,6 +68,7 @@ function useTieFrequentControls() {
     const sync = () => {
       const v = FilterThresholdsService.get()
       setValues({
+        start: v.tieFrequentStart,
         window: v.tieFrequentWindow,
         min: v.tieFrequentMinCount,
         max: v.tieFrequentMaxCount,
@@ -99,9 +101,10 @@ export function FilterSettingsDialog({
   onOpenPatternManager,
   freshShoeScope,
 }: FilterSettingsDialogProps) {
-  const isAllActive = activeFilters.length === 0
   const tieAutoOn = useTieAutoState(activeFilters)
-  const { window: tieWindow, min: tieMin, max: tieMax } = useTieFrequentControls()
+  // 타이 자동이 켜져 있으면 "전체"는 강제 OFF — 다른 필터로 빠지지 않도록.
+  const isAllActive = !tieAutoOn && activeFilters.length === 0
+  const { start: tieStart, window: tieWindow, min: tieMin, max: tieMax } = useTieFrequentControls()
   const { baseBetAmount, maxMartin } = useAutoBetSettings()
   const tieMatchCount = filterCounts.tie_frequent ?? 0
 
@@ -116,7 +119,7 @@ export function FilterSettingsDialog({
     }
   }
 
-  const setIntThreshold = (key: 'tieFrequentWindow' | 'tieFrequentMinCount' | 'tieFrequentMaxCount') =>
+  const setIntThreshold = (key: 'tieFrequentWindow' | 'tieFrequentStart' | 'tieFrequentMinCount' | 'tieFrequentMaxCount') =>
     (raw: string) => {
       const n = parseInt(raw, 10)
       if (Number.isFinite(n)) FilterThresholdsService.set({ [key]: n })
@@ -144,7 +147,7 @@ export function FilterSettingsDialog({
           <div>
             <h3 className="filter-settings__quick-title">타이 자동 배팅</h3>
             <p className="filter-settings__quick-desc">
-              아래 횟수만큼 <strong>타이가 나온 방</strong>에서 <strong>타이에 마틴</strong>을 겁니다.
+              슈 시작부터 일정 구간에 <strong>타이가 정해진 횟수만큼 나온(또는 안 나온) 방</strong>에서 <strong>타이에 마틴</strong>을 겁니다. 한 방에 들어가면 타이가 나올 때까지 그 방에서만 진행.
             </p>
           </div>
           <button
@@ -157,11 +160,21 @@ export function FilterSettingsDialog({
           </button>
         </div>
         <div className="filter-settings__quick-row">
-          <span className="filter-settings__quick-row-label">최근</span>
+          <span className="filter-settings__quick-row-label">시작</span>
           <input
             className="filter-settings__quick-count"
             type="number"
-            min={5}
+            min={1}
+            max={200}
+            value={tieStart}
+            onChange={(e) => setIntThreshold('tieFrequentStart')(e.target.value)}
+            aria-label="관측 시작 게임 번호"
+          />
+          <span className="filter-settings__quick-row-label">번째 게임부터</span>
+          <input
+            className="filter-settings__quick-count"
+            type="number"
+            min={1}
             max={200}
             value={tieWindow}
             onChange={(e) => setIntThreshold('tieFrequentWindow')(e.target.value)}
@@ -171,7 +184,7 @@ export function FilterSettingsDialog({
           <input
             className="filter-settings__quick-count"
             type="number"
-            min={1}
+            min={0}
             max={30}
             value={tieMin}
             onChange={(e) => setIntThreshold('tieFrequentMinCount')(e.target.value)}
@@ -181,7 +194,7 @@ export function FilterSettingsDialog({
           <input
             className="filter-settings__quick-count"
             type="number"
-            min={1}
+            min={0}
             max={30}
             value={tieMax}
             onChange={(e) => setIntThreshold('tieFrequentMaxCount')(e.target.value)}
@@ -221,12 +234,17 @@ export function FilterSettingsDialog({
 
       <section className="filter-settings__section">
         <h3 className="settings-section-title">활성 필터</h3>
-        <p className="filter-settings__hint">사용할 필터를 켜고 끄세요</p>
-        <div className="filter-settings__filter-list">
+        <p className="filter-settings__hint">
+          {tieAutoOn
+            ? '타이 자동 배팅이 켜져 있어 다른 필터는 잠겨 있습니다. 변경하려면 위에서 끄기 누르세요.'
+            : '사용할 필터를 켜고 끄세요'}
+        </p>
+        <div className={`filter-settings__filter-list ${tieAutoOn ? 'is-locked' : ''}`}>
           <label className="filter-settings__filter-row">
             <input
               type="checkbox"
               checked={isAllActive}
+              disabled={tieAutoOn}
               onChange={() => {
                 if (!isAllActive) clearFilters()
               }}
@@ -236,11 +254,13 @@ export function FilterSettingsDialog({
           </label>
           {availableFilters.map(filter => {
             const isActive = activeFilters.includes(filter.type)
+            const lockedByTieAuto = tieAutoOn && filter.type !== 'tie_frequent'
             return (
               <label key={filter.type} className="filter-settings__filter-row">
                 <input
                   type="checkbox"
                   checked={isActive}
+                  disabled={lockedByTieAuto}
                   onChange={() => toggleFilter(filter.type)}
                 />
                 <span className="filter-settings__filter-label">{filter.label}</span>
