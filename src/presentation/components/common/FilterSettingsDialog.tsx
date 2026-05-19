@@ -24,10 +24,15 @@ interface FilterSettingsDialogProps {
   freshShoeScope: FreshShoeScope
 }
 
-// "타이오토"가 켜졌다고 간주하는 조건: tie_frequent 필터 + 방향=T + 전략=martingale
-// 셋 중 하나라도 다르면 사용자가 직접 손댄 상태로 보고 OFF로 표시한다.
+// "타이오토" 켜짐 조건 (엄격):
+//   - tie_frequent 필터가 활성 필터의 유일한 항목
+//   - 방향 = T
+//   - 전략 = martingale
+// 다른 필터가 같이 켜져 있거나 방향/전략이 다르면 OFF로 표시 — 사용자가
+// "타이 전용"으로 동작하지 않는 상태임을 즉시 알 수 있게.
 function useTieAutoState(activeFilters: RoomFilterType[]) {
-  const filterOn = activeFilters.includes('tie_frequent')
+  const isExclusiveTieFilter =
+    activeFilters.length === 1 && activeFilters[0] === 'tie_frequent'
   const [direction, setDirection] = useState(() =>
     PatternBettingService.getBetDirection('tie_frequent')
   )
@@ -44,20 +49,25 @@ function useTieAutoState(activeFilters: RoomFilterType[]) {
     return PatternBettingService.onChange(sync)
   }, [])
 
-  return filterOn && direction === 'T' && strategy === 'martingale'
+  return isExclusiveTieFilter && direction === 'T' && strategy === 'martingale'
 }
 
-// "정확히 N번" 입력값 — 어르신용 카드에서는 min=max=N으로 두어 단일 숫자로 표현.
-// 고급 섹션에서 min/max를 따로 조정하면 그 값이 그대로 유지된다 (이 카드는 min 값만 노출).
-function useTieFrequentCount() {
-  const [count, setCount] = useState(() =>
-    FilterThresholdsService.get().tieFrequentMinCount
-  )
+// Easy 카드의 두 숫자(윈도우 + 출현 횟수)를 실시간으로 따라가는 훅.
+// 출현 횟수는 min=max로 두어 "정확히 N번"으로 동작.
+function useTieFrequentControls() {
+  const [values, setValues] = useState(() => {
+    const v = FilterThresholdsService.get()
+    return { window: v.tieFrequentWindow, count: v.tieFrequentMinCount }
+  })
   useEffect(() => {
-    setCount(FilterThresholdsService.get().tieFrequentMinCount)
-    return FilterThresholdsService.onChange(v => setCount(v.tieFrequentMinCount))
+    const sync = () => {
+      const v = FilterThresholdsService.get()
+      setValues({ window: v.tieFrequentWindow, count: v.tieFrequentMinCount })
+    }
+    sync()
+    return FilterThresholdsService.onChange(sync)
   }, [])
-  return count
+  return values
 }
 
 export function FilterSettingsDialog({
@@ -73,7 +83,7 @@ export function FilterSettingsDialog({
 }: FilterSettingsDialogProps) {
   const isAllActive = activeFilters.length === 0
   const tieAutoOn = useTieAutoState(activeFilters)
-  const tieCount = useTieFrequentCount()
+  const { window: tieWindow, count: tieCount } = useTieFrequentControls()
   const tieMatchCount = filterCounts.tie_frequent ?? 0
 
   const handleTieAutoToggle = () => {
@@ -81,8 +91,10 @@ export function FilterSettingsDialog({
       // 끄기: tie_frequent 필터만 끔. 사용자가 손댄 방향/전략/숫자는 그대로 보존.
       if (activeFilters.includes('tie_frequent')) toggleFilter('tie_frequent')
     } else {
-      // 켜기: 필터 ON + 방향 T + 전략 마틴 일괄 설정
-      if (!activeFilters.includes('tie_frequent')) toggleFilter('tie_frequent')
+      // 켜기: 다른 필터와 섞이지 않게 전부 클리어한 뒤 tie_frequent만 켠다.
+      // 방향=T + 전략=martingale도 함께 적용해 "타이 전용 모드"로 진입.
+      clearFilters()
+      toggleFilter('tie_frequent')
       PatternBettingService.setBetDirection('tie_frequent', 'T')
       PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
     }
@@ -93,6 +105,12 @@ export function FilterSettingsDialog({
     if (!Number.isFinite(n)) return
     // 어르신용 카드는 "정확히 N번"으로 동작 — min과 max를 같은 값으로 둔다.
     FilterThresholdsService.set({ tieFrequentMinCount: n, tieFrequentMaxCount: n })
+  }
+
+  const handleTieWindowChange = (raw: string) => {
+    const n = parseInt(raw, 10)
+    if (!Number.isFinite(n)) return
+    FilterThresholdsService.set({ tieFrequentWindow: n })
   }
 
   return (
@@ -124,7 +142,17 @@ export function FilterSettingsDialog({
           </button>
         </div>
         <div className="filter-settings__quick-row">
-          <span className="filter-settings__quick-row-label">최근 30판 안에 타이가</span>
+          <span className="filter-settings__quick-row-label">최근</span>
+          <input
+            className="filter-settings__quick-count"
+            type="number"
+            min={5}
+            max={200}
+            value={tieWindow}
+            onChange={(e) => handleTieWindowChange(e.target.value)}
+            aria-label="관측 윈도우 (판수)"
+          />
+          <span className="filter-settings__quick-row-label">판 안에 타이가</span>
           <input
             className="filter-settings__quick-count"
             type="number"
@@ -138,8 +166,8 @@ export function FilterSettingsDialog({
         </div>
         <div className="filter-settings__quick-status">
           {tieAutoOn
-            ? `✓ 작동 중 · 지금 조건에 맞는 방 ${tieMatchCount}개`
-            : '꺼짐 — 위 횟수를 정한 뒤 켜기를 누르세요'}
+            ? `✓ 작동 중 · 지금 조건에 맞는 방 ${tieMatchCount}개 · 다른 필터와 섞이지 않음`
+            : '꺼짐 — 위 숫자를 정한 뒤 켜기를 누르세요. 켜면 다른 필터는 모두 꺼집니다.'}
         </div>
       </section>
 

@@ -124,8 +124,23 @@ describe('FilterSettingsDialog', () => {
   describe('타이 자동 배팅 quick toggle', () => {
     it('shows OFF status when tie_frequent is not active', () => {
       renderDialog({ activeFilters: [] })
-      expect(screen.getByText(/꺼짐.*횟수를 정한 뒤 켜기/)).toBeInTheDocument()
+      expect(screen.getByText(/꺼짐.*숫자를 정한 뒤 켜기/)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '켜기', pressed: false })).toBeInTheDocument()
+    })
+
+    it('shows OFF when tie_frequent is active alongside another filter (no mixing)', () => {
+      // 다른 필터와 섞이면 "타이 전용"이 아니므로 카드는 꺼짐 상태로 표시
+      PatternBettingService.setBetDirection('tie_frequent', 'T')
+      PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+      renderDialog({ activeFilters: ['tie_frequent', 'banker_dominant'] })
+      expect(screen.getByRole('button', { name: '켜기', pressed: false })).toBeInTheDocument()
+    })
+
+    it('clearing other filters and adding tie_frequent on 켜기 (exclusive mode)', () => {
+      const { props } = renderDialog({ activeFilters: ['banker_dominant'] })
+      fireEvent.click(screen.getByRole('button', { name: '켜기' }))
+      expect(props.clearFilters).toHaveBeenCalledTimes(1)
+      expect(props.toggleFilter).toHaveBeenCalledWith('tie_frequent')
     })
 
     it('writes both tieFrequentMinCount and tieFrequentMaxCount when the count input changes', async () => {
