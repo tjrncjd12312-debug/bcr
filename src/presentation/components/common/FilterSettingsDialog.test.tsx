@@ -143,8 +143,8 @@ describe('FilterSettingsDialog', () => {
       expect(props.toggleFilter).toHaveBeenCalledWith('tie_frequent')
     })
 
-    it('writes both tieFrequentMinCount and tieFrequentMaxCount when the count input changes', async () => {
-      // Set up the trio so the card is "on" and the input is reachable.
+    it('writes tieFrequentMinCount independently of tieFrequentMaxCount (range UI)', async () => {
+      // Easy card now exposes min and max separately as a range "X ~ Y 번"
       PatternBettingService.setBetDirection('tie_frequent', 'T')
       PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
       const FilterThresholdsService = (await import('../../../application/services/FilterThresholdsService')).default
@@ -152,12 +152,26 @@ describe('FilterSettingsDialog', () => {
 
       renderDialog({ activeFilters: ['tie_frequent'] })
 
-      const input = screen.getByLabelText('타이 출현 횟수') as HTMLInputElement
-      fireEvent.change(input, { target: { value: '5' } })
+      const minInput = screen.getByLabelText('타이 출현 최소 횟수') as HTMLInputElement
+      const maxInput = screen.getByLabelText('타이 출현 최대 횟수') as HTMLInputElement
+      fireEvent.change(minInput, { target: { value: '3' } })
+      fireEvent.change(maxInput, { target: { value: '5' } })
 
-      // Easy card uses exact-match semantics: both bounds move together.
-      expect(FilterThresholdsService.get().tieFrequentMinCount).toBe(5)
+      expect(FilterThresholdsService.get().tieFrequentMinCount).toBe(3)
       expect(FilterThresholdsService.get().tieFrequentMaxCount).toBe(5)
+    })
+
+    it('writes baseBetAmount + maxMartin through AutoModeService.updateSettings', async () => {
+      const AutoModeService = (await import('../../../application/services/AutoModeService')).default
+      renderDialog({ activeFilters: ['tie_frequent'] })
+
+      const amount = screen.getByLabelText('기본 배팅 금액') as HTMLInputElement
+      const martin = screen.getByLabelText('마틴 최대 단계') as HTMLInputElement
+      fireEvent.change(amount, { target: { value: '20000' } })
+      fireEvent.change(martin, { target: { value: '7' } })
+
+      expect(AutoModeService.getState().settings.baseBetAmount).toBe(20000)
+      expect(AutoModeService.getState().settings.maxMartin).toBe(7)
     })
 
     it('clicking 켜기 activates the tie_frequent filter via toggleFilter', () => {
