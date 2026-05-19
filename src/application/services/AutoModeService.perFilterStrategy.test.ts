@@ -25,6 +25,7 @@ import { container } from '../di/Container'
 import AutoModeService, { type AutoModeBetLogEvent } from './AutoModeService'
 import { VirtualBettingService } from './VirtualBettingService'
 import { PatternBettingService } from './PatternBettingService'
+import FilterThresholdsService from './FilterThresholdsService'
 
 class MockCasinoAdapter implements ICasinoAdapter {
   readonly name = 'Mock'
@@ -128,6 +129,16 @@ describe('AutoModeService — per-filter strategy override', () => {
     VirtualBettingService.reset()
 
     PatternBettingService.dispose() // reseed builtin defaults
+
+    // The tie_frequent default is now "no ties in games 1-5 of shoe", which is
+    // unrelated to what these strategy tests want to verify. Use permissive
+    // thresholds (≥1 tie in first 5 games) so tie-heavy test rooms still match.
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 1,
+      tieFrequentMaxCount: 99,
+    })
 
     AutoModeService.dispose()
     AutoModeService.initialize()

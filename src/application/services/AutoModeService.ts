@@ -932,6 +932,32 @@ class AutoModeServiceImpl {
     this.emitStateChange()
   }
 
+  // ==================== Tie-Auto Room Lock ====================
+
+  // tie_frequent 프리셋의 트리거(예: 0-0)는 슈 처음 N판만 보므로, 한 번
+  // 적중하거나 마틴 한도에 도달해도 그 룸의 트리거 자체는 그대로 유지된다.
+  // 그래서 별도로 "이 슈에서는 끝난 방" 집합을 두고 같은 슈 안에서는
+  // 재선택하지 못하도록 한다. 슈가 바뀌면 자동으로 초기화 (onShoeChange).
+  private tieAutoCompletedRooms: Set<string> = new Set()
+
+  // tie_frequent 프리셋이 활성일 때 한 방에 마틴 시퀀스가 진행 중이면
+  // 다른 방의 배팅을 막아 "한 번 들어간 방에서만 마틴" 규칙을 강제한다.
+  private isTieAutoLockingOtherRoom(roomId: string): boolean {
+    if (this.currentPatternFilter !== 'tie_frequent') return false
+    for (const [otherId, state] of this.state.roomStates) {
+      if (otherId === roomId) continue
+      if (state.martinLevel > 0 || state.waitingForResult) return true
+    }
+    return false
+  }
+
+  // 한 방의 시퀀스가 끝났는지 여부 (적중 or 마틴 한도 도달).
+  // tie_frequent 프리셋일 때만 의미가 있고, 같은 슈 안에서는 재진입 금지.
+  private isTieAutoCompleted(roomId: string): boolean {
+    if (this.currentPatternFilter !== 'tie_frequent') return false
+    return this.tieAutoCompletedRooms.has(roomId)
+  }
+
   // ==================== Event Handlers ====================
 
   private async onBettingPhase(event: BettingPhaseEvent): Promise<void> {
@@ -1212,6 +1238,35 @@ class AutoModeServiceImpl {
             message: `신뢰도 부족 (${confidencePercent}% < ${minConfidencePercent}%) - ${roomState.martinLevel > 0 ? `마틴${roomState.martinLevel}` : '첫배팅'} 스킵`,
           })
           console.log(`[AutoMode] ⚠️ 신뢰도 부족: ${room.koreanName} - ${confidencePercent}% < ${minConfidencePercent}% (마틴${roomState.martinLevel})`)
+          return
+        }
+
+        // 타이 자동 프리셋의 방 잠금: 다른 방에서 마틴이 진행 중이면 이 방은 스킵
+        if (this.isTieAutoLockingOtherRoom(roomId)) {
+          this.emitDecisionOnce({
+            roomId,
+            roomName: room.koreanName,
+            martinLevel: roomState.martinLevel,
+            historyLength: room.history.length,
+            code: 'tie_auto_room_locked',
+            level: 'info',
+            status: 'pass',
+            message: '타이 자동: 다른 방에서 마틴 진행 중',
+          })
+          return
+        }
+        // 타이 자동: 이 슈에서 이미 한 번 끝난 방은 재진입 금지
+        if (this.isTieAutoCompleted(roomId)) {
+          this.emitDecisionOnce({
+            roomId,
+            roomName: room.koreanName,
+            martinLevel: roomState.martinLevel,
+            historyLength: room.history.length,
+            code: 'tie_auto_room_done',
+            level: 'info',
+            status: 'pass',
+            message: '타이 자동: 이 슈에서 이미 종료된 방',
+          })
           return
         }
 
@@ -1785,6 +1840,11 @@ class AutoModeServiceImpl {
         this.saveRestPeriods()  // Bug 3 Fix: 휴식 해제 저장
       }
 
+      // 타이 자동: 적중한 방은 이 슈에서는 끝 → 다음 매칭 방으로 이동
+      if (this.currentPatternFilter === 'tie_frequent') {
+        this.tieAutoCompletedRooms.add(roomId)
+      }
+
       console.log(`[AutoMode] ${roomName} - 승리! 마틴 리셋, 손익: +${profit.toLocaleString()}원`)
     } else {
       // ========== 패배 처리 ==========
@@ -1808,6 +1868,11 @@ class AutoModeServiceImpl {
         // ✅ MartingaleManager를 Single Source of Truth로 사용
         this.martingaleManager.resetLevel(roomId)
         this.syncMartinLevelFromManager(roomId, roomState)
+
+        // 타이 자동: 마틴 한도까지 적중 못 했으면 이 슈에서는 끝 → 다음 매칭 방으로
+        if (this.currentPatternFilter === 'tie_frequent') {
+          this.tieAutoCompletedRooms.add(roomId)
+        }
 
         // 휴식 시간이 0보다 클 때만 휴식 적용
         if (restMinutes > 0) {
@@ -1909,6 +1974,9 @@ class AutoModeServiceImpl {
   }
 
   private onShoeChange(roomId: string): void {
+    // 새 슈 시작 → 타이 자동의 "이 슈에서 끝난 방" 마킹 해제
+    this.tieAutoCompletedRooms.delete(roomId)
+
     const roomState = this.state.roomStates.get(roomId)
     if (roomState) {
       // ✅ MartingaleManager를 Single Source of Truth로 사용
