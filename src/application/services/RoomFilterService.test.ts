@@ -299,71 +299,65 @@ describe('RoomFilterService', () => {
   })
 
   describe('tie_frequent filter', () => {
-    // Window is fixed at TIE_FREQUENT_WINDOW = 30 most-recent games.
-    // threshold = tieFrequentMinCount (default 2).
+    // Window slices games [start, start+window-1] from the START of the shoe
+    // (chronological order). Defaults: start=1, window=5, min=0, max=0
+    // → "no tie at all in the first 5 games of the shoe".
+    // history is newest-first, so createHistory(s) treats s[0] as newest.
 
     beforeEach(() => {
-      FilterThresholdsService.set({ tieFrequentMinCount: 2 })
-    })
-
-    it('matches when ties in the last 30 games >= threshold', () => {
-      // 2 ties in 10 games — meets default threshold of 2
-      const room = createRoom('r1', createHistory('BPTBPTBPBP'))
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
-    })
-
-    it('does NOT match when tie count is below threshold', () => {
-      // 1 tie in 10 games — below threshold of 2
-      const room = createRoom('r2', createHistory('BPTBPBPBPB'))
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
-    })
-
-    it('counts only the most recent 30 games (older ties beyond window are ignored)', () => {
-      FilterThresholdsService.set({ tieFrequentMinCount: 3 })
-      // newest-first history: first 30 chars have 2 ties, then older ties beyond the window
-      // 30 newest: 'BPBPTBPBPBPTBPBPBPBPBPBPBPBPBP' (2 T's at indexes 4 and 11)
-      // appended: 'TTTTT' — these are OLDER games, beyond the 30-window
-      const room = createRoom('r3', createHistory('BPBPTBPBPBPTBPBPBPBPBPBPBPBPBPTTTTT'))
-      // Only 2 T's in the 30-game window → below threshold of 3 → no match
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
-    })
-
-    it('reacts to threshold changes from FilterThresholdsService', () => {
-      const room = createRoom('r4', createHistory('TBPTBPBP')) // 2 ties
-      FilterThresholdsService.set({ tieFrequentMinCount: 2 })
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
-      FilterThresholdsService.set({ tieFrequentMinCount: 3 })
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
-    })
-
-    it('does NOT match when history has no ties', () => {
-      const room = createRoom('r5', createHistory('BPBPBPBPBP'))
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
-    })
-
-    it('respects a configurable window — only counts ties inside it', () => {
-      // 50-game window with 4 ties spread across the last 50 games
       FilterThresholdsService.set({
-        tieFrequentWindow: 50,
-        tieFrequentMinCount: 4,
+        tieFrequentStart: 1,
+        tieFrequentWindow: 5,
+        tieFrequentMinCount: 0,
+        tieFrequentMaxCount: 0,
       })
-      // 40 newest games with 4 ties + 20 older games (irrelevant)
-      const newest = 'BPBPTBPBPBPTBPBPBPBPBPBPTBPBPBPBPBPBPTBP' // 40 chars, 4 T's
-      const older = 'TTTTTTTTTTBPBPBPBPBP' // 20 chars (older, beyond 50 window)
-      const room = createRoom('rW', createHistory(newest + older))
+    })
+
+    it('matches default 0-0 when first 5 games of shoe have no ties', () => {
+      // chronological: B P B P B (oldest→newest) — no ties in games 1-5
+      // newest-first input: B P B P B  (palindrome here)
+      const room = createRoom('r1', createHistory('BPBPB'))
       expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
     })
 
-    it('honors max count — does NOT match once tie count exceeds the upper bound', () => {
-      // User wants "exactly 5 ties" → set both min and max to 5
+    it('does NOT match 0-0 once a tie appears within the first 5 games', () => {
+      // chronological order has T in game 3: P, B, T, P, B
+      // newest-first: B P T B P
+      const room = createRoom('r2', createHistory('BPTBP'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+
+    it('ignores ties that appear AFTER the window (game 6+)', () => {
+      // chronological: B P B P B T T  (first 5 games tie-free, ties later)
+      // newest-first: T T B P B P B
+      const room = createRoom('r3', createHistory('TTBPBPB'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+    })
+
+    it('does NOT match when room history is shorter than start + window - 1', () => {
+      // Only 3 games — can't evaluate first 5 yet
+      const room = createRoom('r4', createHistory('BPB'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+
+    it('respects a configurable start offset (e.g. skip the first 2 games)', () => {
+      // start=3, window=3 → look at chronological games 3-5
+      FilterThresholdsService.set({ tieFrequentStart: 3, tieFrequentWindow: 3 })
+      // chronological: T T B P B  (ties in games 1-2, none in 3-5)
+      // newest-first:  B P B T T
+      const room = createRoom('r5', createHistory('BPBTT'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+    })
+
+    it('honors a non-zero count range (e.g. exactly 2 ties in window of 5)', () => {
       FilterThresholdsService.set({
-        tieFrequentMinCount: 5,
-        tieFrequentMaxCount: 5,
+        tieFrequentMinCount: 2,
+        tieFrequentMaxCount: 2,
       })
-      const exactlyFiveTies = createRoom('rX', createHistory('TBPTBPTBPTBPTBPBP')) // 5 T's
-      const sixTies = createRoom('rY', createHistory('TBPTBPTBPTBPTBPBPT')) // 6 T's
-      expect(RoomFilterService.matchesFilter(exactlyFiveTies, null, 'tie_frequent')).toBe(true)
-      expect(RoomFilterService.matchesFilter(sixTies, null, 'tie_frequent')).toBe(false)
+      // chronological: T B P B T  (2 ties in first 5)
+      // newest-first:  T B P B T
+      const room = createRoom('r6', createHistory('TBPBT'))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
     })
   })
 })

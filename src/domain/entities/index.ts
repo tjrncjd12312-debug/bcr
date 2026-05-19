@@ -277,11 +277,13 @@ export type RoomFilterType =
 /** Tie 미발생 임계 게임 수 (tie_drought 필터용) */
 export const TIE_DROUGHT_THRESHOLD = 20
 /** Tie 자주 출현 — 관측 윈도우 기본값(판 수) (tie_frequent 필터용) */
-export const TIE_FREQUENT_WINDOW = 30
+export const TIE_FREQUENT_WINDOW = 5
+/** Tie 자주 출현 — 시작 게임 번호 (1-based, 슈 처음부터 카운트) */
+export const TIE_FREQUENT_START = 1
 /** Tie 자주 출현 — 최소 횟수 기본값 (tie_frequent 필터용) */
-export const TIE_FREQUENT_MIN_COUNT = 2
+export const TIE_FREQUENT_MIN_COUNT = 0
 /** Tie 자주 출현 — 최대 횟수 기본값 (상한 미사용 시) (tie_frequent 필터용) */
-export const TIE_FREQUENT_MAX_COUNT = 99
+export const TIE_FREQUENT_MAX_COUNT = 0
 /** 새 방 진입 직후 N게임 (fresh_room 필터용) */
 export const FRESH_ROOM_GAMES = 5
 /** 카지노 슈가 막 시작된 직후 N게임 (fresh_shoe 필터용) */

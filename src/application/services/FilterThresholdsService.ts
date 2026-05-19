@@ -4,6 +4,7 @@
 import {
   TIE_DROUGHT_THRESHOLD,
   TIE_FREQUENT_WINDOW,
+  TIE_FREQUENT_START,
   TIE_FREQUENT_MIN_COUNT,
   TIE_FREQUENT_MAX_COUNT,
   FRESH_ROOM_GAMES,
@@ -15,6 +16,7 @@ const STORAGE_KEY = 'bcr-filter-thresholds'
 export interface FilterThresholds {
   tieDroughtThreshold: number
   tieFrequentWindow: number
+  tieFrequentStart: number
   tieFrequentMinCount: number
   tieFrequentMaxCount: number
   freshRoomGames: number
@@ -24,6 +26,7 @@ export interface FilterThresholds {
 const DEFAULTS: FilterThresholds = {
   tieDroughtThreshold: TIE_DROUGHT_THRESHOLD,
   tieFrequentWindow: TIE_FREQUENT_WINDOW,
+  tieFrequentStart: TIE_FREQUENT_START,
   tieFrequentMinCount: TIE_FREQUENT_MIN_COUNT,
   tieFrequentMaxCount: TIE_FREQUENT_MAX_COUNT,
   freshRoomGames: FRESH_ROOM_GAMES,
@@ -46,9 +49,10 @@ class FilterThresholdsServiceImpl {
       const parsed = JSON.parse(raw) as Partial<FilterThresholds>
       this.values = {
         tieDroughtThreshold: this.coerce(parsed.tieDroughtThreshold, DEFAULTS.tieDroughtThreshold, 1, 200),
-        tieFrequentWindow: this.coerce(parsed.tieFrequentWindow, DEFAULTS.tieFrequentWindow, 5, 200),
-        tieFrequentMinCount: this.coerce(parsed.tieFrequentMinCount, DEFAULTS.tieFrequentMinCount, 1, 99),
-        tieFrequentMaxCount: this.coerce(parsed.tieFrequentMaxCount, DEFAULTS.tieFrequentMaxCount, 1, 99),
+        tieFrequentWindow: this.coerce(parsed.tieFrequentWindow, DEFAULTS.tieFrequentWindow, 1, 200),
+        tieFrequentStart: this.coerce(parsed.tieFrequentStart, DEFAULTS.tieFrequentStart, 1, 200),
+        tieFrequentMinCount: this.coerce(parsed.tieFrequentMinCount, DEFAULTS.tieFrequentMinCount, 0, 99),
+        tieFrequentMaxCount: this.coerce(parsed.tieFrequentMaxCount, DEFAULTS.tieFrequentMaxCount, 0, 99),
         freshRoomGames: this.coerce(parsed.freshRoomGames, DEFAULTS.freshRoomGames, 1, 200),
         freshShoeMaxGameNumber: this.coerce(parsed.freshShoeMaxGameNumber, DEFAULTS.freshShoeMaxGameNumber, 1, 200),
       }
@@ -82,13 +86,16 @@ class FilterThresholdsServiceImpl {
         ? this.coerce(partial.tieDroughtThreshold, this.values.tieDroughtThreshold, 1, 200)
         : this.values.tieDroughtThreshold,
       tieFrequentWindow: partial.tieFrequentWindow !== undefined
-        ? this.coerce(partial.tieFrequentWindow, this.values.tieFrequentWindow, 5, 200)
+        ? this.coerce(partial.tieFrequentWindow, this.values.tieFrequentWindow, 1, 200)
         : this.values.tieFrequentWindow,
+      tieFrequentStart: partial.tieFrequentStart !== undefined
+        ? this.coerce(partial.tieFrequentStart, this.values.tieFrequentStart, 1, 200)
+        : this.values.tieFrequentStart,
       tieFrequentMinCount: partial.tieFrequentMinCount !== undefined
-        ? this.coerce(partial.tieFrequentMinCount, this.values.tieFrequentMinCount, 1, 99)
+        ? this.coerce(partial.tieFrequentMinCount, this.values.tieFrequentMinCount, 0, 99)
         : this.values.tieFrequentMinCount,
       tieFrequentMaxCount: partial.tieFrequentMaxCount !== undefined
-        ? this.coerce(partial.tieFrequentMaxCount, this.values.tieFrequentMaxCount, 1, 99)
+        ? this.coerce(partial.tieFrequentMaxCount, this.values.tieFrequentMaxCount, 0, 99)
         : this.values.tieFrequentMaxCount,
       freshRoomGames: partial.freshRoomGames !== undefined
         ? this.coerce(partial.freshRoomGames, this.values.freshRoomGames, 1, 200)
@@ -100,6 +107,7 @@ class FilterThresholdsServiceImpl {
     if (
       next.tieDroughtThreshold === this.values.tieDroughtThreshold &&
       next.tieFrequentWindow === this.values.tieFrequentWindow &&
+      next.tieFrequentStart === this.values.tieFrequentStart &&
       next.tieFrequentMinCount === this.values.tieFrequentMinCount &&
       next.tieFrequentMaxCount === this.values.tieFrequentMaxCount &&
       next.freshRoomGames === this.values.freshRoomGames &&

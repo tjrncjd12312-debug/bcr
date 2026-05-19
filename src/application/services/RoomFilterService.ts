@@ -124,6 +124,7 @@ class RoomFilterServiceImpl {
     const {
       tieDroughtThreshold,
       tieFrequentWindow,
+      tieFrequentStart,
       tieFrequentMinCount,
       tieFrequentMaxCount,
       freshRoomGames,
@@ -139,10 +140,11 @@ class RoomFilterServiceImpl {
         description = `최근 ${tieDroughtThreshold}게임 동안 Tie 미발생`
       } else if (filter.type === 'tie_frequent') {
         const rangeText = tieFrequentMinCount === tieFrequentMaxCount
-          ? `정확히 ${tieFrequentMinCount}번`
+          ? (tieFrequentMinCount === 0 ? '한 번도 없음' : `정확히 ${tieFrequentMinCount}번`)
           : `${tieFrequentMinCount}~${tieFrequentMaxCount}번`
         label = `타이 자주 (${rangeText})`
-        description = `최근 ${tieFrequentWindow}판 안에 Tie가 ${rangeText} 나온 방`
+        const endGame = tieFrequentStart + tieFrequentWindow - 1
+        description = `${tieFrequentStart}~${endGame}번째 게임 사이에 Tie가 ${rangeText} 나온 방`
       } else if (filter.type === 'fresh_room') {
         label = `신규 방 (≤${freshRoomGames})`
         description = `방 진입 후 ${freshRoomGames}게임 이내`
@@ -359,9 +361,13 @@ class RoomFilterServiceImpl {
       }
 
       case 'tie_frequent': {
-        const { tieFrequentWindow, tieFrequentMinCount, tieFrequentMaxCount } = FilterThresholdsService.get()
-        const recent = winners.slice(0, tieFrequentWindow)
-        const tieCount = recent.filter(w => w === 'T').length
+        const { tieFrequentWindow, tieFrequentStart, tieFrequentMinCount, tieFrequentMaxCount } = FilterThresholdsService.get()
+        // history is newest-first; we want games [start, start+window-1] from the start of the shoe.
+        const needed = tieFrequentStart + tieFrequentWindow - 1
+        if (winners.length < needed) return false
+        const chrono = [...winners].reverse()
+        const slice = chrono.slice(tieFrequentStart - 1, tieFrequentStart - 1 + tieFrequentWindow)
+        const tieCount = slice.filter(w => w === 'T').length
         return tieCount >= tieFrequentMinCount && tieCount <= tieFrequentMaxCount
       }
 
