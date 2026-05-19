@@ -227,6 +227,47 @@ describe('AutoModeService — per-filter strategy override', () => {
     expect(PatternBettingService.getBetStrategy('banker_dominant')).toBe('fibonacci')
   })
 
+  // 사용자 시나리오 (어르신용 "타이 자동 배팅" 카드 켜기):
+  //   1) FilterSettingsDialog가 clearFilters + toggleFilter('tie_frequent')
+  //   2) AutoModePanel가 매칭된 방 ID만 추려서 setActiveBettingRooms(matchedIds)
+  //   3) onBettingPhase가 들어와도 매칭 방만 베팅, 비매칭 방은 차단
+  //
+  // 이 테스트는 (3) 게이트가 진짜 동작하는지 — activeBettingRoomIds에 없는
+  // 방의 betting phase 이벤트가 들어와도 베팅이 나가지 않음을 보장.
+  it('exclusivity gate: only rooms inside setActiveBettingRooms get bets', async () => {
+    const tieRoom = makeRoom('rTie', ['T', 'B', 'T', 'P', 'T', 'B', 'T'])
+    const otherRoom = makeRoom('rOther', ['B', 'P', 'B', 'P', 'B'])
+    adapter.setRoom(tieRoom)
+    adapter.setRoom(otherRoom)
+
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+
+    AutoModeService.start()
+    // AutoModePanel가 필터링한 결과처럼 rTie만 전달
+    AutoModeService.setActiveBettingRooms(['rTie'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    let tieBet: number | null = null
+    let otherBet: number | null = null
+    const unsub = AutoModeService.onBetLog((ev: AutoModeBetLogEvent) => {
+      if (ev.type === 'bet_placed') {
+        if (ev.roomId === 'rTie' && tieBet === null) tieBet = ev.betAmount ?? null
+        if (ev.roomId === 'rOther' && otherBet === null) otherBet = ev.betAmount ?? null
+      }
+    })
+
+    // 두 방 모두에 betting phase 이벤트 발생 — 카지노 어댑터는 모든 방에서 이벤트 보냄
+    adapter.emitBettingPhase({ roomId: 'rTie', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'rOther', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    unsub()
+
+    expect(tieBet).toBe(BASE_BET) // 매칭 방: 베팅 진행
+    expect(otherBet).toBeNull()    // 비매칭 방: 차단됨 (베팅 안 나감)
+  })
+
   // 사용자 시나리오: "타이 자주 필터에 걸린 방에 타이 마틴으로 배팅"
   // 1. tie_frequent 필터를 켜고
   // 2. 그 필터의 배팅 방향을 T로 지정하고
