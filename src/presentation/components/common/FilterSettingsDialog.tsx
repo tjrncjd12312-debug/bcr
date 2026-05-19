@@ -8,6 +8,7 @@ import FilterThresholdInline from '../AutoModePanel/components/FilterThresholdIn
 import PatternBetDirectionSelect from '../AutoModePanel/components/PatternBetDirectionSelect'
 import PatternBetStrategySelect from '../AutoModePanel/components/PatternBetStrategySelect'
 import PatternBettingService from '../../../application/services/PatternBettingService'
+import FilterThresholdsService from '../../../application/services/FilterThresholdsService'
 import type { RoomFilter, RoomFilterType } from '../../../domain/entities'
 import './FilterSettingsDialog.css'
 
@@ -46,6 +47,19 @@ function useTieAutoState(activeFilters: RoomFilterType[]) {
   return filterOn && direction === 'T' && strategy === 'martingale'
 }
 
+// "정확히 N번" 입력값 — 어르신용 카드에서는 min=max=N으로 두어 단일 숫자로 표현.
+// 고급 섹션에서 min/max를 따로 조정하면 그 값이 그대로 유지된다 (이 카드는 min 값만 노출).
+function useTieFrequentCount() {
+  const [count, setCount] = useState(() =>
+    FilterThresholdsService.get().tieFrequentMinCount
+  )
+  useEffect(() => {
+    setCount(FilterThresholdsService.get().tieFrequentMinCount)
+    return FilterThresholdsService.onChange(v => setCount(v.tieFrequentMinCount))
+  }, [])
+  return count
+}
+
 export function FilterSettingsDialog({
   isOpen,
   onClose,
@@ -59,11 +73,12 @@ export function FilterSettingsDialog({
 }: FilterSettingsDialogProps) {
   const isAllActive = activeFilters.length === 0
   const tieAutoOn = useTieAutoState(activeFilters)
+  const tieCount = useTieFrequentCount()
   const tieMatchCount = filterCounts.tie_frequent ?? 0
 
   const handleTieAutoToggle = () => {
     if (tieAutoOn) {
-      // 끄기: tie_frequent 필터만 끔. 사용자가 손댄 방향/전략은 그대로 보존.
+      // 끄기: tie_frequent 필터만 끔. 사용자가 손댄 방향/전략/숫자는 그대로 보존.
       if (activeFilters.includes('tie_frequent')) toggleFilter('tie_frequent')
     } else {
       // 켜기: 필터 ON + 방향 T + 전략 마틴 일괄 설정
@@ -71,6 +86,13 @@ export function FilterSettingsDialog({
       PatternBettingService.setBetDirection('tie_frequent', 'T')
       PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
     }
+  }
+
+  const handleTieCountChange = (raw: string) => {
+    const n = parseInt(raw, 10)
+    if (!Number.isFinite(n)) return
+    // 어르신용 카드는 "정확히 N번"으로 동작 — min과 max를 같은 값으로 둔다.
+    FilterThresholdsService.set({ tieFrequentMinCount: n, tieFrequentMaxCount: n })
   }
 
   return (
@@ -89,7 +111,7 @@ export function FilterSettingsDialog({
           <div>
             <h3 className="filter-settings__quick-title">타이 자동 배팅</h3>
             <p className="filter-settings__quick-desc">
-              최근 30판 안에 타이가 2번 이상 나온 방에서 <strong>타이에 마틴 배팅</strong>을 합니다. 한 번 누르면 끝.
+              아래 횟수만큼 <strong>타이가 나온 방</strong>에서 <strong>타이에 마틴</strong>을 겁니다.
             </p>
           </div>
           <button
@@ -101,10 +123,23 @@ export function FilterSettingsDialog({
             {tieAutoOn ? '끄기' : '켜기'}
           </button>
         </div>
+        <div className="filter-settings__quick-row">
+          <span className="filter-settings__quick-row-label">최근 30판 안에 타이가</span>
+          <input
+            className="filter-settings__quick-count"
+            type="number"
+            min={1}
+            max={30}
+            value={tieCount}
+            onChange={(e) => handleTieCountChange(e.target.value)}
+            aria-label="타이 출현 횟수"
+          />
+          <span className="filter-settings__quick-row-label">번 나온 방만 배팅</span>
+        </div>
         <div className="filter-settings__quick-status">
           {tieAutoOn
             ? `✓ 작동 중 · 지금 조건에 맞는 방 ${tieMatchCount}개`
-            : '꺼짐 — 켜면 자동으로 시작됩니다'}
+            : '꺼짐 — 위 횟수를 정한 뒤 켜기를 누르세요'}
         </div>
       </section>
 

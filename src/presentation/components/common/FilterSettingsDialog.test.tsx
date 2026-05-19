@@ -124,8 +124,25 @@ describe('FilterSettingsDialog', () => {
   describe('타이 자동 배팅 quick toggle', () => {
     it('shows OFF status when tie_frequent is not active', () => {
       renderDialog({ activeFilters: [] })
-      expect(screen.getByText('꺼짐 — 켜면 자동으로 시작됩니다')).toBeInTheDocument()
+      expect(screen.getByText(/꺼짐.*횟수를 정한 뒤 켜기/)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '켜기', pressed: false })).toBeInTheDocument()
+    })
+
+    it('writes both tieFrequentMinCount and tieFrequentMaxCount when the count input changes', async () => {
+      // Set up the trio so the card is "on" and the input is reachable.
+      PatternBettingService.setBetDirection('tie_frequent', 'T')
+      PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+      const FilterThresholdsService = (await import('../../../application/services/FilterThresholdsService')).default
+      FilterThresholdsService.set({ tieFrequentMinCount: 2, tieFrequentMaxCount: 99 })
+
+      renderDialog({ activeFilters: ['tie_frequent'] })
+
+      const input = screen.getByLabelText('타이 출현 횟수') as HTMLInputElement
+      fireEvent.change(input, { target: { value: '5' } })
+
+      // Easy card uses exact-match semantics: both bounds move together.
+      expect(FilterThresholdsService.get().tieFrequentMinCount).toBe(5)
+      expect(FilterThresholdsService.get().tieFrequentMaxCount).toBe(5)
     })
 
     it('clicking 켜기 activates the tie_frequent filter via toggleFilter', () => {
