@@ -3,7 +3,7 @@
 import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
-import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount } from '../utils/autoModeStatus'
+import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount, compactAmount } from '../utils/autoModeStatus'
 import '../AutoModePanel.css'
 
 type RoomBetStatus = 'pending' | 'win' | 'loss' | 'tie' | 'failed' | 'pass'
@@ -510,12 +510,12 @@ function AutoModeRoomCard({
         )}
       </div>
 
-      {/* 4. Fusion Footer: Martin Level + P&L + W/L */}
+      {/* 4. Fusion Footer: 마틴 단계 · 손익 · 승패 */}
       <div className="auto-mode__room-card-footer">
         <div className="auto-mode__room-card-footer-left">
           {prediction ? (
             <span className={`auto-mode__room-card-footer-pred ${prediction === 'B' ? 'banker' : prediction === 'P' ? 'player' : 'tie'}`}>
-              {prediction === 'B' ? 'B' : prediction === 'P' ? 'P' : 'T'} {currentBetAmount >= 10000 ? `${Math.round(currentBetAmount / 1000)}K` : currentBetAmount.toLocaleString()}
+              {prediction === 'B' ? '뱅커' : prediction === 'P' ? '플레이어' : '타이'} {compactAmount(currentBetAmount)}
             </span>
           ) : (
             <span className="auto-mode__room-card-footer-pred idle">대기</span>
@@ -523,13 +523,13 @@ function AutoModeRoomCard({
         </div>
         <div className="auto-mode__room-card-footer-info">
           <span className={`auto-mode__room-card-footer-martin ${martinLevel <= 1 ? 'safe' : martinLevel <= 3 ? 'warn' : 'danger'}`}>
-            Lv.{martinLevel + 1}
+            {martinLevel + 1}단
           </span>
           <span className={`auto-mode__room-card-footer-pnl ${sessionProfit > 0 ? 'positive' : sessionProfit < 0 ? 'negative' : ''}`}>
-            {sessionProfit >= 0 ? '+' : ''}{sessionProfit >= 10000 || sessionProfit <= -10000 ? `${Math.round(sessionProfit / 1000)}K` : sessionProfit.toLocaleString()}
+            {sessionProfit > 0 ? '+' : ''}{compactAmount(sessionProfit)}
           </span>
           <span className="auto-mode__room-card-footer-wl">
-            {autoState?.totalWins || 0}W {autoState?.totalLosses || 0}L
+            {autoState?.totalWins || 0}승 {autoState?.totalLosses || 0}패
           </span>
         </div>
       </div>

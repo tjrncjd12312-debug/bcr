@@ -38,7 +38,7 @@ export function getRoomStatusChip(
   if (waitingForResult) {
     if (martinLevel > 0) {
       return brief
-        ? { text: `M${martinLevel + 1}*`, tone: 'martin' }
+        ? { text: `${martinLevel + 1}단*`, tone: 'martin' }
         : { text: `마틴 ${martinLevel + 1} · 결과대기`, tone: 'martin' }
     }
     return brief
@@ -48,7 +48,7 @@ export function getRoomStatusChip(
 
   if (martinLevel > 0) {
     return brief
-      ? { text: `M${martinLevel + 1}`, tone: 'martin' }
+      ? { text: `${martinLevel + 1}단`, tone: 'martin' }
       : { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }
   }
 
@@ -180,10 +180,20 @@ export function getNextBetAmount(
 }
 
 /**
- * 큰 금액은 'K' 접미사로 압축 (Mosaic처럼 좁은 공간용).
+ * 큰 금액을 한국식 만/억 단위로 압축 (Mosaic처럼 좁은 공간용).
+ * 한국 노인 사용자도 즉시 해독 가능한 표기를 위해 'K' 약어 대신 '만/억' 사용.
+ * 예: 15000 → '1.5만', 1500000 → '150만', 100000000 → '1억'
  */
 export function compactAmount(amount: number): string {
   if (amount === 0) return '0'
-  if (Math.abs(amount) >= 10000) return `${Math.round(amount / 1000)}K`
+  const sign = amount < 0 ? '-' : ''
+  const abs = Math.abs(amount)
+  const formatUnit = (value: number, unit: string): string => {
+    // 10 이상은 정수로(예: 15만), 10 미만은 소수 한 자리(예: 1.5만), 정수면 소수점 제거
+    const rounded = value >= 10 ? Math.round(value).toString() : value.toFixed(1).replace(/\.0$/, '')
+    return `${sign}${rounded}${unit}`
+  }
+  if (abs >= 100_000_000) return formatUnit(abs / 100_000_000, '억')
+  if (abs >= 10_000) return formatUnit(abs / 10_000, '만')
   return amount.toLocaleString()
 }

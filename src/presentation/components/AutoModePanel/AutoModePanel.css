@@ -2779,7 +2779,7 @@
   font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
-  font-family: 'Outfit', sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: -0.2px;
 }
 

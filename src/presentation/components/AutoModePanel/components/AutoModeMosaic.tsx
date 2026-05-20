@@ -254,7 +254,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
           predictionBadge === 'P' ? 'player' :
             predictionBadge === 'T' ? 'tie' : 'empty'
           }`}>
-          {predictionBadge || '-'}
+          {predictionBadge === 'B' ? '뱅' : predictionBadge === 'P' ? '플' : predictionBadge === 'T' ? '타' : '-'}
         </div>
 
         <div className="mosaic-center-info">
@@ -271,7 +271,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
         </div>
 
         <div className={`mosaic-martin-badge ${martinLabelClass}`}>
-          M{martinLevel + 1}
+          {martinLevel + 1}단
         </div>
       </div>
 

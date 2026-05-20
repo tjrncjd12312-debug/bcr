@@ -2,6 +2,8 @@
 /* Aesthetic: Clean Korean fintech — neutral dark, single blue accent */
 /* Version: 5.0 - Toss palette */
 
+/* Pretendard: 한글·라틴 가독성 우선 (오토배팅 사용자층은 한국 고령층). Inter는 라틴 보조용 폴백. */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
@@ -72,6 +74,15 @@
   --status-betting: #22c55e;
   --status-error: #f04452;
 
+  /* Tinted backgrounds — 14% alpha, 일관성을 위해 game color *-bg와 동일 강도 */
+  --status-success-bg: rgba(34, 197, 94, 0.14);
+  --status-danger-bg: rgba(240, 68, 82, 0.14);
+  --status-warning-bg: rgba(255, 176, 32, 0.14);
+  --status-info-bg: rgba(49, 130, 246, 0.14);
+
+  /* Accent tinted bg — --accent-muted의 의미상 별칭 */
+  --accent-primary-bg: rgba(49, 130, 246, 0.15);
+
   /* ===== Text Hierarchy — Toss greys ===== */
   --text-primary: #f2f4f6;
   --text-secondary: #b0b8c1;
@@ -135,9 +146,9 @@
   --transition-bounce: 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* ===== Typography ===== */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  --font-sans: 'Pretendard Variable', Pretendard, 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  --font-display: 'Inter', sans-serif;
+  --font-display: 'Pretendard Variable', Pretendard, 'Inter', sans-serif;
 
   --fs-xs: 11px;
   --fs-sm: 12px;

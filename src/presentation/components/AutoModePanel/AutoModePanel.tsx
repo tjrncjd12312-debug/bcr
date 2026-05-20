@@ -27,10 +27,6 @@ import {
   LayoutGrid,
   List,
   LayoutTemplate,
-  Flag,
-  BarChart2,
-  TrendingUp,
-  TrendingDown,
   Clock,
   Workflow
 } from 'lucide-react'
@@ -112,6 +108,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   // State
   const [showSettings, setShowSettings] = useState(false)
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'mosaic'>(() => {
+    // 디폴트는 list — 30개 방을 한 번에 스캔하기 가장 쉽고 결과/마틴/다음배팅을 표로 정렬해 보여줌.
+    // 기존 사용자는 localStorage 값이 그대로 살아남아 파괴적 변경 아님.
     try {
       const saved = localStorage.getItem(VIEW_MODE_KEY)
       if (saved && ['grid', 'list', 'mosaic'].includes(saved)) {
@@ -120,7 +118,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     } catch (e) {
       console.warn('[AutoMode] Failed to load view mode:', e)
     }
-    return 'grid'
+    return 'list'
   })
   const [showPatternModal, setShowPatternModal] = useState(false)
   const [showFilterDialog, setShowFilterDialog] = useState(false)
@@ -228,12 +226,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   // VirtualBettingService의 totalNetProfit 대신 AutoModeService의 cumulativeProfit 사용
   const sessionProfit = cumulativeProfit
 
-  // 🌟 Alive Numbers Animation (Hooks)
-  const animatedStartBalance = useCountUp(autoMode.startBalance || virtualInitialBalance, 1500)
-  const animatedTotalBet = useCountUp(autoMode.totalBetAmount, 1000)
-  const animatedMaxProfit = useCountUp(Math.abs(autoMode.maxProfit), 1000)
-  // New JSX: -{animatedMaxLoss} -> So animatedMaxLossMagnitude should be positive magnitude.
-  const animatedMaxLossMagnitude = useCountUp(Math.abs(autoMode.maxLoss), 1000)
+  // 헤더에 표시되는 손익·현재배팅·예상수익만 카운트업. 시작금액/전체배팅/최대수익/최대손실은 설정창의 통계 영역에서 정적으로 확인.
   const animatedSessionProfit = useCountUp(Math.abs(sessionProfit), 800)
   const animatedCurrentBet = useCountUp(currentBettingInfo.totalCurrentBet, 500)
   const animatedExpected = useCountUp(currentBettingInfo.totalExpectedProfit, 500)
@@ -664,32 +657,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     return `필터 (${activeFilters.length})`
   }, [activeFilters, availableFilters, customPatterns])
 
-  const currentStrategyLabel = useMemo(() => {
-    switch (settings.betStrategy) {
-      case 'fibonacci':
-        return '피보나치'
-      case 'paroli':
-        return '파롤리'
-      case 'flat':
-        return '플랫'
-      case 'custom':
-        return '커스텀'
-      case 'martingale':
-      default:
-        return '마틴'
-    }
-  }, [settings.betStrategy])
-
-  const targetScopeLabel = selectedRoomIds.size > 0
-    ? `${selectedRoomIds.size}개 선택`
-    : `전체 ${baccaratRoomList.length}개`
-  const targetMatchLabel = activeFilters.length > 0
-    ? `${filteredBettingRoomIds.length}개 매칭`
-    : '필터 없음'
-  const concurrentLimitLabel = settings.maxConcurrentBets > 0
-    ? `${settings.maxConcurrentBets}개`
-    : '무제한'
-
   const clearAutoModeFilters = useCallback(() => {
     autoFilterClearRef.current = Date.now()
     clearFilters()
@@ -946,45 +913,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
             )}
           </div>
 
-          {/* Session Stats Grid (2x2) */}
-          <div className="auto-mode__pod auto-mode__stat-grid">
-            <div className="auto-mode__stat-row">
-              <div className="auto-mode__stat-item">
-                <span className="auto-mode__stat-label">
-                  <Flag size={9} strokeWidth={2.5} /> 시작금액
-                </span>
-                <span className="auto-mode__stat-value neutral">
-                  {Math.floor(animatedStartBalance / 10000)}만
-                </span>
-              </div>
-              <div className="auto-mode__stat-item">
-                <span className="auto-mode__stat-label">
-                  <BarChart2 size={9} strokeWidth={2.5} /> 전체배팅
-                </span>
-                <span className="auto-mode__stat-value volume">
-                  {Math.floor(animatedTotalBet / 10000)}만
-                </span>
-              </div>
-            </div>
-            <div className="auto-mode__stat-row">
-              <div className="auto-mode__stat-item">
-                <span className="auto-mode__stat-label">
-                  <TrendingUp size={9} strokeWidth={2.5} /> 최대수익
-                </span>
-                <span className="auto-mode__stat-value positive">
-                  {autoMode.maxProfit > 0 ? '+' : ''}{Math.floor(animatedMaxProfit / 10000)}만
-                </span>
-              </div>
-              <div className="auto-mode__stat-item">
-                <span className="auto-mode__stat-label">
-                  <TrendingDown size={9} strokeWidth={2.5} /> 최대손실
-                </span>
-                <span className="auto-mode__stat-value negative">
-                  -{Math.floor(animatedMaxLossMagnitude / 10000)}만
-                </span>
-              </div>
-            </div>
-          </div>
+          {/* 헤더는 "지금 따고 있는가 / 지금 얼마 배팅 중인가 / 한도까지 얼마 남았는가"만 노출.
+              시작금액/전체배팅/최대수익/최대손실은 히스토리 패널의 누적 손익 흐름으로 충분히 추적 가능. */}
 
           {/* Session Profit Pod with Glowing Sparkline */}
           <div className={`auto-mode__header-money-pod ${sessionProfit >= 0 ? 'positive' : 'negative'}`}>
@@ -1154,33 +1084,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
           </button>
         </div>
       </header >
-
-      {isConnected && (
-        <div className={`auto-mode__target-strip ${filteredBettingRoomIds.length === 0 ? 'is-empty' : ''}`}>
-          <div className="auto-mode__target-item">
-            <span className="auto-mode__target-label">대상</span>
-            <strong>{targetScopeLabel}</strong>
-            <span className="auto-mode__target-sub">{selectedRoomIds.size > 0 ? '선택 범위' : '전체 기준'}</span>
-          </div>
-          <div className="auto-mode__target-item">
-            <span className="auto-mode__target-label">조건</span>
-            <strong>{getCurrentFilterLabel()}</strong>
-            <span className="auto-mode__target-sub">{targetMatchLabel}</span>
-          </div>
-          <div className="auto-mode__target-item">
-            <span className="auto-mode__target-label">베팅</span>
-            <strong>{(settings.baseBetAmount || 0).toLocaleString()}원</strong>
-            <span className="auto-mode__target-sub">{currentStrategyLabel} · {settings.maxMartin || 0}단계</span>
-          </div>
-          <div className="auto-mode__target-item">
-            <span className="auto-mode__target-label">동시</span>
-            <strong>{concurrentLimitLabel}</strong>
-            <span className="auto-mode__target-sub">
-              {currentBettingInfo.bettingRoomCount > 0 ? `${currentBettingInfo.bettingRoomCount}개 진행` : '대기'}
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       {

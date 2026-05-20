@@ -24,8 +24,8 @@ const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: strin
 
 const TABS: SettingsTabDef<SettingsTab>[] = [
   { value: 'general', label: '일반' },
-  { value: 'strategy', label: '배팅 전략' },
   { value: 'safety', label: '안전 장치' },
+  { value: 'strategy', label: '배팅 전략' },
 ]
 
 interface AutoModeSettingsDialogProps {
@@ -381,10 +381,10 @@ export function AutoModeSettingsDialog({
         <>
           {/* 윈컷/로스컷 */}
           <div className="ams-section">
-            <div className="ams-section-title">손익 제한</div>
+            <div className="ams-section-title">손익 제한 (멈춤 기준)</div>
             <div className="settings-field-row">
               <NumberFieldWithSuffix
-                label="윈컷 (목표 수익)"
+                label="이익 도달 시 멈춤"
                 value={settings.winCutAmount || 0}
                 suffix="원"
                 min={0}
@@ -392,7 +392,7 @@ export function AutoModeSettingsDialog({
                 onChange={(n) => onUpdateSettings({ winCutAmount: n })}
               />
               <NumberFieldWithSuffix
-                label="로스컷 (최대 손실)"
+                label="손실 도달 시 멈춤"
                 value={settings.lossCutAmount || 0}
                 suffix="원"
                 min={0}
@@ -400,7 +400,13 @@ export function AutoModeSettingsDialog({
                 onChange={(n) => onUpdateSettings({ lossCutAmount: n })}
               />
             </div>
-            <div className="ams-hint">0 = 무제한 (제한 없음)</div>
+            {(settings.lossCutAmount || 0) === 0 ? (
+              <div className="ams-warning">
+                ⚠️ 손실 제한이 꺼져있습니다. 손실이 무제한으로 커질 수 있어요. 잔액의 20~30% 정도를 권장합니다.
+              </div>
+            ) : (
+              <div className="ams-hint">설정한 손실에 도달하면 자동으로 배팅이 멈춥니다.</div>
+            )}
           </div>
 
           {/* 연패 설정 */}
