@@ -1,5 +1,6 @@
 // VirtualBettingService Unit Tests
 import { describe, it, expect, beforeEach } from 'vitest'
+import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
 import { VirtualBettingService } from './VirtualBettingService'
 
 describe('VirtualBettingService', () => {
@@ -167,6 +168,35 @@ describe('VirtualBettingService', () => {
       const log = VirtualBettingService.resolveBet('room1', '방 1', 'B', 'T')
 
       expect(log).toBeNull()
+    })
+
+    it('should pay 8x profit when Tie prediction wins on Tie result', () => {
+      const initialBalance = VirtualBettingService.getGlobalBalance()
+      const baseAmount = VirtualBettingService.getSettings().martingale.baseAmount
+
+      VirtualBettingService.placeBet('room1', '방 1', 'T')
+      expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - baseAmount)
+
+      const log = VirtualBettingService.resolveBet('room1', '방 1', 'T', 'T')
+
+      expect(log).not.toBeNull()
+      expect(log?.won).toBe(true)
+      expect(log?.result).toBe('T')
+      expect(log?.balanceAfter).toBe(initialBalance + baseAmount * TIE_PAYOUT_MULTIPLIER)
+
+      const state = VirtualBettingService.getState()
+      expect(state.globalBalance).toBe(initialBalance + baseAmount * TIE_PAYOUT_MULTIPLIER)
+      expect(state.totalWinnings).toBe(baseAmount * TIE_PAYOUT_MULTIPLIER)
+      expect(state.totalNetProfit).toBe(baseAmount * TIE_PAYOUT_MULTIPLIER)
+      expect(state.pendingBetAmount).toBe(0)
+      expect(state.pendingBetCount).toBe(0)
+      expect(state.tieBetAmount).toBe(0)
+      expect(state.tieBetCount).toBe(0)
+
+      const roomState = VirtualBettingService.getRoomState('room1')
+      expect(roomState?.lastBetResult).toBe('win')
+      expect(roomState?.wins).toBe(1)
+      expect(roomState?.profitLoss).toBe(baseAmount * TIE_PAYOUT_MULTIPLIER)
     })
 
     it('should add bet to history', () => {

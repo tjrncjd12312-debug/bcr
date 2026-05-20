@@ -1866,9 +1866,10 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const replyId = `baccarat.playerBetRequest-${Math.floor(Math.random() * 1000000000)}-${timestamp}`
     const correlationId = this.generateCorrelationId()
 
-    // betType에 따른 chips 객체 생성
+    // playerBetRequest는 화면용 betType이 아니라 Evolution bet code를 chips key로 보낸다.
+    const betCode = BET_CODES[betType]
     const chips: Record<string, number> = {}
-    chips[betType] = amount
+    chips[betCode] = amount
 
     const message = {
       id: messageId,

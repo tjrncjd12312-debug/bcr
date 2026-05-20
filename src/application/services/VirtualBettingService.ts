@@ -11,6 +11,7 @@ import type {
   VirtualBetLog,
   MartingaleSettings,
 } from '../../domain/entities'
+import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
 import type { IVirtualBettingUseCase, UnsubscribeFn } from '../../domain/interfaces'
 import { CallbackManager } from '../utils'
 
@@ -422,15 +423,15 @@ class VirtualBettingServiceImpl implements IVirtualBettingUseCase {
     const hasPendingBet = this.state.roomStates.get(roomId)?.lastBetResult === 'pending'
     if ((!this.state.enabled && !hasPendingBet) || !prediction) return null
 
-    // Tie 결과: 배팅금 반환 (무승부)
-    if (result === 'T') {
+    // Tie 결과 — prediction이 'T'가 아니면 푸쉬(환불), 'T'면 적중(8배 페이아웃) 처리
+    if (result === 'T' && prediction !== 'T') {
       const roomState = this.state.roomStates.get(roomId)
       if (roomState && roomState.lastBetResult === 'pending') {
         // 배팅금 반환
         this.state.globalBalance += roomState.currentBetAmount
         roomState.lastBetResult = 'tie'
 
-        // ✅ Track tie bet statistics
+        // ✅ Track tie bet statistics (푸쉬만 — 적중은 아래 win 분기에서 별도 카운트)
         this.state.tieBetAmount += roomState.currentBetAmount
         this.state.tieBetCount++
 
@@ -532,12 +533,16 @@ class VirtualBettingServiceImpl implements IVirtualBettingUseCase {
     if (won) {
       // 뱅커 승리시 5% 커미션 적용 (배당 1.95배)
       // 플레이어 승리시 커미션 없음 (배당 2배)
+      // 타이 적중 시 8배 페이아웃 (원금 + 8× 순수익)
       const isBankerWin = prediction === 'B'
+      const isTieWin = prediction === 'T'
       const BANKER_COMMISSION = 0.05
 
       // Payout = Original Bet + Profit
-      const payout = isBankerWin
-        ? betAmount + (betAmount * (1 - BANKER_COMMISSION)) // 뱅커: 원금 + (배팅액 * 0.95)
+      const payout = isTieWin
+        ? betAmount + (betAmount * TIE_PAYOUT_MULTIPLIER) // 타이: 원금 + (배팅액 × 8)
+        : isBankerWin
+        ? betAmount + (betAmount * (1 - BANKER_COMMISSION)) // 뱅커: 원금 + (배팅액 × 0.95)
         : betAmount + betAmount // 플레이어: 원금 + 배팅액
 
       // Net Profit = Payout - Original Bet

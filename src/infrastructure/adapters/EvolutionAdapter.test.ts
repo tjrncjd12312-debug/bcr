@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { GameResultEvent, RoadResult } from '../../domain/entities'
+import { BET_CODES, type BetType, type GameResultEvent, type RoadResult } from '../../domain/entities'
 import { EvolutionAdapter } from './EvolutionAdapter'
 
 const TABLE_ID = 'p63cmvmwagteemoy'
@@ -98,5 +98,40 @@ describe('EvolutionAdapter lobby history parsing', () => {
       playerScore: 2,
       bankerScore: 9,
     }))
+  })
+})
+
+describe('EvolutionAdapter player bet request building', () => {
+  beforeEach(() => {
+    EvolutionAdapter.dispose?.()
+  })
+
+  afterEach(() => {
+    EvolutionAdapter.dispose?.()
+  })
+
+  it.each([
+    ['Player', BET_CODES.Player],
+    ['Banker', BET_CODES.Banker],
+    ['Tie', BET_CODES.Tie],
+  ] as Array<[BetType, string]>)('uses Evolution bet code as chips key for %s', (betType, betCode) => {
+    const gameId = EvolutionAdapter.ensureGameId(TABLE_ID)
+    const raw = EvolutionAdapter.buildPlayerBetRequest({
+      tableId: TABLE_ID,
+      betType,
+      amount: 10000,
+    })
+
+    expect(raw).not.toBeNull()
+    const message = JSON.parse(raw!)
+
+    expect(message.type).toBe('baccarat.playerBetRequest')
+    expect(message.args.tableId).toBe(TABLE_ID)
+    expect(message.args.gameId).toBe(gameId)
+    expect(message.args.action).toMatchObject({
+      name: 'Chips',
+      chips: { [betCode]: 10000 },
+    })
+    expect(message.args.action.chips).not.toHaveProperty(betType)
   })
 })
