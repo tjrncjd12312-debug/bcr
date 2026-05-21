@@ -791,4 +791,72 @@ describe('AutoModeService — Tie bet propagation', () => {
     expect(captured!.betType).toBe('Tie')
     expect(captured!.prediction).toBe('T')
   })
+
+  // 회귀: commit 236bbc4 (타이 적중 8배 페이아웃) 이후, AutoMode의 cumulativeProfit과
+  // VirtualBettingService의 globalBalance/totalNetProfit/totalWinnings/room.wins/
+  // room.profitLoss가 모두 동일한 +8× 수익을 반영하는지 end-to-end로 검증한다.
+  // 이전엔 VirtualBettingService.resolveBet이 result==='T'를 무조건 push로 처리해서
+  // AutoMode의 cumulativeProfit만 +8×가 들어가고 VirtualBetting 내부 통계는 0이
+  // 되는 sync 불일치 버그가 있었음.
+  it('keeps AutoMode profit and VirtualBetting stats consistent on a Tie hit', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+
+    let room = makeRoom('rStats', ['B', 'P'])
+    adapter.setRoom(room)
+
+    // AutoModeService는 모듈 싱글톤이라 dispose()가 cumulativeProfit/totalWins 등
+    // 글로벌 통계를 리셋하지 않는다. 다른 테스트의 stats leak으로 누적되지 않도록
+    // 명시적으로 통계만 초기화한다.
+    AutoModeService.resetStats()
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rStats'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    const initialBalance = VirtualBettingService.getSettings().initialBalance
+
+    adapter.emitBettingPhase({ roomId: 'rStats', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    room = { ...room, history: makeHistory(['T', ...room.history.map(h => h.winner)]) }
+    adapter.setRoom(room)
+    adapter.emitGameResult({ roomId: 'rStats', winner: 'T', playerScore: 7, bankerScore: 7 })
+    await flush()
+    await flush()
+
+    const expectedProfit = BASE_BET * 8
+
+    const autoState = AutoModeService.getState()
+    expect(autoState.cumulativeProfit).toBe(expectedProfit)
+    expect(autoState.totalWins).toBe(1)
+    expect(autoState.totalLosses).toBe(0)
+    expect(autoState.totalBetAmount).toBe(BASE_BET)
+
+    const vbState = VirtualBettingService.getState()
+    expect(vbState.globalBalance).toBe(initialBalance + expectedProfit)
+    expect(vbState.totalNetProfit).toBe(expectedProfit)
+    expect(vbState.totalWinnings).toBe(expectedProfit)
+    expect(vbState.totalBetAmount).toBe(BASE_BET)
+    expect(vbState.totalBetCount).toBe(1)
+    expect(vbState.pendingBetAmount).toBe(0)
+    expect(vbState.pendingBetCount).toBe(0)
+    // Tie 적중은 win이지 push가 아니므로 tieBet 카운터는 0 유지
+    expect(vbState.tieBetAmount).toBe(0)
+    expect(vbState.tieBetCount).toBe(0)
+
+    const roomState = VirtualBettingService.getRoomState('rStats')
+    expect(roomState?.wins).toBe(1)
+    expect(roomState?.losses).toBe(0)
+    expect(roomState?.profitLoss).toBe(expectedProfit)
+    expect(roomState?.lastBetResult).toBe('win')
+    // 적중 후 마틴 레벨 리셋
+    expect(roomState?.martingaleLevel).toBe(0)
+  })
 })
