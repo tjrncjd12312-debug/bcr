@@ -25,32 +25,28 @@ interface FilterSettingsDialogProps {
   freshShoeScope: FreshShoeScope
 }
 
-// "타이오토" 켜짐 조건 (엄격):
+// "타이오토" 켜짐 조건:
 //   - tie_frequent 필터가 활성 필터의 유일한 항목
 //   - 방향 = T
-//   - 전략 = martingale
-// 다른 필터가 같이 켜져 있거나 방향/전략이 다르면 OFF로 표시 — 사용자가
-// "타이 전용"으로 동작하지 않는 상태임을 즉시 알 수 있게.
+// 전략은 글로벌(또는 사용자가 per-filter 드롭다운에서 따로 정한 값)을 따른다.
+// 켜기 버튼이 전략을 'martingale'로 강제하면 글로벌에 설정한 커스텀 마틴 시퀀스가
+// 무시되므로, 전략은 이 카드의 ON/OFF 판정에서 제외한다.
 function useTieAutoState(activeFilters: RoomFilterType[]) {
   const isExclusiveTieFilter =
     activeFilters.length === 1 && activeFilters[0] === 'tie_frequent'
   const [direction, setDirection] = useState(() =>
     PatternBettingService.getBetDirection('tie_frequent')
   )
-  const [strategy, setStrategy] = useState(() =>
-    PatternBettingService.getBetStrategy('tie_frequent')
-  )
 
   useEffect(() => {
     const sync = () => {
       setDirection(PatternBettingService.getBetDirection('tie_frequent'))
-      setStrategy(PatternBettingService.getBetStrategy('tie_frequent'))
     }
     sync()
     return PatternBettingService.onChange(sync)
   }, [])
 
-  return isExclusiveTieFilter && direction === 'T' && strategy === 'martingale'
+  return isExclusiveTieFilter && direction === 'T'
 }
 
 // Easy 카드의 필터 임계값(시작 + 윈도우 + min/max 출현 횟수)을 실시간으로 따라가는 훅.
@@ -126,7 +122,11 @@ export function FilterSettingsDialog({
       clearFilters()
       toggleFilter('tie_frequent')
       PatternBettingService.setBetDirection('tie_frequent', 'T')
-      PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+      // 글로벌 betStrategy(예: 'custom' + customBetAmounts)를 그대로 따르도록
+      // per-filter 오버라이드를 해제. 이전엔 'martingale'로 강제 덮어써서 사용자가
+      // 설정한 커스텀 마틴 시퀀스가 무시됐다. 사용자가 타이에만 별도 전략을 원하면
+      // 아래 "필터별 세부 설정"에서 직접 지정.
+      PatternBettingService.setBetStrategy('tie_frequent', undefined)
     }
   }
 

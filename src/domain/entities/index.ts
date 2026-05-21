@@ -578,7 +578,7 @@ export const DEFAULT_PATTERN_CONFIGS: PatternBetConfig[] = [
   { patternType: 'banker_dominant', betDirection: 'B', includeTie: false, enabled: true },
   { patternType: 'player_dominant', betDirection: 'P', includeTie: false, enabled: true },
   { patternType: 'tie_drought',  betDirection: 'T', includeTie: false, enabled: true },
-  { patternType: 'tie_frequent', betDirection: 'T', betStrategy: 'martingale', includeTie: false, enabled: true },
+  { patternType: 'tie_frequent', betDirection: 'T', includeTie: false, enabled: true },
   { patternType: 'no_tie_room',  betDirection: 'T', includeTie: false, enabled: true },
   { patternType: 'fresh_room',   betDirection: 'T', includeTie: false, enabled: true },
   { patternType: 'fresh_shoe',   betDirection: 'T', includeTie: false, enabled: true },
