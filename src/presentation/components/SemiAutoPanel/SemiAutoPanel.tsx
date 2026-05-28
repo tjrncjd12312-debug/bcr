@@ -502,7 +502,7 @@ export default function SemiAutoPanel({
             </svg>
             <div className="sa-compact-stat-content">
               <span className="label">잔액</span>
-              <span className="value">{realBalance !== null ? `₩${(realBalance / 10000).toFixed(1)}M` : '---'}</span>
+              <span className="value">{realBalance !== null ? `${realBalance.toLocaleString()}원` : '---'}</span>
             </div>
           </div>
         </div>
@@ -512,7 +512,7 @@ export default function SemiAutoPanel({
           <div className="sa-balance-row">
             <span className="label">실제 잔액</span>
             <span className={`value ${realBalance === null ? 'pending' : ''}`}>
-              {realBalance !== null ? `₩${realBalance.toLocaleString()}` : '연결 필요'}
+              {realBalance !== null ? `${realBalance.toLocaleString()}원` : '연결 필요'}
             </span>
           </div>
         </div>

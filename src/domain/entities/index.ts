@@ -635,9 +635,10 @@ export function calculateBetAmount(
       return baseAmount * fibonacci(level)
 
     case 'paroli':
-      // 파롤리: 승리시 배팅 증가, 패배시 초기화
-      // level은 연승 횟수
-      return baseAmount * Math.pow(2, Math.min(level, 3)) // max 3 level
+      // 파롤리 (역마틴): 승리 시 2배, 3연승 후 리셋 → 레벨 0,1,2 = 1·2·4배.
+      // 정본인 MartingaleManager.calculateBetAmount('paroli')와 동일하게 cap=2로 통일.
+      // (이전 cap=3은 Auto(4배) vs SemiAuto(8배) 금액 불일치를 유발했음)
+      return baseAmount * Math.pow(2, Math.min(level, 2))
 
     case 'custom':
       // 커스텀: 사용자가 직접 설정한 금액 사용

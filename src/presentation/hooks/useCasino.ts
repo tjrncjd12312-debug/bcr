@@ -83,7 +83,7 @@ function normalizeWinner(value: string): Winner {
   return 'T'
 }
 
-export type ConnectionStatus = 'idle' | 'launching' | 'monitoring' | 'captured' | 'connected' | 'error'
+export type ConnectionStatus = 'idle' | 'launching' | 'monitoring' | 'captured' | 'connected' | 'reconnecting' | 'error'
 export type CasinoProvider = 'evolution' | 'pragmatic' | null
 
 interface MultiSocketConfig {
@@ -239,16 +239,20 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   const flushRoomUpdates = useCallback(() => {
     if (pendingRoomUpdatesRef.current.size === 0) return
 
-    pendingRoomUpdatesRef.current.clear()
+    // 이번 배치에서 실제로 변경된 방 ID만 새 객체로 복제하고, 나머지는 기존 참조를 유지한다.
+    // 매 이벤트마다 최대 60개 방 전체 + history 배열을 통째로 복제하던 비용을 변경된 방으로
+    // 한정한다(perf-1). 실시간성은 그대로 — 변경된 방은 즉시 새 identity를 갖고, 메모이즈된
+    // 소비자가 추후 추가되면 변경 없는 방의 재조정을 건너뛸 수 있다.
+    const changedIds = pendingRoomUpdatesRef.current
+    pendingRoomUpdatesRef.current = new Set<string>()
 
-    // 완전히 새로운 Map 생성 (모든 방을 새 객체로)
     const updatedRooms = new Map<string, Room>()
     roomsRef.current.forEach((room, id) => {
-      // 모든 방을 새 객체 + 새 history 배열로 복사
-      updatedRooms.set(id, {
-        ...room,
-        history: [...room.history]
-      })
+      if (changedIds.has(id)) {
+        updatedRooms.set(id, { ...room, history: [...room.history] })
+      } else {
+        updatedRooms.set(id, room) // 변경 없는 방은 기존 참조 유지
+      }
     })
 
     setRooms(updatedRooms)
@@ -402,15 +406,19 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           const wsUrl = event.payload.wsUrl
           if (!wsUrl) return
 
-          // 🔥 로비 소켓은 무시 - 멀티소켓만 사용
-          if (wsUrl.includes('/public/lobby/socket')) {
+          // 🆕 lobby v2(/public/lobby/socket/v2/)는 multiwidget이 통합된 멀티테이블 피드.
+          // 일반 로비 소켓처럼 무시하면 안 되고 아래 multiwidget 경로로 처리한다(v2-1).
+          const isLobbyV2 = wsUrl.includes('/lobby/socket/v2') || wsUrl.includes('/lobby/socket/V2')
+
+          // 🔥 로비 소켓은 무시 - 멀티소켓만 사용 (단, lobby v2는 예외)
+          if (!isLobbyV2 && wsUrl.includes('/public/lobby/socket')) {
             console.log('[useCasino] ⏭️ Skipping lobby socket - using multi-socket only')
             return
           }
 
           // 🎰 멀티위젯 소켓은 Rust CDP에서 자동 연결하므로 여기서는 건너뜀
           // Rust가 브라우저 WS를 먼저 닫고 연결해야 중복 접속 오류가 발생하지 않음
-          const isMultiwidget = event.payload.isMultiwidget || wsUrl.includes('/multiwidget/') || wsUrl.includes('/multiplay/')
+          const isMultiwidget = event.payload.isMultiwidget || isLobbyV2 || wsUrl.includes('/multiwidget/') || wsUrl.includes('/multiplay/')
           if (isMultiwidget) {
             console.log('[useCasino] 🎰 Multiwidget detected - letting Rust CDP handle auto-connection')
             // 🔒 잠금되지 않은 경우에만 baseUrl 설정 (중계사이트 URL 우선)
@@ -476,17 +484,17 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
     }, 'evolution')
 
     trackedListen<{ reason?: string; type?: string }>('evolution_multi_disconnected', (event) => {
+        const reason = event.payload?.reason || ''
+        const msgType = event.payload?.type || ''
+
+        // Rust 측 자동 재연결이 모두 실패한 경우에만 이 이벤트가 도착함
         setStatus('idle')
         setProvider(null)
         setEvolutionBaseUrl(null)
         evolutionBaseUrlRef.current = null
-        evolutionBaseUrlLockedRef.current = false // 🔓 잠금 해제 - 다음 연결시 새 URL 캡처 가능
-        setRoomsReady(false)  // 연결 종료 시 roomsReady 초기화
+        evolutionBaseUrlLockedRef.current = false
+        setRoomsReady(false)
 
-        const reason = event.payload?.reason || ''
-        const msgType = event.payload?.type || ''
-
-        // Check if this is a kickout due to session conflict
         const isKickout = reason.includes('kickout') ||
           reason.includes('newConnection') ||
           reason.includes('connectionAlreadyExists') ||
@@ -494,22 +502,26 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           msgType.includes('connectionAlreadyExists')
 
         if (isKickout) {
-          // Session conflict - do NOT auto-reconnect
           console.warn('[useCasino] ⚠️ Disconnected due to session conflict:', reason)
           showWarning('세션 충돌로 연결이 종료되었습니다. 브라우저를 새로고침 후 다시 시도하세요.')
           return
         }
 
-        // predict 모드(멀티룸 로비)에서만 자동 재연결, auto 모드에서는 세션 충돌 방지를 위해 재연결 안함
+        if (reason.includes('Max reconnect attempts')) {
+          console.error('[useCasino] ❌ All reconnect attempts exhausted:', reason)
+          showWarning('재연결 실패 (최대 시도 횟수 초과). 브라우저를 새로고침 후 다시 시도하세요.')
+          return
+        }
+
+        // predict 모드에서만 CDP 재시작 (Rust 자동 재연결이 실패한 후의 폴백)
         if (appModeRef.current === 'predict') {
-          console.log('[useCasino] 🔄 Multiwidget disconnected in predict mode, restarting CDP monitoring in 3s...')
+          console.log('[useCasino] 🔄 Rust reconnect exhausted, falling back to CDP restart...')
           setTimeout(() => {
             invoke('restart_cdp_monitoring').catch((e) => {
               console.warn('[useCasino] Failed to restart CDP monitoring:', e)
             })
           }, 3000)
         } else {
-          // Auto 모드 - 자동 재연결하지 않음 (세션 충돌 방지)
           console.log('[useCasino] 📊 Multiwidget disconnected in auto mode:', reason)
           showWarning('멀티소켓 연결이 끊어졌습니다.')
         }
@@ -520,6 +532,17 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       setStatus('error')
       showError('CONNECTION_FAILED', 'Evolution 소켓 오류', (event as any)?.payload?.error || '연결 오류')
     }, 'evolution')
+
+    trackedListen<{ attempt: number; maxAttempts: number; delayMs: number; reason: string }>(
+      'evolution_multi_reconnect_attempt',
+      (event) => {
+        const { attempt, maxAttempts, delayMs } = event.payload
+        setStatus('reconnecting')
+        showWarning(`재연결 시도 중 (${attempt}/${maxAttempts})... ${Math.round(delayMs / 1000)}초 후 재시도`)
+        console.log('[useCasino] 🔄 Auto-reconnect attempt:', event.payload)
+      },
+      'evolution'
+    )
 
     // CDP에서 테이블 설정 캡처 (CLIENT_UNAVAILABLE_CHIPS_HIDDEN, CLIENT_BET_CHIP)
     trackedListen<Record<string, unknown>>('evolution-table-config', (event) => {

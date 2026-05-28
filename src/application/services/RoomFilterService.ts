@@ -81,8 +81,8 @@ const BUILT_IN_FILTERS: RoomFilter[] = [
   {
     type: 'no_tie_room',
     enabled: false,
-    label: 'Tie 없는 방',
-    description: '이 방의 히스토리에 Tie가 0건',
+    label: '타이 없는 방',
+    description: '이 방의 히스토리에 타이가 0건',
   },
   {
     type: 'fresh_room',

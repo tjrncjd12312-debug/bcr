@@ -11,7 +11,7 @@ import type {
   VirtualBetLog,
   MartingaleSettings,
 } from '../../domain/entities'
-import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
+import { winProfit } from '../../domain/betting/payout'
 import type { IVirtualBettingUseCase, UnsubscribeFn } from '../../domain/interfaces'
 import { CallbackManager } from '../utils'
 
@@ -532,21 +532,11 @@ class VirtualBettingServiceImpl implements IVirtualBettingUseCase {
 
     if (won) {
       // 뱅커 승리시 5% 커미션 적용 (배당 1.95배)
-      // 플레이어 승리시 커미션 없음 (배당 2배)
-      // 타이 적중 시 8배 페이아웃 (원금 + 8× 순수익)
-      const isBankerWin = prediction === 'B'
-      const isTieWin = prediction === 'T'
-      const BANKER_COMMISSION = 0.05
-
-      // Payout = Original Bet + Profit
-      const payout = isTieWin
-        ? betAmount + (betAmount * TIE_PAYOUT_MULTIPLIER) // 타이: 원금 + (배팅액 × 8)
-        : isBankerWin
-        ? betAmount + (betAmount * (1 - BANKER_COMMISSION)) // 뱅커: 원금 + (배팅액 × 0.95)
-        : betAmount + betAmount // 플레이어: 원금 + 배팅액
-
-      // Net Profit = Payout - Original Bet
-      const netProfit = Math.round(payout - betAmount)
+      // 순이익은 단일 페이아웃 정책(domain/betting/payout.winProfit)으로 계산 — 엔진 간 반올림
+      // 드리프트 방지(dup-1). 플레이어 1:1 / 뱅커 0.95:1 / 타이 8:1.
+      const netProfit = winProfit(prediction as 'B' | 'P' | 'T', betAmount)
+      // Payout = 원금 + 순이익
+      const payout = betAmount + netProfit
 
       this.state.globalBalance = Math.round(this.state.globalBalance + payout)
       this.state.totalWinnings = Math.round(this.state.totalWinnings + netProfit) // Track profit from wins only

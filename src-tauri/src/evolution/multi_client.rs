@@ -11,7 +11,7 @@
 //! - Multiwidget: wss://{domain}/public/baccarat/player/game/multiwidget/socket
 //!
 //! ## TLS Fingerprint
-//! Uses rquest with Chrome impersonation (BoringSSL) to bypass Akamai bot detection.
+//! Uses wreq with Chrome impersonation (BoringSSL) to bypass Akamai bot detection.
 
 use super::connection_state::{ConnectionStateMachine, StateTransition};
 use super::events::{DisconnectReason, EvolutionEvent, EventSender, TableSummary};
@@ -21,9 +21,11 @@ use super::table_filter::TableFilter;
 use crate::presentation::task_registry::TaskRegistry;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
-use rquest::Message as RquestMessage;
-use rquest_util::Emulation;
+use wreq::ws::message::Message as WsMessage;
+use wreq_util::Emulation;
 use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
@@ -34,6 +36,44 @@ const MAX_SUBSCRIBE_TABLES: usize = 60;
 
 /// 이벤트 채널 버퍼 크기 (60개 방 기준 피크 부하 대응)
 const EVENT_CHANNEL_BUFFER: usize = 1024;
+
+// ─── Human-like timing jitter (ms) ───────────────────────────────────────────
+const PRE_HANDSHAKE_MIN_MS: u64 = 200;
+const PRE_HANDSHAKE_MAX_MS: u64 = 800;
+const INIT_GAP_MIN_MS: u64 = 80;
+const INIT_GAP_MAX_MS: u64 = 180;
+const SUBSCRIBE_GAP_MIN_MS: u64 = 120;
+const SUBSCRIBE_GAP_MAX_MS: u64 = 280;
+const HEARTBEAT_MIN_MS: u64 = 4000;
+const HEARTBEAT_MAX_MS: u64 = 6000;
+
+// 서버로부터 아무 메시지도 수신하지 못하면 좀비 연결로 판단하는 시간 (ms).
+// Evolution 서버는 보통 1-2초 간격으로 테이블 이벤트를 보내므로 15초면 충분히 보수적.
+const RECEIVE_TIMEOUT_MS: u64 = 15_000;
+
+// 자동 재연결 최대 시도 횟수
+const MAX_RECONNECT_ATTEMPTS: u32 = 5;
+// 자동 재연결 기본 딜레이 (ms) — 지수 백오프: 2s, 4s, 8s, 16s, 30s cap
+const RECONNECT_BASE_DELAY_MS: u64 = 2000;
+const RECONNECT_MAX_DELAY_MS: u64 = 30_000;
+
+/// 위장용 기본 User-Agent. TLS/HTTP2 Emulation(`Emulation::Chrome136`, single_connection_attempt)과
+/// 반드시 동일한 Chrome 버전이어야 한다 — UA가 다르면 UA-vs-JA3 불일치로 Akamai 봇 스코어링에 걸린다(ua-1).
+const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+
+/// Sleep for a uniformly random duration in `[min_ms, max_ms)`.
+async fn jitter_sleep(min_ms: u64, max_ms: u64) {
+    use rand::Rng;
+    let ms = rand::thread_rng().gen_range(min_ms..max_ms);
+    tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+}
+
+/// Random `Instant` `min_ms..max_ms` from now — used for heartbeat scheduling.
+fn jitter_deadline(min_ms: u64, max_ms: u64) -> tokio::time::Instant {
+    use rand::Rng;
+    let ms = rand::thread_rng().gen_range(min_ms..max_ms);
+    tokio::time::Instant::now() + tokio::time::Duration::from_millis(ms)
+}
 
 /// 멀티테이블 이벤트(정규화) - 하위 호환성 유지
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,11 +108,21 @@ pub struct EvolutionMultiSocket {
     /// shutdown-deaf task) would leak `JoinHandle`s. The registry is a safety
     /// net layered on top of the existing `shutdown_tx` broadcast channel.
     task_registry: Arc<TaskRegistry>,
+    /// Live-connection flag, shared with the spawned connection task.
+    ///
+    /// The `state_machine` only ever reaches `Connecting` because the spawned
+    /// task has no `&self` handle to advance it, so `is_connected()` cannot rely
+    /// on it. This atomic is flipped true once the socket is up (after the
+    /// `Connected` event) and false when the attempt ends / on `disconnect()`,
+    /// giving `is_connected()` / `get_multiwidget_status()` / `resubscribe` a
+    /// truthful answer (state-3).
+    connected: Arc<AtomicBool>,
 }
 
 /// 글로벌 싱글턴 멀티위젯 클라이언트
 pub static GLOBAL_MULTI_CLIENT: Lazy<TokioMutex<EvolutionMultiSocket>> =
     Lazy::new(|| TokioMutex::new(EvolutionMultiSocket::new()));
+
 
 impl EvolutionMultiSocket {
     pub fn new() -> Self {
@@ -82,11 +132,13 @@ impl EvolutionMultiSocket {
             msg_tx: None,
             event_tx: None,
             task_registry: Arc::new(TaskRegistry::new()),
+            connected: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn is_connected(&self) -> bool {
-        self.state_machine.state().is_connected()
+        // 실제 라이브 소켓 여부는 공유 atomic으로 판단(state_machine은 Connecting에 갇힘 — state-3).
+        self.connected.load(Ordering::SeqCst) || self.state_machine.state().is_connected()
     }
 
     /// 현재 연결 상태 반환
@@ -143,9 +195,14 @@ impl EvolutionMultiSocket {
             .ok_or_else(|| "Missing host in WS URL".to_string())?
             .to_string();
 
-        let is_multiwidget = ws_url.contains("/multiwidget/");
+        // lobby v2(/public/lobby/socket/v2/)는 multiwidget이 통합된 멀티테이블 피드이므로
+        // 동일하게 init 시퀀스(connection_established + subscribe)를 보내야 서버가 데이터를 push한다.
+        // 이를 빼먹으면 소켓은 붙지만 아무 메시지도 못 받아 ReceiveTimeout으로 끊긴다(v2-1).
+        let is_multiwidget = ws_url.contains("/multiwidget/")
+            || ws_url.contains("/lobby/socket/v2")
+            || ws_url.contains("/lobby/socket/V2");
         info!(
-            "[Evolution-Multi] 🎰 Is multiwidget socket: {}",
+            "[Evolution-Multi] 🎰 Is multiwidget/lobby-v2 socket: {}",
             is_multiwidget
         );
 
@@ -159,9 +216,12 @@ impl EvolutionMultiSocket {
 
         let origin = options.origin.clone().unwrap_or_default();
         let cookie = options.cookie.clone().unwrap_or_default();
-        let user_agent = options.user_agent.clone().unwrap_or_else(|| {
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string()
-        });
+        // Caller may override (e.g. for per-session UA pinning) but the default
+        // MUST match the TLS Emulation (Chrome136) to keep UA and TLS in lockstep.
+        let user_agent = options
+            .user_agent
+            .clone()
+            .unwrap_or_else(|| CHROME_UA.to_string());
         let referer = options
             .referer
             .clone()
@@ -185,6 +245,10 @@ impl EvolutionMultiSocket {
         let is_multiwidget_clone = is_multiwidget;
         let referer_without_hash = referer.split('#').next().unwrap_or(&referer).to_string();
 
+        // 새 연결 사이클 시작 — atomic을 초기화하고 spawned task와 공유한다(state-3).
+        self.connected.store(false, Ordering::SeqCst);
+        let connected = self.connected.clone();
+
         let connection_handle = tokio::spawn(async move {
             Self::connection_task(
                 ws_url_clone,
@@ -196,6 +260,7 @@ impl EvolutionMultiSocket {
                 event_tx,
                 msg_rx,
                 shutdown_rx,
+                connected,
             )
             .await;
         });
@@ -210,7 +275,7 @@ impl EvolutionMultiSocket {
         Ok(())
     }
 
-    /// 연결 태스크 (백그라운드 실행)
+    /// 연결 태스크 (백그라운드 실행, 자동 재연결 루프 포함)
     async fn connection_task(
         ws_url: String,
         is_multiwidget: bool,
@@ -221,12 +286,146 @@ impl EvolutionMultiSocket {
         event_tx: EventSender,
         mut msg_rx: tokio::sync::mpsc::Receiver<String>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        connected: Arc<AtomicBool>,
     ) {
-        info!("[Evolution-Multi] 🚀 Attempting WebSocket connection...");
+        let mut attempt: u32 = 0;
 
-        // TLS 클라이언트 빌드 - Chrome 131 최신 지문 사용
-        let client = match rquest::Client::builder()
-            .emulation(Emulation::Chrome131)
+        loop {
+            attempt += 1;
+            info!(
+                "[Evolution-Multi] 🚀 Connection attempt #{} to {}",
+                attempt, ws_url
+            );
+
+            // Human-like dwell before opening the socket
+            jitter_sleep(PRE_HANDSHAKE_MIN_MS, PRE_HANDSHAKE_MAX_MS).await;
+
+            let disconnect_reason = Self::single_connection_attempt(
+                &ws_url,
+                is_multiwidget,
+                &origin,
+                &user_agent,
+                &cookie,
+                &referer,
+                &event_tx,
+                &mut msg_rx,
+                &mut shutdown_rx,
+                &connected,
+            )
+            .await;
+
+            // 이번 시도가 끝났다(끊김/재연결 대기 진입) — 라이브 플래그 해제(state-3).
+            connected.store(false, Ordering::SeqCst);
+
+            match &disconnect_reason {
+                // 사용자 요청 또는 킥아웃 → 재연결 안 함
+                DisconnectReason::UserRequested => {
+                    info!("[Evolution-Multi] 🛑 User requested disconnect, exiting loop");
+                    let _ = event_tx
+                        .send(EvolutionEvent::Disconnected {
+                            url: ws_url.clone(),
+                            reason: disconnect_reason,
+                        })
+                        .await;
+                    return;
+                }
+                DisconnectReason::Kickout(reason) => {
+                    warn!("[Evolution-Multi] ⚠️ Kicked out ({}), not auto-reconnecting", reason);
+                    let _ = event_tx
+                        .send(EvolutionEvent::Disconnected {
+                            url: ws_url.clone(),
+                            reason: disconnect_reason,
+                        })
+                        .await;
+                    return;
+                }
+                reason if reason.should_auto_reconnect() => {
+                    if attempt >= MAX_RECONNECT_ATTEMPTS {
+                        error!(
+                            "[Evolution-Multi] ❌ Max reconnect attempts ({}) reached, giving up",
+                            MAX_RECONNECT_ATTEMPTS
+                        );
+                        let _ = event_tx
+                            .send(EvolutionEvent::Disconnected {
+                                url: ws_url.clone(),
+                                reason: DisconnectReason::NetworkError(format!(
+                                    "Max reconnect attempts exceeded (last: {})",
+                                    reason.as_str()
+                                )),
+                            })
+                            .await;
+                        return;
+                    }
+
+                    // 지수 백오프 딜레이 계산
+                    let delay_ms = std::cmp::min(
+                        RECONNECT_BASE_DELAY_MS * 2u64.pow(attempt.saturating_sub(1)),
+                        RECONNECT_MAX_DELAY_MS,
+                    );
+
+                    warn!(
+                        "[Evolution-Multi] 🔄 Auto-reconnect in {}ms (attempt {}/{}, reason: {})",
+                        delay_ms, attempt, MAX_RECONNECT_ATTEMPTS, reason.as_str()
+                    );
+
+                    // 프론트엔드에 재연결 시도 알림
+                    let _ = event_tx
+                        .send(EvolutionEvent::ReconnectAttempt {
+                            attempt,
+                            max_attempts: MAX_RECONNECT_ATTEMPTS,
+                            delay_ms,
+                            reason: reason.as_str(),
+                        })
+                        .await;
+
+                    // 백오프 대기 중에도 셧다운 신호 체크
+                    tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)) => {
+                            // 대기 완료, 재연결 시도
+                        }
+                        _ = shutdown_rx.recv() => {
+                            info!("[Evolution-Multi] 🛑 Shutdown during reconnect wait");
+                            let _ = event_tx
+                                .send(EvolutionEvent::Disconnected {
+                                    url: ws_url.clone(),
+                                    reason: DisconnectReason::UserRequested,
+                                })
+                                .await;
+                            return;
+                        }
+                    }
+                }
+                // Normal 등 기타 — 재연결 안 함
+                _ => {
+                    let _ = event_tx
+                        .send(EvolutionEvent::Disconnected {
+                            url: ws_url.clone(),
+                            reason: disconnect_reason,
+                        })
+                        .await;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// 단일 연결 시도 — 연결 → 메시지 루프 → 종료 사유 반환
+    async fn single_connection_attempt(
+        ws_url: &str,
+        is_multiwidget: bool,
+        origin: &str,
+        user_agent: &str,
+        cookie: &str,
+        referer: &str,
+        event_tx: &EventSender,
+        msg_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
+        connected: &AtomicBool,
+    ) -> DisconnectReason {
+        let client = match wreq::Client::builder()
+            .emulation(Emulation::Chrome136)
+            .cert_verification(false)
+            .connect_timeout(tokio::time::Duration::from_secs(15))
             .build()
         {
             Ok(c) => c,
@@ -234,31 +433,27 @@ impl EvolutionMultiSocket {
                 error!("[Evolution-Multi] ❌ Failed to build client: {}", e);
                 let _ = event_tx
                     .send(EvolutionEvent::Error {
-                        url: ws_url,
+                        url: ws_url.to_string(),
                         error: format!("Failed to build client: {}", e),
                         error_detail: None,
                     })
                     .await;
-                return;
+                return DisconnectReason::NetworkError(e.to_string());
             }
         };
 
-        // WebSocket 요청 빌드 - Chrome 131 브라우저 모방
-        // 주의: Sec-WebSocket-* 헤더는 rquest가 자동 처리하므로 추가하면 안됨
-        let ws_request = client
-            .websocket(&ws_url)
-            .header("Origin", &origin)
-            .header("User-Agent", &user_agent)
+        let mut ws_request = client
+            .websocket(ws_url)
+            .header("Origin", origin)
+            .header("User-Agent", user_agent)
             .header("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
             .header("Cache-Control", "no-cache")
             .header("Pragma", "no-cache")
-            .header("Referer", &referer);
+            .header("Referer", referer);
 
-        let ws_request = if !cookie.is_empty() {
-            ws_request.header("Cookie", &cookie)
-        } else {
-            ws_request
-        };
+        if !cookie.is_empty() {
+            ws_request = ws_request.header("Cookie", cookie);
+        }
 
         match ws_request.send().await {
             Ok(upgrade_response) => {
@@ -279,62 +474,63 @@ impl EvolutionMultiSocket {
                                 error!("[Evolution-Multi] ❌ Init failed: {}", e);
                                 let _ = event_tx
                                     .send(EvolutionEvent::Error {
-                                        url: ws_url,
-                                        error: e,
+                                        url: ws_url.to_string(),
+                                        error: e.clone(),
                                         error_detail: None,
                                     })
                                     .await;
-                                return;
+                                return DisconnectReason::NetworkError(e);
                             }
                         }
 
                         // Connected 이벤트 발송
                         let _ = event_tx
                             .send(EvolutionEvent::Connected {
-                                url: ws_url.clone(),
+                                url: ws_url.to_string(),
                                 is_multiwidget,
                             })
                             .await;
 
+                        // 라이브 연결 플래그 ON — is_connected()/상태조회/resubscribe가 진실을 반환(state-3)
+                        connected.store(true, Ordering::SeqCst);
+
                         // 메시지 루프
-                        let disconnect_reason = Self::run_message_loop(
-                            &event_tx,
+                        Self::run_message_loop(
+                            event_tx,
                             &mut write,
                             &mut read,
-                            &mut msg_rx,
-                            &mut shutdown_rx,
+                            msg_rx,
+                            shutdown_rx,
                         )
-                        .await;
-
-                        // Disconnected 이벤트 발송
-                        let _ = event_tx
-                            .send(EvolutionEvent::Disconnected {
-                                url: ws_url,
-                                reason: disconnect_reason,
-                            })
-                            .await;
+                        .await
                     }
                     Err(e) => {
                         error!("[Evolution-Multi] ❌ Upgrade failed: {}", e);
                         let _ = event_tx
                             .send(EvolutionEvent::Error {
-                                url: ws_url,
+                                url: ws_url.to_string(),
                                 error: format!("WebSocket upgrade failed: {}", e),
                                 error_detail: None,
                             })
                             .await;
+                        DisconnectReason::NetworkError(e.to_string())
                     }
                 }
             }
             Err(e) => {
                 error!("[Evolution-Multi] ❌ HTTP request failed: {}", e);
+                error!("[Evolution-Multi] ❌ Error chain: {:?}", e);
+                if let Some(source) = e.source() {
+                    error!("[Evolution-Multi] ❌ Caused by: {}", source);
+                }
                 let _ = event_tx
                     .send(EvolutionEvent::Error {
-                        url: ws_url,
+                        url: ws_url.to_string(),
                         error: e.to_string(),
                         error_detail: Some(format!("{:?}", e)),
                     })
                     .await;
+                DisconnectReason::NetworkError(e.to_string())
             }
         }
     }
@@ -374,6 +570,20 @@ impl EvolutionMultiSocket {
 
     /// 기본 옵션 설정
     fn setup_default_options(options: &mut MultiSocketOptions, host: &str, parsed: &Url) {
+        // 빈 문자열 옵션은 None으로 정규화한다. 프론트엔드/수동 경로가 ""(빈 문자열)을 넘기면
+        // Some("")가 되어 아래 기본값(unwrap_or_else)을 건너뛰고 빈 User-Agent/Origin이 그대로
+        // 전송된다 — Chrome TLS 지문과 모순되어 즉시 봇으로 플래그됨(ua-2).
+        for opt in [
+            &mut options.user_agent,
+            &mut options.origin,
+            &mut options.cookie,
+            &mut options.referer,
+        ] {
+            if opt.as_deref().map(str::trim).map_or(false, str::is_empty) {
+                *opt = None;
+            }
+        }
+
         if options.origin.is_none() {
             options.origin = Some(format!("https://{}", host));
         }
@@ -410,19 +620,19 @@ impl EvolutionMultiSocket {
     /// 초기화 시퀀스 전송
     async fn send_init_sequence<W>(write: &mut W) -> Result<(), String>
     where
-        W: SinkExt<RquestMessage> + Unpin,
+        W: SinkExt<WsMessage> + Unpin,
         W::Error: std::fmt::Display,
     {
         info!("[Evolution-Multi] 📤 Sending init sequence...");
 
         for (i, msg) in ProtocolSequence::init_multiwidget().iter().enumerate() {
             if let Err(e) = write
-                .send(RquestMessage::Text(msg.to_string().into()))
+                .send(WsMessage::Text(msg.to_string().into()))
                 .await
             {
                 return Err(format!("Init message {} failed: {}", i + 1, e));
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            jitter_sleep(INIT_GAP_MIN_MS, INIT_GAP_MAX_MS).await;
         }
 
         info!("[Evolution-Multi] ✅ Init sequence completed");
@@ -438,15 +648,16 @@ impl EvolutionMultiSocket {
         shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
     ) -> DisconnectReason
     where
-        W: SinkExt<RquestMessage> + Unpin,
+        W: SinkExt<WsMessage> + Unpin,
         W::Error: std::fmt::Display,
-        R: StreamExt<Item = Result<RquestMessage, rquest::Error>> + Unpin,
+        R: StreamExt<Item = Result<WsMessage, wreq::Error>> + Unpin,
     {
-        // 하트비트 타이밍 랜덤화 (4-6초) - 봇 탐지 패턴 분석 방지
-        use rand::Rng;
-        let mut next_heartbeat = tokio::time::Instant::now() + tokio::time::Duration::from_millis(
-            rand::thread_rng().gen_range(4000..6000)
-        );
+        // 하트비트 타이밍 랜덤화 - 봇 탐지 패턴 분석 방지
+        let mut next_heartbeat = jitter_deadline(HEARTBEAT_MIN_MS, HEARTBEAT_MAX_MS);
+
+        // 수신 타임아웃: 마지막으로 서버에서 데이터를 받은 시각 추적
+        let mut last_received = tokio::time::Instant::now();
+        let receive_timeout = tokio::time::Duration::from_millis(RECEIVE_TIMEOUT_MS);
 
         info!("[Evolution-Multi] 🔄 Entering message loop...");
 
@@ -454,12 +665,15 @@ impl EvolutionMultiSocket {
         let mut msg_count: u64 = 0;
 
         loop {
+            let timeout_deadline = last_received + receive_timeout;
+
             tokio::select! {
                 msg = read.next() => {
                     msg_count += 1;
+                    last_received = tokio::time::Instant::now();
 
                     match msg {
-                        Some(Ok(RquestMessage::Text(text))) => {
+                        Some(Ok(WsMessage::Text(text))) => {
                             debug!("[Evolution-Multi] 📨 MSG#{} len={}", msg_count, text.len());
 
                             if let Some(tables) = Self::handle_incoming_message(event_tx, &text).await {
@@ -477,10 +691,13 @@ impl EvolutionMultiSocket {
                                 }
                             }
                         }
-                        Some(Ok(RquestMessage::Ping(data))) => {
-                            let _ = write.send(RquestMessage::Pong(data)).await;
+                        Some(Ok(WsMessage::Ping(data))) => {
+                            let _ = write.send(WsMessage::Pong(data)).await;
                         }
-                        Some(Ok(RquestMessage::Close(frame))) => {
+                        Some(Ok(WsMessage::Pong(_))) => {
+                            // 서버 pong 수신 — last_received 이미 갱신됨
+                        }
+                        Some(Ok(WsMessage::Close(frame))) => {
                             if let Some(cf) = frame {
                                 warn!("[Evolution-Multi] Server closed: {:?}", cf.reason);
                             }
@@ -498,21 +715,26 @@ impl EvolutionMultiSocket {
                     }
                 }
                 Some(outgoing) = msg_rx.recv() => {
-                    if let Err(e) = write.send(RquestMessage::Text(outgoing.into())).await {
+                    if let Err(e) = write.send(WsMessage::Text(outgoing.into())).await {
                         error!("[Evolution-Multi] ❌ Send failed: {}", e);
                         return DisconnectReason::NetworkError(e.to_string());
                     }
                 }
                 _ = tokio::time::sleep_until(next_heartbeat) => {
                     let ping = ProtocolSequence::metrics_ping();
-                    if let Err(e) = write.send(RquestMessage::Text(ping.to_string().into())).await {
+                    if let Err(e) = write.send(WsMessage::Text(ping.to_string().into())).await {
                         warn!("[Evolution-Multi] Heartbeat failed: {}", e);
                         return DisconnectReason::NetworkError(e.to_string());
                     }
-                    // 다음 하트비트 시간 랜덤 설정 (4-6초)
-                    next_heartbeat = tokio::time::Instant::now() + tokio::time::Duration::from_millis(
-                        rand::thread_rng().gen_range(4000..6000)
+                    next_heartbeat = jitter_deadline(HEARTBEAT_MIN_MS, HEARTBEAT_MAX_MS);
+                }
+                _ = tokio::time::sleep_until(timeout_deadline) => {
+                    let elapsed = last_received.elapsed().as_secs();
+                    warn!(
+                        "[Evolution-Multi] ⏰ Receive timeout: no data for {}s (threshold: {}ms)",
+                        elapsed, RECEIVE_TIMEOUT_MS
                     );
+                    return DisconnectReason::ReceiveTimeout;
                 }
                 _ = shutdown_rx.recv() => {
                     info!("[Evolution-Multi] 🛑 Shutdown signal");
@@ -624,11 +846,17 @@ impl EvolutionMultiSocket {
     /// 테이블 구독 - 구독 성공 개수 반환
     async fn subscribe_to_tables<W>(write: &mut W, tables: &[TableInfo]) -> Result<usize, String>
     where
-        W: SinkExt<RquestMessage> + Unpin,
+        W: SinkExt<WsMessage> + Unpin,
         W::Error: std::fmt::Display,
     {
         let baccarat_ids = TableFilter::filter_baccarat_tables(tables);
-        let targets = TableFilter::take_tables(baccarat_ids, MAX_SUBSCRIBE_TABLES);
+        let mut targets = TableFilter::take_tables(baccarat_ids, MAX_SUBSCRIBE_TABLES);
+
+        // Real users open rooms in an unpredictable order — deterministic
+        // alphabetical / lobby-feed order is itself a bot signal when 60
+        // tables are subscribed in a tight window.
+        use rand::seq::SliceRandom;
+        targets.shuffle(&mut rand::thread_rng());
 
         info!("[Evolution-Multi] 🎰 Subscribing to {} tables", targets.len());
 
@@ -637,7 +865,7 @@ impl EvolutionMultiSocket {
             // game.open
             let open_msg = ProtocolSequence::game_open(table_id);
             if write
-                .send(RquestMessage::Text(open_msg.to_string().into()))
+                .send(WsMessage::Text(open_msg.to_string().into()))
                 .await
                 .is_err()
             {
@@ -647,14 +875,14 @@ impl EvolutionMultiSocket {
             // subscribeTable
             let sub_msg = ProtocolSequence::subscribe_table(table_id);
             if write
-                .send(RquestMessage::Text(sub_msg.to_string().into()))
+                .send(WsMessage::Text(sub_msg.to_string().into()))
                 .await
                 .is_ok()
             {
                 sent_count += 1;
             }
 
-            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            jitter_sleep(SUBSCRIBE_GAP_MIN_MS, SUBSCRIBE_GAP_MAX_MS).await;
         }
 
         info!("[Evolution-Multi] ✅ Subscribed to {}/{}", sent_count, targets.len());
@@ -681,6 +909,7 @@ impl EvolutionMultiSocket {
 
         self.shutdown_tx = None;
         self.msg_tx = None;
+        self.connected.store(false, Ordering::SeqCst);
         self.state_machine.reset();
 
         // Lane R2 safety net: abort any tasks still tracked by the registry.

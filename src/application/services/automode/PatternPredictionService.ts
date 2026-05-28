@@ -9,6 +9,7 @@ import type {
   PatternBetDirection,
   PatternBetConfig,
   Winner,
+  RoomPredictionState,
 } from '../../../domain/entities'
 import type { IMultiRoomPredictionPort } from '../../../domain/interfaces'
 import { CustomPatternService } from '../CustomPatternService'
@@ -45,18 +46,21 @@ export interface IPatternPredictionService {
     room: Room,
     remainingSeconds: number,
     currentFilter: RoomFilterType | string,
-    config: PatternPredictionConfig
+    config: PatternPredictionConfig,
+    predictionState?: RoomPredictionState | null
   ): Promise<Prediction | null>
 
   /**
    * 현재 필터에 매칭되는 패턴 찾기
    * @param room 방 정보
    * @param currentFilter 현재 선택된 패턴 필터
+   * @param predictionState 방의 예측 상태(연승/연패 필터 매칭에 필요)
    * @returns 매칭된 패턴 또는 null
    */
   findMatchedPattern(
     room: Room,
-    currentFilter: RoomFilterType | string
+    currentFilter: RoomFilterType | string,
+    predictionState?: RoomPredictionState | null
   ): PatternMatch | null
 }
 
@@ -71,6 +75,11 @@ const PATTERN_NAMES: Record<string, string> = {
   after_tie: '타이후',
   winning_streak: '연승',
   losing_streak: '연패',
+  tie_frequent: '타이빈도',
+  tie_drought: '타이가뭄',
+  no_tie_room: '무타이',
+  fresh_room: '새방',
+  fresh_shoe: '새슈',
 }
 
 // ==================== Implementation ====================
@@ -88,12 +97,13 @@ export class PatternPredictionService implements IPatternPredictionService {
     room: Room,
     remainingSeconds: number,
     currentFilter: RoomFilterType | string,
-    config: PatternPredictionConfig
+    config: PatternPredictionConfig,
+    predictionState?: RoomPredictionState | null
   ): Promise<Prediction | null> {
     const history = room.history
 
     // 현재 방에 매칭되는 패턴 찾기
-    const matchedPattern = this.findMatchedPattern(room, currentFilter)
+    const matchedPattern = this.findMatchedPattern(room, currentFilter, predictionState)
 
     if (!matchedPattern) {
       // 패턴 매칭 안 됨 - 배팅 안 함
@@ -132,7 +142,8 @@ export class PatternPredictionService implements IPatternPredictionService {
 
   findMatchedPattern(
     room: Room,
-    currentFilter: RoomFilterType | string
+    currentFilter: RoomFilterType | string,
+    predictionState?: RoomPredictionState | null
   ): PatternMatch | null {
     const winners: Winner[] = room.history.map((r) => r.winner)
 
@@ -144,7 +155,7 @@ export class PatternPredictionService implements IPatternPredictionService {
       }
 
       // 기본 패턴 설정 가져오기 + 실시간 패턴 매칭 체크
-      return this.matchBuiltInPattern(room, currentFilter as RoomFilterType)
+      return this.matchBuiltInPattern(room, currentFilter as RoomFilterType, predictionState)
     }
 
     // 필터가 'all'이면 AI 자동 배팅
@@ -184,12 +195,16 @@ export class PatternPredictionService implements IPatternPredictionService {
 
   private matchBuiltInPattern(
     room: Room,
-    filter: RoomFilterType
+    filter: RoomFilterType,
+    predictionState?: RoomPredictionState | null
   ): PatternMatch | null {
     const config = this.getPatternConfig(filter)
 
-    // RoomFilterService를 사용해서 실시간으로 패턴 매칭 체크
-    const isMatched = RoomFilterService.matchesFilter(room, null, filter)
+    // RoomFilterService를 사용해서 실시간으로 패턴 매칭 체크.
+    // ⚠️ losing_streak / winning_streak 필터는 predictionState.stats.consecutiveLosses/Wins를
+    // 읽으므로 반드시 방의 예측 상태를 넘겨야 한다. null을 넘기면 두 필터가 영원히 미매칭되어
+    // 사용자가 연승/연패 필터를 골라도 자동배팅이 모든 매칭 방을 조용히 스킵한다(pattern-streak-1).
+    const isMatched = RoomFilterService.matchesFilter(room, predictionState ?? null, filter)
     if (!isMatched) {
       return null
     }
@@ -224,8 +239,13 @@ export class PatternPredictionService implements IPatternPredictionService {
   }
 
   private getPatternConfig(patternType: RoomFilterType): PatternBetConfig {
-    const betDirection = PatternBettingService.getBetDirection(patternType)
+    let betDirection = PatternBettingService.getBetDirection(patternType)
     const enabled = PatternBettingService.isPatternEnabled(patternType)
+
+    // 타이 계열 필터는 AI 경유 없이 직접 T 배팅 (패턴 매칭 시 즉시 동작)
+    if (betDirection === 'ai' && this.isTieOnlyFilter(patternType)) {
+      betDirection = 'T'
+    }
 
     return {
       patternType,
@@ -233,6 +253,16 @@ export class PatternPredictionService implements IPatternPredictionService {
       enabled,
       includeTie: false,
     }
+  }
+
+  private isTieOnlyFilter(filter: RoomFilterType): boolean {
+    return (
+      filter === 'tie_frequent' ||
+      filter === 'tie_drought' ||
+      filter === 'no_tie_room' ||
+      filter === 'fresh_room' ||
+      filter === 'fresh_shoe'
+    )
   }
 
   // ==================== AI Prediction ====================

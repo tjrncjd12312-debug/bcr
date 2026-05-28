@@ -9,7 +9,7 @@
 // - 배팅 이벤트 콜백 시스템
 
 import type { BetType, Prediction, PendingBetInfo, TableBettingConfig } from '../../domain/entities'
-import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
+import { winProfit } from '../../domain/betting/payout'
 import { TauriAdapter } from '../../infrastructure/adapters/TauriAdapter'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
 
@@ -404,7 +404,7 @@ class AutoBettingServiceImpl {
     // 타이 결과: betType=Tie면 승리(×8), 그 외엔 무승부 환불
     if (winner === 'T') {
       if (betType === 'Tie') {
-        const profit = amount * TIE_PAYOUT_MULTIPLIER
+        const profit = winProfit('T', amount)
         this.emitBetResult({
           tableId,
           betType,
@@ -423,11 +423,10 @@ class AutoBettingServiceImpl {
     const expectedWinner = betType === 'Banker' ? 'B' : betType === 'Player' ? 'P' : 'T'
     const won = winner === expectedWinner
 
-    // 뱅커 승리 시 5% 커미션 / Tie 베팅은 위에서 처리됨
-    const BANKER_COMMISSION = 0.05
-    const profit = won
-      ? (betType === 'Banker' ? amount * (1 - BANKER_COMMISSION) : amount)
-      : -amount
+    // 단일 페이아웃 정책(domain/betting/payout.winProfit) — 정수 반올림 통일(calc-2: 소수점 원 방지).
+    // 뱅커 0.95:1 / 플레이어 1:1, Tie 베팅은 위에서 처리됨.
+    const betSide = betType === 'Banker' ? 'B' : betType === 'Player' ? 'P' : 'T'
+    const profit = won ? winProfit(betSide, amount) : -amount
 
     // 잔액은 Evolution WebSocket에서 자동 업데이트됨
     // 수동으로 setBalance 호출하지 않음 (동기화 문제 방지)

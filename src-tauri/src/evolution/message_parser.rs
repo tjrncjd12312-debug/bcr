@@ -113,6 +113,19 @@ impl MessageParser {
             }
 
             // 기타 메시지
+            //
+            // 🆕 LOBBY v2 NOTE: Evolution이 멀티테이블 피드를 lobby v2(/public/lobby/socket/v2/)로
+            // 통합한 뒤, 방 목록은 `args["lobbydata.categories"].tables[].table.id`, 게임 결과는
+            // `args["historyUpdated"]`(type 'lobby.historyUpdated') 형태로 도착한다(앱 자체 CDP 관측,
+            // webview_commands.rs lobby v2 핸들러 참조). 이 타입들은 위 match에 걸리지 않아 Other로
+            // 분류되지만, handle_incoming_message가 Other를 TableEvent + RawMessage로 프론트엔드에
+            // 그대로 전달하고, EvolutionAdapter가 lobby.* envelope(특히 data.args.historyUpdated)을
+            // 처리하므로 결과 데이터 경로는 동작한다.
+            //
+            // TODO(v2-subscribe): v2 소켓이 init(connection_established+subscribe)만으로 전체 lobby/결과를
+            // 자동 push하는지, 아니면 v2 전용 per-table 구독이 필요한지는 라이브 트래픽 캡처로 확정해야 한다.
+            // 구버전 widget.game.open 구독을 v2에 그대로 보내면 거부/kick 위험이 있어 여기서 강제하지 않는다.
+            // 확정 시: lobbydata.categories → AvailableTables 매핑 + v2 전용 subscribe 시퀀스를 추가할 것.
             _ => Ok(IncomingMessage::Other {
                 msg_type,
                 table_id,
