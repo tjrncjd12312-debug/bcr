@@ -28,6 +28,8 @@ export interface UseAutoModeResult {
   lastEventTime: number | null
   startTime: number | null
   startBalance: number
+  // tie_frequent 자동 배팅에서 이 슈 동안 이미 적중한 방 ID 목록
+  tieAutoCompletedRoomIds: string[]
 
   // Actions
   toggle: (realBalance?: number) => void
@@ -109,6 +111,7 @@ export function useAutoMode(): UseAutoModeResult {
     lastEventTime: state.lastEventTime,
     startTime: state.startTime,
     startBalance: state.startBalance,
+    tieAutoCompletedRoomIds: state.tieAutoCompletedRoomIds,
     // Actions
     toggle,
     start,

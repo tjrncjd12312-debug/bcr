@@ -31,6 +31,7 @@ class MockCasinoAdapter implements ICasinoAdapter {
   private bettingPhaseCallbacks: Array<(event: BettingPhaseEvent) => void> = []
   private gameResultCallbacks: Array<(event: GameResultEvent) => void> = []
   private historyUpdateCallbacks: Array<(roomId: string, history: RoadResult[]) => void> = []
+  private shoeChangeCallbacks: Array<(roomId: string, roomName: string) => void> = []
 
   async connect(_config: any): Promise<void> {}
   async disconnect(): Promise<void> { this.rooms.clear() }
@@ -52,11 +53,16 @@ class MockCasinoAdapter implements ICasinoAdapter {
     this.bettingPhaseCallbacks.push(cb)
     return () => { this.bettingPhaseCallbacks = this.bettingPhaseCallbacks.filter(c => c !== cb) }
   }
+  onShoeChange(cb: (roomId: string, roomName: string) => void): () => void {
+    this.shoeChangeCallbacks.push(cb)
+    return () => { this.shoeChangeCallbacks = this.shoeChangeCallbacks.filter(c => c !== cb) }
+  }
   emitBettingPhase(e: BettingPhaseEvent): void { this.bettingPhaseCallbacks.forEach(cb => cb(e)) }
   emitGameResult(e: GameResultEvent): void { this.gameResultCallbacks.forEach(cb => cb(e)) }
   emitHistoryUpdate(roomId: string, history: RoadResult[]): void {
     this.historyUpdateCallbacks.forEach(cb => cb(roomId, history))
   }
+  emitShoeChange(roomId: string): void { this.shoeChangeCallbacks.forEach(cb => cb(roomId, roomId)) }
 }
 
 function makeHistory(winners: Array<'B' | 'P' | 'T'>): RoadResult[] {
@@ -790,6 +796,142 @@ describe('AutoModeService — Tie bet propagation', () => {
     expect(captured).not.toBeNull()
     expect(captured!.betType).toBe('Tie')
     expect(captured!.prediction).toBe('T')
+  })
+
+  // 회귀: 사용자 요구 — "3개방이 배팅중이면 거기서 이길때까지 다른방은 배팅 하면 안돼"
+  // 마틴 진행 중인 방이 라운드 사이에 잠시 쉬는 동안에도(waitingForResult=false)
+  // 슬롯을 양보하지 않아야 한다.
+  it('does not let a new room steal a slot while martin rooms are between rounds', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 5,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 5, maxConcurrentBets: 3 })
+
+    // 3개 방이 먼저 배팅 → 모두 패배 → 모두 마틴 진행 중 (라운드 사이)
+    const martinRooms: Record<string, Room> = {
+      rM1: makeRoom('rM1', ['B']),
+      rM2: makeRoom('rM2', ['B']),
+      rM3: makeRoom('rM3', ['B']),
+    }
+    // 4번째로 들어오려는 신규 방 — 매칭 조건은 만족
+    const newcomer = makeRoom('rIntruder', ['B', 'P'])
+    Object.values(martinRooms).forEach(r => adapter.setRoom(r))
+    adapter.setRoom(newcomer)
+
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog((ev) => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rM1', 'rM2', 'rM3', 'rIntruder'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    // 1단계: 3개 마틴 방이 각각 배팅 → 패배 → 다음 phase 시작 전에 'end' phase로
+    // lastBettingPhaseByRoom 비워서 자동 재시도가 안 끼어들도록.
+    for (const roomId of ['rM1', 'rM2', 'rM3']) {
+      adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+      await flush()
+      await flush()
+      adapter.emitBettingPhase({ roomId, remainingSeconds: 0, phase: 'end' })
+      const updated: Room = {
+        ...martinRooms[roomId],
+        history: makeHistory(['P', ...martinRooms[roomId].history.map(h => h.winner)]),
+      }
+      martinRooms[roomId] = updated
+      adapter.setRoom(updated)
+      adapter.emitGameResult({ roomId, winner: 'P', playerScore: 9, bankerScore: 0 })
+      await flush()
+      await flush()
+    }
+
+    const initialMartinBets = bets.length
+    // 이 시점: 3개 방 모두 martinLevel=1, waitingForResult=false (라운드 사이)
+
+    // 2단계: 마틴 방들이 다음 라운드를 시작하기 전에 신규 rIntruder가 들어오려 함
+    // 사용자 정책: 슬롯이 마틴 방들에 잡혀 있어야 하므로 차단되어야 함
+    adapter.emitBettingPhase({ roomId: 'rIntruder', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    // 핵심 검증: rIntruder는 잠금 동안 절대 배팅하면 안 됨
+    expect(bets.filter(b => b.roomId === 'rIntruder')).toHaveLength(0)
+    // 마틴 방들의 bet 수는 잠금 시점 그대로(또는 마틴 재시도로 증가했더라도 rIntruder는 0)
+    expect(bets.length).toBeGreaterThanOrEqual(initialMartinBets)
+    unsub()
+  })
+
+  // 마틴 진행 중 슈 변경 시 마틴 레벨이 유지되어야 한다.
+  // 이전엔 onShoeChange가 무조건 martinLevel을 0으로 리셋해서
+  // 8단 마틴 중인데 방이 사라지는 문제가 있었다.
+  it('preserves martin level across shoe changes', async () => {
+    FilterThresholdsService.set({
+      tieFrequentStart: 1,
+      tieFrequentWindow: 20,
+      tieFrequentMinCount: 0,
+      tieFrequentMaxCount: 0,
+    })
+    PatternBettingService.setBetDirection('tie_frequent', 'T')
+    PatternBettingService.setBetStrategy('tie_frequent', 'martingale')
+    AutoModeService.updateSettings({ maxMartin: 50, maxConcurrentBets: 1 })
+
+    const room = makeRoom('rShoe', ['B', 'P', 'B'])
+    adapter.setRoom(room)
+
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms(['rShoe'], 'tie_frequent')
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    // 1단계: 배팅 → 패배를 3회 반복하여 martinLevel=3까지 올림
+    for (let i = 0; i < 3; i++) {
+      adapter.emitBettingPhase({ roomId: 'rShoe', remainingSeconds: 10, phase: 'start' })
+      await flush()
+      await flush()
+      adapter.emitBettingPhase({ roomId: 'rShoe', remainingSeconds: 0, phase: 'end' })
+      const prevHistory = adapter.getRoom('rShoe')!.history
+      const updatedRoom = makeRoom('rShoe', ['P', ...prevHistory.map(h => h.winner)])
+      adapter.setRoom(updatedRoom)
+      adapter.emitGameResult({ roomId: 'rShoe', winner: 'P', playerScore: 9, bankerScore: 0 })
+      await flush()
+      await flush()
+    }
+
+    // martinLevel=3 확인
+    const stateBeforeShoe = AutoModeService.getRoomState('rShoe')
+    expect(stateBeforeShoe?.martinLevel).toBe(3)
+
+    // 2단계: 슈 변경 → 마틴 레벨이 유지되어야 함
+    const freshRoom = makeRoom('rShoe', [])
+    adapter.setRoom(freshRoom)
+    adapter.emitShoeChange('rShoe')
+    await flush()
+
+    const stateAfterShoe = AutoModeService.getRoomState('rShoe')
+    expect(stateAfterShoe?.martinLevel).toBe(3)
+
+    // 3단계: 다음 배팅 창에서 마틴 이어치기로 배팅이 가능해야 함
+    const newRoom = makeRoom('rShoe', ['B'])
+    adapter.setRoom(newRoom)
+    const bets: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog(ev => {
+      if (ev.type === 'bet_placed') bets.push(ev)
+    })
+
+    adapter.emitBettingPhase({ roomId: 'rShoe', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    // 마틴 이어치기로 배팅이 진행되어야 함
+    expect(bets.length).toBeGreaterThanOrEqual(1)
+    if (bets.length > 0) {
+      expect(bets[0].martinLevel).toBe(3)
+    }
+    unsub()
   })
 
   // 회귀: commit 236bbc4 (타이 적중 8배 페이아웃) 이후, AutoMode의 cumulativeProfit과

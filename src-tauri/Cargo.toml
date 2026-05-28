@@ -30,9 +30,9 @@ futures-util = "0.3"
 url = "2.5"
 
 # HTTP Client with Chrome TLS fingerprint impersonation (BoringSSL)
-# Used for Evolution multiwidget to bypass Akamai bot detection
-rquest = { version = "5.1", features = ["websocket"] }
-rquest-util = "2.2"
+# wreq = rquest 후속 (같은 저자 0x676e67). Chrome136 HTTP/2 SETTINGS 수정됨.
+wreq = { version = "6.0.0-rc.28", features = ["ws"] }
+wreq-util = "3.0.0-rc.11"
 
 # HTTP Client (for non-impersonation requests)
 reqwest = { version = "0.12", features = ["json", "cookies"] }

@@ -3,7 +3,7 @@
 // 단일 책임: 게임 결과 처리, 통계 업데이트, 마틴/휴식 상태 전이
 
 import type { Winner, BetType } from '../../../domain/entities'
-import { TIE_PAYOUT_MULTIPLIER } from '../../../domain/entities'
+import { computeNetProfit } from '../../../domain/betting/payout'
 import type {
   RoomContext,
   AutoModeSettings,
@@ -133,30 +133,10 @@ export class ResultProcessor implements IResultProcessor {
   // ==================== 수익 계산 ====================
 
   private calculateProfit(result: Winner, betType: BetType, betAmount: number): number {
-    // Tie 베팅이 적중한 경우: ×8 배당 (no commission)
-    if (betType === 'Tie' && result === 'T') {
-      return betAmount * TIE_PAYOUT_MULTIPLIER
-    }
-
-    if (result === 'T') {
-      // B/P 베팅인데 타이: 배팅 금액 반환 (수익 0, 환불 처리)
-      return 0
-    }
-
-    const isWin = this.isWin(result, betType)
-    if (!isWin) {
-      // 패배: 배팅 금액 손실
-      return -betAmount
-    }
-
-    // 승리 시 수익 계산
-    if (betType === 'Banker') {
-      // 뱅커 승리: 5% 수수료 (0.95 배)
-      return Math.floor(betAmount * 0.95)
-    } else {
-      // 플레이어 승리: 1:1 배당
-      return betAmount
-    }
+    // 단일 페이아웃 정책(domain/betting/payout.computeNetProfit)으로 위임 — 엔진 간 반올림 드리프트 방지(dup-1).
+    // 타이 적중 8:1 / 뱅커 0.95:1 / 플레이어 1:1, B·P 베팅 + T 결과는 PUSH(0).
+    const betSide = betType === 'Banker' ? 'B' : betType === 'Player' ? 'P' : 'T'
+    return computeNetProfit(betSide, result as 'B' | 'P' | 'T', betAmount)
   }
 
   // ==================== 세션 통계 ====================

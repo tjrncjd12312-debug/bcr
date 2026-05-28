@@ -3016,15 +3016,26 @@ async fn monitor_page_continuously(
                                         url.contains("multiplay")
                                     );
 
+                                    // 🆕 LOBBY v2: Evolution unified the multi-table (multiwidget) feed into
+                                    // "lobby v2" at /public/lobby/socket/v2/. That socket now carries the
+                                    // multi-table data, so it MUST be treated as the multiwidget socket and
+                                    // connected directly from Rust — otherwise it is misclassified as a plain
+                                    // lobby socket and silently skipped, and the multi-socket never connects (v2-1).
+                                    let is_lobby_v2 = url.contains("/lobby/socket/v2")
+                                        || url.contains("/lobby/socket/V2");
+
                                     // ✅ MULTIWIDGET SOCKET: Extended patterns for multiwidget detection
                                     let is_multiwidget_ws = url.contains("/multiwidget/socket")
                                         || url.contains("/game/multiwidget/")
                                         || url.contains("/multiwidget/")
                                         || url.contains("/multiplay/")
                                         || url.contains("multiwidget")
-                                        || url.contains("mwLayout");
+                                        || url.contains("mwLayout")
+                                        || is_lobby_v2;
 
-                                    // Check if this is a lobby WebSocket (not room, not multiwidget)
+                                    // Check if this is a lobby WebSocket (not room, not multiwidget).
+                                    // NOTE: lobby v2 is now classified as multiwidget above, so it never
+                                    // falls into this skip branch.
                                     let is_lobby_ws = !is_multiwidget_ws
                                         && (url.contains("/lobby/")
                                             || (!url.contains("/game/")

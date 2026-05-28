@@ -51,6 +51,14 @@ pub enum EvolutionEvent {
         data: Value,
     },
 
+    /// 자동 재연결 시도 중
+    ReconnectAttempt {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        reason: String,
+    },
+
     /// 원시 메시지 (디버깅/로깅용)
     RawMessage { event_type: String, payload: Value },
 }
@@ -71,6 +79,8 @@ pub enum DisconnectReason {
     NetworkError(String),
     /// 재연결 시도 중
     Reconnecting,
+    /// 서버로부터 수신 타임아웃 (좀비 연결 감지)
+    ReceiveTimeout,
 }
 
 impl DisconnectReason {
@@ -82,7 +92,18 @@ impl DisconnectReason {
             DisconnectReason::Kickout(reason) => format!("kickout:{}", reason),
             DisconnectReason::NetworkError(err) => format!("network_error:{}", err),
             DisconnectReason::Reconnecting => "reconnecting".to_string(),
+            DisconnectReason::ReceiveTimeout => "receive_timeout".to_string(),
         }
+    }
+
+    /// 자동 재연결을 시도해야 하는 사유인지 확인
+    pub fn should_auto_reconnect(&self) -> bool {
+        matches!(
+            self,
+            DisconnectReason::ServerClosed
+                | DisconnectReason::NetworkError(_)
+                | DisconnectReason::ReceiveTimeout
+        )
     }
 }
 

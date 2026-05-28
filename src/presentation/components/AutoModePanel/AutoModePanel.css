@@ -230,11 +230,10 @@
 }
 
 .auto-mode__pod-label {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  /* uppercase/letter-spacing 제거 — 한글 라벨 가독성 우선(고령 사용자) */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1228,10 +1227,9 @@
 }
 
 .auto-mode__header-money-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  /* uppercase/letter-spacing 제거 — 한글 라벨('가상 잔고','세션 손익')에 불필요하고 가독성만 떨어뜨림 */
   white-space: nowrap;
 }
 
@@ -1944,21 +1942,33 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  gap: 8px;
+  padding: 10px 14px;
   background: var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .auto-mode__history-header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.auto-mode__history-header-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .history-header-icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   background: rgba(49, 130, 246, 0.1);
   border: 1px solid rgba(49, 130, 246, 0.2);
   border-radius: 6px;
@@ -1966,14 +1976,19 @@
   align-items: center;
   justify-content: center;
   color: var(--gold);
+  flex-shrink: 0;
 }
 
 .auto-mode__history-header h3 {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   color: var(--text-primary);
   letter-spacing: -0.01em;
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .auto-mode__history-count {
@@ -1983,11 +1998,13 @@
   background: var(--border-subtle);
   padding: 2px 8px;
   border-radius: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .auto-mode__history-filter-toggle {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2187,10 +2204,10 @@
   max-height: calc(100vh - 400px);
   /* Ensure scrollable area */
   overflow-y: auto;
-  padding: 16px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 
 /* History scrollbar styling */
@@ -2216,13 +2233,13 @@
 .auto-mode__history-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .auto-mode__history-card {
   background: var(--border-subtle);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: 8px;
   position: relative;
   overflow: hidden;
   transition: all 0.2s ease;
@@ -2277,33 +2294,37 @@
 }
 
 .card-content {
-  padding: 14px 16px;
+  padding: 8px 12px 8px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 5px;
+  min-width: 0;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .card-header-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .card-type-tag {
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
-  text-transform: uppercase;
-  padding: 2px 6px;
+  /* 한글 라벨엔 uppercase가 무의미하고, 영문이 들어와도 그대로 노출되는 게 나음 — 고령자 가독성 우선 */
+  padding: 3px 7px;
   border-radius: 4px;
-  letter-spacing: 0.5px;
   background: var(--border-subtle);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .card-type-tag.win {
@@ -2322,48 +2343,58 @@
 }
 
 .card-room-name {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .card-time {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: 12px;
+  color: var(--text-secondary);
   font-family: 'Roboto Mono', monospace;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .card-message {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .card-stats {
   display: flex;
-  gap: 12px;
-  padding-top: 8px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding-top: 5px;
   border-top: 1px solid var(--border-subtle);
 }
 
 .card-stat-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
 }
 
 .card-stat-item .label {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   letter-spacing: 0;
 }
 
 .card-stat-item .value {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
   font-family: 'Roboto Mono', monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .card-stat-item.profit.win .value {
@@ -2391,15 +2422,16 @@
    ═══════════════════════════════════════════════════════════════ */
 
 .card-score-display {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   background: linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.15) 100%);
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid var(--border-subtle);
-  margin: 4px 0;
+  margin: 0;
 }
 
 .score-badge {
@@ -2407,10 +2439,10 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 58px;
-  min-width: 58px;
-  padding: 8px 6px;
-  border-radius: 8px;
+  width: 52px;
+  min-width: 52px;
+  padding: 4px 6px;
+  border-radius: 6px;
   background: var(--border-subtle);
   border: 1px solid var(--border-color);
   transition: all 0.2s ease;
@@ -2464,7 +2496,7 @@
 }
 
 .score-value {
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 800;
   font-family: 'Roboto Mono', monospace;
   color: var(--text-primary);
@@ -2834,6 +2866,64 @@
 
   .auto-mode__target-item {
     padding: 7px 12px;
+  }
+
+  /* 히스토리 헤더 - 좁은 화면 대응 */
+  .auto-mode__history-header {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+
+  .history-header-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .auto-mode__history-header h3 {
+    font-size: 12px;
+  }
+
+  .auto-mode__history-count {
+    font-size: 10px;
+    padding: 1px 6px;
+  }
+
+  .auto-mode__history-filter-toggle {
+    width: 26px;
+    height: 26px;
+  }
+
+  /* 히스토리 body - 좁은 화면 패딩 축소 */
+  .auto-mode__history-body {
+    padding: 6px 6px;
+  }
+
+  .card-content {
+    padding: 7px 10px;
+    gap: 4px;
+  }
+
+  .card-room-name {
+    font-size: 12px;
+  }
+
+  .card-message {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 420px) {
+  /* 매우 좁은 화면 - 아이콘 숨김 */
+  .history-header-icon {
+    display: none;
+  }
+
+  .auto-mode__history-header {
+    padding: 8px;
+  }
+
+  .card-content {
+    padding: 6px 8px;
   }
 }
 

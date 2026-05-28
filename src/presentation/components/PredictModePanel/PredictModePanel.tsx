@@ -537,6 +537,8 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
     switch (status) {
       case 'connected':
         return { label: '실시간', connected: true }
+      case 'reconnecting':
+        return { label: '재연결 중...', connected: false }
       case 'launching':
       case 'monitoring':
       case 'captured':

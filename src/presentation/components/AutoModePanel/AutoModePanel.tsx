@@ -21,7 +21,7 @@ import CustomPatternService from '../../../application/services/CustomPatternSer
 import VirtualBettingService from '../../../application/services/VirtualBettingService'
 import type { AutoModeBetLogEvent } from '../../../application/services/AutoModeService'
 import type { RoomFilterType, RoomSortType, CustomPattern } from '../../../domain/entities'
-import { SORT_OPTIONS } from '../../../domain/entities'
+import { SORT_OPTIONS, TIE_PAYOUT_MULTIPLIER } from '../../../domain/entities'
 import './AutoModePanel.css'
 import {
   LayoutGrid,
@@ -93,6 +93,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     totalLosses,
     cumulativeProfit,
     roomStates: autoModeRoomStates,
+    tieAutoCompletedRoomIds,
     toggle,
     updateSettings,
     resetStats,
@@ -212,9 +213,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       if (state.waitingForResult && state.lastBetAmount > 0) {
         bettingRoomCount++
         totalCurrentBet += state.lastBetAmount
-        // 예상 수익 계산: 뱅커 5% 커미션, 플레이어 0%
         const predType = state.lastPrediction?.prediction
-        const profitRate = predType === 'B' ? 0.95 : 1.0
+        const profitRate = predType === 'B' ? 0.95 : predType === 'T' ? TIE_PAYOUT_MULTIPLIER : 1.0
         totalExpectedProfit += Math.floor(state.lastBetAmount * profitRate)
       }
     })
@@ -258,6 +258,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   const selectedRoomPatternCounts = useMemo(() => {
     const counts: Record<string, number> = { all: selectedRoomIds.size }
 
+    // tie_frequent에서 이 슈 동안 이미 적중한 방은 후보 풀에서 제외
+    // (사용자 요구: "타이가 나온방들이 필터에서 방에 보여 이겨서 사라져야하는데")
+    const tieCompletedSet = new Set(tieAutoCompletedRoomIds)
+    const isExcludedFromFilter = (filterType: string, roomId: string) =>
+      filterType === 'tie_frequent' && tieCompletedSet.has(roomId)
+
     // 등록된 모든 customPatterns 사용 (enabled 필터링 제거)
     // 선택된 방이 없으면 전체 방 기준
     if (selectedRoomIds.size === 0) {
@@ -266,6 +272,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         let count = 0
         rooms.forEach(room => {
           const state = roomStates.get(room.id) || null
+          if (isExcludedFromFilter(filter.type, room.id)) return
           if (matchesFilter(room, state, filter.type)) count++
         })
         counts[filter.type] = count
@@ -278,6 +285,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       let count = 0
       rooms.forEach(room => {
         if (!selectedRoomIds.has(room.id)) return
+        if (isExcludedFromFilter(filter.type, room.id)) return
         const state = roomStates.get(room.id) || null
         if (matchesFilter(room, state, filter.type)) count++
       })
@@ -285,7 +293,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     })
 
     return counts
-  }, [selectedRoomIds, rooms, roomStates, availableFilters, matchesFilter, roomDataVersion])
+  }, [selectedRoomIds, rooms, roomStates, availableFilters, matchesFilter, roomDataVersion, tieAutoCompletedRoomIds])
 
   const filterSettingsSignature = useMemo(() => {
     return availableFilters
@@ -307,11 +315,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       return []
     }
 
-    // 1. 선택된 방 중 마틴 회복/연승 ID 수집 (선택 외 방은 제외)
+    // 1. 마틴 회복/연승 ID 수집
+    // 마틴 진행 중인 방은 패턴 매칭 여부와 무관하게 승리할 때까지 유지
     const martinRecoveryRoomIds = new Set<string>()
     const winStreakRoomIds = new Set<string>()
     autoModeRoomStates.forEach((state: any, roomId: string) => {
-      if (!selectedRoomIds.has(roomId)) return
+      if (selectedRoomIds.size > 0 && !selectedRoomIds.has(roomId)) return
       if (state.martinLevel > 0) martinRecoveryRoomIds.add(roomId)
       if (state.consecutiveWins > 0) winStreakRoomIds.add(roomId)
     })
@@ -321,10 +330,15 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       ? Array.from(rooms.values()).filter(r => selectedRoomIds.has(r.id))
       : baccaratRoomList
 
+    // tie_frequent 자동에서 이 슈에 이미 적중한 방은 후보에서 제외
+    const tieCompletedSet = new Set(tieAutoCompletedRoomIds)
+    const isTieFrequentFilter = activeFilters.length === 1 && activeFilters[0] === 'tie_frequent'
+
     let matchedIds: string[]
     if (activeFilters.length > 0) {
       matchedIds = targetRooms
         .filter(room => {
+          if (isTieFrequentFilter && tieCompletedSet.has(room.id)) return false
           const state = roomStates.get(room.id) || null
           return activeFilters.some(filterType => matchesFilter(room, state, filterType))
         })
@@ -338,7 +352,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
     console.log(`[AutoMode] 🔄 선택방 기반 배팅 대상 (v${roomDataVersion}): 선택=${selectedRoomIds.size}, 매칭=${matchedIds.length}, 마틴회복=${martinRecoveryRoomIds.size}, 연승=${winStreakRoomIds.size}, 총=${result.length}`)
     return result
-  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, baccaratRoomList, roomDataVersion, filterSettingsSignature])
+  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, baccaratRoomList, roomDataVersion, filterSettingsSignature, tieAutoCompletedRoomIds])
 
   // 필터된 방 목록과 현재 패턴 필터를 서비스에 전달
   useEffect(() => {
@@ -517,9 +531,9 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
           const logs = newMap.get(roomId) || []
           const resolvedStatus = won === null ? 'tie' : (won ? 'win' : 'loss')
           const profitText = (profit ?? 0) > 0 ? `+${(profit ?? 0).toLocaleString()}` : `${(profit ?? 0).toLocaleString()}`
-          // 마틴 단계 표시 (플랫은 단계 표시 안함)
+          // 마틴 단계 표시 (0-indexed → 1-indexed, bet_placed와 동일하게 +1)
           const martinText = martinLevel > 0 && settings.betStrategy !== 'flat'
-            ? ` (마틴 ${martinLevel}단계)`
+            ? ` (마틴 ${martinLevel + 1}단계)`
             : ''
 
           const message = won === null
@@ -553,9 +567,9 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
         // 상세 결과 로그
         const profitText = (profit ?? 0) > 0 ? `+${(profit ?? 0).toLocaleString()}` : `${(profit ?? 0).toLocaleString()}`
-        // 마틴 단계 표시 (플랫은 단계 표시 안함)
+        // 마틴 단계 표시 (0-indexed → 1-indexed, bet_placed와 동일하게 +1)
         const martinText = martinLevel > 0 && settings.betStrategy !== 'flat'
-          ? ` (마틴 ${martinLevel}단계)`
+          ? ` (마틴 ${martinLevel + 1}단계)`
           : ''
 
         // 로그에서 직접 cumulativeProfit 가져옴 (AutoModeService에서 계산된 정확한 값)
@@ -610,9 +624,11 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     }
   }, [user?.siteUrl, openCasino, addHistoryLog])
 
-  const enabledRoomIds = new Set<string>(
+  // 매 렌더마다 새 Set 생성을 막아 하위 리스트(Grid/List/Mosaic)의 filteredRooms useMemo가
+  // 멤버십이 그대로일 때 불필요하게 재계산되지 않도록 한다. (selectedRoomIds와 동일 계산)
+  const enabledRoomIds = useMemo(() => new Set<string>(
     settings.roomConfigs?.filter((c: any) => c.enabled).map((c: any) => c.roomId) || []
-  )
+  ), [settings.roomConfigs])
 
   const isConnected = status === 'connected'
 

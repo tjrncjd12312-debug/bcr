@@ -118,14 +118,17 @@ export function FilterSettingsDialog({
   const handleTieAutoToggle = () => {
     if (tieAutoOn) {
       if (activeFilters.includes('tie_frequent')) toggleFilter('tie_frequent')
+      // OFF 시 per-filter 전략 override를 비워 글로벌 전략이 다시 적용되도록 한다.
+      // (이전에 ON에서 'martingale'을 박아두면 OFF 후에도 sticky하게 남아
+      //  글로벌 커스텀 시퀀스를 계속 덮어쓰는 문제가 있었다.)
+      PatternBettingService.setBetStrategy('tie_frequent', undefined)
     } else {
       clearFilters()
       toggleFilter('tie_frequent')
       PatternBettingService.setBetDirection('tie_frequent', 'T')
-      // 글로벌 betStrategy(예: 'custom' + customBetAmounts)를 그대로 따르도록
-      // per-filter 오버라이드를 해제. 이전엔 'martingale'로 강제 덮어써서 사용자가
-      // 설정한 커스텀 마틴 시퀀스가 무시됐다. 사용자가 타이에만 별도 전략을 원하면
-      // 아래 "필터별 세부 설정"에서 직접 지정.
+      // 전략은 글로벌(또는 사용자가 per-filter 드롭다운에서 정한 값)을 따른다.
+      // 'martingale'을 강제하면 글로벌에 설정한 커스텀/피보나치/파롤리 시퀀스가
+      // 무시되어 사용자가 설정한 패턴대로 배팅되지 않는다(커밋 44dfd72 회귀 방지).
       PatternBettingService.setBetStrategy('tie_frequent', undefined)
     }
   }

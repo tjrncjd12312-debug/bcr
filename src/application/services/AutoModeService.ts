@@ -20,7 +20,7 @@ import type {
   PatternBetConfig,
   Winner,
 } from '../../domain/entities'
-import { TIE_PAYOUT_MULTIPLIER } from '../../domain/entities'
+import { winProfit } from '../../domain/betting/payout'
 import type { ICasinoAdapter, IMultiRoomPredictionPort } from '../../domain/interfaces'
 import { container } from '../di'
 import { CallbackManager } from '../utils'
@@ -122,6 +122,9 @@ export interface AutoModeState {
   startTime: number | null
   // 시작 금액 (세션 시작 시 스냅샷)
   startBalance: number
+  // tie_frequent 자동 배팅에서 이 슈 동안 이미 적중(또는 종료)한 방 ID 목록.
+  // UI 카운트와 후보 풀에서 제외하기 위해 노출. 슈가 갈리면 자동 비워진다.
+  tieAutoCompletedRoomIds: string[]
 }
 
 // 로그 이벤트 타입
@@ -214,7 +217,9 @@ class AutoModeServiceImpl {
     console.log('[AutoMode] Settings loaded, enabled forced to false for safety, maxMartin synced:', this.settings.maxMartin)
   }
 
-  private state: Omit<AutoModeState, 'settings'> = {
+  // tieAutoCompletedRoomIds는 derived (this.tieAutoCompletedRooms에서 매번 스냅샷),
+  // 그래서 state에 보관하지 않고 getState에서 합쳐서 노출한다.
+  private state: Omit<AutoModeState, 'settings' | 'tieAutoCompletedRoomIds'> = {
     totalWins: 0,
     totalLosses: 0,
     totalBetAmount: 0,
@@ -239,13 +244,18 @@ class AutoModeServiceImpl {
   // 🆕 v2.24: 동시배팅 제한은 사용자 설정으로 이동 (settings.maxConcurrentBets)
   // 0 = 무제한 (예측모드처럼), 1~N = 제한
 
-  // 현재 활성 배팅 수 계산 (waitingForResult + bettingInProgress - Single Source of Truth)
-  // waitingForResult: 결과 대기 중인 방
-  // bettingInProgress: 현재 배팅 진행 중인 방 (예측/배팅 처리 중, waitingForResult 전)
+  // 현재 슬롯을 점유한 방 수 (waitingForResult + bettingInProgress + martin>0)
+  // - waitingForResult: 결과 대기 중인 방
+  // - bettingInProgress: 현재 배팅 진행 중인 방 (예측/배팅 처리 중)
+  // - martinLevel > 0: 마틴 사이클 진행 중 (라운드 사이 잠시 쉬는 방도 슬롯 점유)
+  //
+  // 정책: "한 방에 들어가면 승리(또는 마틴 종료)까지 그 방이 슬롯을 잡는다."
+  // 라운드 사이라고 슬롯을 다른 신규 방에 양보하면, 마틴 방이 돌아왔을 때 동시 상한을 초과한다.
   private getActiveBettingCount(): number {
     const activeRoomIds = new Set<string>()
     this.state.roomStates.forEach(state => {
       if (state.waitingForResult) activeRoomIds.add(state.roomId)
+      if (state.martinLevel > 0) activeRoomIds.add(state.roomId)
     })
     this.bettingInProgress.forEach(roomId => activeRoomIds.add(roomId))
     return activeRoomIds.size
@@ -351,6 +361,7 @@ class AutoModeServiceImpl {
       settings: { ...this.settings },
       ...this.state,
       roomStates: new Map(this.state.roomStates),
+      tieAutoCompletedRoomIds: Array.from(this.tieAutoCompletedRooms),
     }
   }
 
@@ -833,6 +844,16 @@ class AutoModeServiceImpl {
     this.hasReceivedActiveRoomList = true
     if (patternFilter !== undefined) {
       this.currentPatternFilter = patternFilter
+      // isTieOnlyFilter에 해당하는 필터가 활성화되면 betDirection을 'T'로 동기화
+      // 사용자가 "타이 자동 켜기" 대신 필터 체크박스로 직접 활성화한 경우에도
+      // PatternBettingService의 stale 'ai' 방향이 Tie 배팅을 차단하지 않도록 보장
+      if (this.isTieOnlyFilter(patternFilter) && patternFilter !== 'all') {
+        const currentDirection = PatternBettingService.getBetDirection(patternFilter as RoomFilterType)
+        if (currentDirection !== 'T') {
+          PatternBettingService.setBetDirection(patternFilter as RoomFilterType, 'T')
+          console.log(`[AutoMode] 🔧 Tie-only 필터 betDirection 동기화: ${patternFilter} → T (was: ${currentDirection})`)
+        }
+      }
     }
     console.log(`[AutoMode] 🏠 Active betting rooms updated: ${effectiveRoomIds.length} rooms [${effectiveRoomIds.slice(0, 3).join(', ')}${effectiveRoomIds.length > 3 ? '...' : ''}], filter: ${this.currentPatternFilter}${lockedMartinRoomIds.length > 0 ? ` (martin locked: ${lockedMartinRoomIds.length})` : ''}`)
 
@@ -1005,9 +1026,16 @@ class AutoModeServiceImpl {
     }
 
     // Bug 4 Fix: 필터 전환 중 배팅 스킵
+    // 단, 마틴 회복 중이거나 결과 대기 중인 방은 예외 — 한 번 들어간 방은
+    // 필터 전환과 무관하게 승리·마틴 종료까지 계속 배팅해야 함.
     if (this.isFilterTransitioning) {
-      console.log(`[AutoMode] ❌ 필터 전환 중 - ${roomNameForDebug} 스킵`)
-      return
+      const existingState = this.state.roomStates.get(roomId)
+      const isInMartinOrWaiting = existingState && (existingState.martinLevel > 0 || existingState.waitingForResult)
+      if (!isInMartinOrWaiting) {
+        console.log(`[AutoMode] ❌ 필터 전환 중 - ${roomNameForDebug} 스킵`)
+        return
+      }
+      console.log(`[AutoMode] ⚡ 필터 전환 중이지만 마틴/결과대기 방이므로 진행: ${roomNameForDebug} (마틴 ${existingState.martinLevel}단)`)
     }
 
     // 배팅 진행 중 락 체크 및 즉시 설정 (동시 배팅 방지 - atomic check-and-set)
@@ -1153,20 +1181,18 @@ class AutoModeServiceImpl {
         return
       }
 
-      // 🆕 v2.25: 동시배팅 제한 체크 (사용자 설정 기반)
-      // 정책 (사용자 요구):
-      //   - 마틴 진행 중인 방은 동시 상한과 무관하게 항상 이어친다.
-      //   - 신규 방은 maxConcurrentBets 한도를 지키되, 슬롯이 비어있으면 즉시 채운다.
-      //     마틴 방이 잠깐 라운드 사이에 쉬는 동안에도 그 슬롯을 예약하지 않고
-      //     필터에 걸린 다른 신규 방으로 채운다. ("11개 필터 / 3 동시 → 항상 3 진행")
-      //     마틴 방이 라운드 도래 시 다시 들어오면 동시 상한을 잠깐 초과할 수 있다.
-      //   - 결과 처리 후의 최신 레벨로 재평가(stale isInMartinRecovery 방지).
+      // 동시배팅 제한 체크 (사용자 설정 기반)
+      // 정책:
+      //   - 마틴 진행 중인 방은 동시 상한과 무관하게 항상 이어친다 (자기 슬롯).
+      //   - 슬롯 점유 = waitingForResult OR bettingInProgress OR martinLevel>0
+      //     (즉, 한 번 들어간 방은 승리·마틴 종료 전까지 슬롯을 계속 잡는다.)
+      //   - 신규 방은 점유된 슬롯 수가 maxConcurrentBets 미만일 때만 진입.
       const currentBetCount = this.getActiveBettingCount()
       const maxBets = this.settings.maxConcurrentBets
       const isCurrentlyInMartin = roomState.martinLevel > 0
 
       if (!isCurrentlyInMartin && maxBets > 0 && currentBetCount > maxBets) {
-        console.log(`[AutoMode] 🚫 동시배팅 상한 초과: ${room.koreanName} (현재=${currentBetCount}/${maxBets}개)`)
+        console.log(`[AutoMode] 🚫 동시배팅 상한 초과: ${room.koreanName} (점유=${currentBetCount}/${maxBets})`)
         return
       }
 
@@ -1194,11 +1220,17 @@ class AutoModeServiceImpl {
 
         if (recoveryPrediction) {
           console.log(`[AutoMode] ${room.koreanName} - 마틴 이어치기 고정 방향 사용: ${recoveryPrediction.prediction}`)
+        } else if (isInMartinRecovery && this.isTieOnlyFilter(this.currentPatternFilter)) {
+          // 마틴 회복 중 + 타이 계열 필터: 패턴 매칭 우회하여 즉시 T 배팅 유지
+          console.log(`[AutoMode] ${room.koreanName} - 마틴 회복 중 타이 필터 강제 T 배팅`)
         } else {
           console.log(`[AutoMode] getPatternBasedPrediction 호출: ${room.koreanName}`)
         }
 
-        const prediction = recoveryPrediction ?? (await this.getPatternBasedPrediction(room, remainingSeconds))
+        const prediction = recoveryPrediction
+          ?? (isInMartinRecovery && this.isTieOnlyFilter(this.currentPatternFilter)
+            ? { roomId, prediction: 'T' as const, confidence: 90, reasoning: '마틴 회복 (타이 유지)', isSkip: false, timestamp: Date.now() }
+            : await this.getPatternBasedPrediction(room, remainingSeconds))
 
         // 예측 없음 (shouldBet 호출 전 체크 - null 예측은 shouldBet에서 처리 불가)
         if (!prediction) {
@@ -1213,30 +1245,6 @@ class AutoModeServiceImpl {
             message: '예측 생성 실패 - 스킵',
           })
           console.log(`[AutoMode] 예측 결과 없음 (null) - 스킵`)
-          return
-        }
-
-        // 🆕 v2.26: 모든 배팅에 신뢰도 체크 (승률 향상)
-        // 균형형: 마틴 0 (첫 배팅) 50%, 이후 +5%씩
-        const BASE_CONFIDENCE = 0.50  // 첫 배팅 최소 기준 (0~1 범위) - 50%로 낮춤
-        const MARTIN_CONFIDENCE_STEP = 0.05  // 마틴당 추가 기준
-        const dynamicMinConfidence = BASE_CONFIDENCE + (roomState.martinLevel * MARTIN_CONFIDENCE_STEP)
-        const predictionConfidence = prediction.confidence ?? 0
-        const confidencePercent = Math.round(predictionConfidence * 100)
-        const minConfidencePercent = Math.round(dynamicMinConfidence * 100)
-
-        if (!isInMartinRecovery && predictionConfidence < dynamicMinConfidence) {
-          this.emitDecisionOnce({
-            roomId,
-            roomName: room.koreanName,
-            martinLevel: roomState.martinLevel,
-            historyLength: room.history.length,
-            code: 'low_confidence',
-            level: 'info',
-            status: 'pass',
-            message: `신뢰도 부족 (${confidencePercent}% < ${minConfidencePercent}%) - ${roomState.martinLevel > 0 ? `마틴${roomState.martinLevel}` : '첫배팅'} 스킵`,
-          })
-          console.log(`[AutoMode] ⚠️ 신뢰도 부족: ${room.koreanName} - ${confidencePercent}% < ${minConfidencePercent}% (마틴${roomState.martinLevel})`)
           return
         }
 
@@ -1595,6 +1603,7 @@ class AutoModeServiceImpl {
         martinLevel: roomState.martinLevel,
         status: 'pending',
         reasoning: prediction.reasoning,  // 패턴 정보 전달
+        cumulativeProfit: this.state.cumulativeProfit,
         timestamp: Date.now(),
       })
 
@@ -1817,6 +1826,8 @@ class AutoModeServiceImpl {
     }
 
     const betAmount = roomState.lastBetAmount
+    // 배팅 시점의 마틴 레벨 캡처 (결과 처리로 변경되기 전의 값)
+    const betTimeMartinLevel = roomState.martinLevel
 
     const historyIndex = (() => {
       if (!room || typeof roomState.lastBetHistoryLength !== 'number') return undefined
@@ -1894,16 +1905,11 @@ class AutoModeServiceImpl {
 
     const won = predResult === winner
 
-    // 뱅커 커미션 계산 (정수 연산으로 누적 오차 방지)
-    const BANKER_COMMISSION = 0.05
-    // 손익 계산 시 반올림하지 않고 정확한 값 유지
-    const rawProfit = won
-      ? (predResult === 'B' ? betAmount * (1 - BANKER_COMMISSION)
-        : predResult === 'T' ? betAmount * TIE_PAYOUT_MULTIPLIER
-        : betAmount)
+    // 손익은 단일 페이아웃 정책(domain/betting/payout.winProfit)으로 계산 — 엔진 간 반올림
+    // 드리프트 방지(dup-1). 여기 도달 시 타이 PUSH(B/P 베팅 + T 결과)는 이미 위에서 환불 처리됨.
+    const profit = won
+      ? winProfit(predResult as 'B' | 'P' | 'T', betAmount)
       : -betAmount
-    // 개별 손익은 반올림하여 표시용으로 사용
-    const profit = Math.round(rawProfit)
 
     // 통계 업데이트
     roomState.totalBets++
@@ -1994,7 +2000,7 @@ class AutoModeServiceImpl {
     roomState.lastBetHistoryLength = null
     roomState.wasVirtualBet = undefined  // Bug Fix: 모드 정보 초기화
 
-    // 결과 로그
+    // 결과 로그 — 배팅 시점의 마틴 레벨을 사용해 히스토리 표시와 일치시킴
     this.emitBetLog({
       type: 'bet_result',
       roomId,
@@ -2007,7 +2013,7 @@ class AutoModeServiceImpl {
       profit,
       betAmount,
       cumulativeProfit: this.state.cumulativeProfit,
-      martinLevel: roomState.martinLevel,
+      martinLevel: betTimeMartinLevel,
       timestamp: Date.now(),
       playerScore,
       bankerScore,
@@ -2050,24 +2056,39 @@ class AutoModeServiceImpl {
     this.tieAutoCompletedRooms.delete(roomId)
 
     const roomState = this.state.roomStates.get(roomId)
-    if (roomState) {
-      // ✅ MartingaleManager를 Single Source of Truth로 사용
+    if (!roomState) return
+
+    const isInMartin = roomState.martinLevel > 0 || roomState.waitingForResult
+
+    if (isInMartin) {
+      // 마틴 진행 중: 마틴 레벨·방향 유지, 슈 변경과 무관하게 이어치기
+      // pending bet이 있으면 히스토리가 리셋되므로 결과 추론이 불가 → 정리
+      if (roomState.waitingForResult) {
+        roomState.lastBetHistoryLength = null
+        if (roomState.wasVirtualBet) {
+          VirtualBettingService.cancelPendingBet(roomId)
+          roomState.waitingForResult = false
+          roomState.lastPrediction = null
+          roomState.wasVirtualBet = undefined
+        }
+        // 실제 배팅: waitingForResult 유지 → GameResult 이벤트로 결과 처리
+        // lastBetHistoryLength=null이면 handleGameResult가 winnerFromEvent 직접 사용
+      }
+      console.log(`[AutoMode] Shoe change for ${roomState.roomName}, martin level KEPT at ${roomState.martinLevel}`)
+    } else {
+      // 마틴 아님: 완전 초기화
       this.martingaleManager.resetLevel(roomId)
       this.syncMartinLevelFromManager(roomId, roomState)
-
       roomState.waitingForResult = false
       roomState.lastPrediction = null
       roomState.martinRecoveryPrediction = null
       roomState.lastBetHistoryLength = null
-
-      // ✅ 가상 배팅 중이었으면 취소 및 환불
       if (this.settings.isVirtualMode) {
         VirtualBettingService.cancelPendingBet(roomId)
       }
-
       console.log(`[AutoMode] Shoe change for ${roomState.roomName}, resetting state`)
-      this.emitStateChange()
     }
+    this.emitStateChange()
   }
 
   // ==================== Utilities ====================
@@ -2196,6 +2217,10 @@ class AutoModeServiceImpl {
    * @param remainingSeconds 남은 배팅 시간
    */
   private async getPatternBasedPrediction(room: Room, remainingSeconds: number): Promise<Prediction | null> {
+    // 방의 예측 상태(연승/연패 stats)를 함께 넘긴다. 디스플레이(AutoModePanel)가 매칭 판정에 쓰는
+    // 것과 동일한 MultiRoomPredictionService 상태를 사용해야 연승/연패 필터에서 "보이는 방은
+    // 매칭인데 봇은 스킵" 불일치가 사라진다(pattern-streak-1).
+    const predictionState = MultiRoomPredictionService.getRoomState(room.id)
     return this.patternPredictionService.getPatternBasedPrediction(
       room,
       remainingSeconds,
@@ -2206,7 +2231,8 @@ class AutoModeServiceImpl {
         betStrategy: this.resolveActiveFilterStrategy(),
         minConfidence: undefined, // 서버 동적 최적화 사용
         realBalance: this.realBalance, // 🆕 v3.7.0: 실제 잔액 전달
-      }
+      },
+      predictionState
     )
   }
 

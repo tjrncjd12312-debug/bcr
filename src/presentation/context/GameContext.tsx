@@ -13,6 +13,7 @@ import SemiAutoService from '../../application/services/SemiAutoService'
 import { GameConfigProvider, useGameConfig, type GameConfigContextType } from './GameConfigContext'
 import { GameDataProvider, useGameData, type GameDataContextType } from './GameDataContext'
 import RoomFilterService from '../../application/services/RoomFilterService'
+import { formatMartingaleLevel } from '../utils/formatters'
 
 // Combined type for backward compatibility
 export type GameContextType = GameConfigContextType & GameDataContextType
@@ -101,7 +102,7 @@ export function GameProvider({ children, user, appMode }: GameProviderProps) {
     onResult: multiRoom.onResult,
     onBetLog: virtualBetting.onBetLog,
     formatCurrency: virtualBetting.formatCurrency,
-    getMartingaleLevelText: (l: number) => `M${l}`,
+    getMartingaleLevelText: (l: number) => formatMartingaleLevel(l),
     showDanger: console.warn
   })
 

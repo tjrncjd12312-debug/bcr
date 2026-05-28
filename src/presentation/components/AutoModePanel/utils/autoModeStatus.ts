@@ -77,12 +77,12 @@ export function getFilterShortLabel(
     case 'tie_frequent': {
       const { tieFrequentStart, tieFrequentWindow, tieFrequentMinCount, tieFrequentMaxCount } = thresholds
       const end = tieFrequentStart + tieFrequentWindow - 1
-      return `Tie ${tieFrequentMinCount}/${tieFrequentMaxCount} (${tieFrequentStart}~${end}판)`
+      return `타이 ${tieFrequentMinCount}/${tieFrequentMaxCount} (${tieFrequentStart}~${end}판)`
     }
     case 'tie_drought':
-      return `Tie 없음 ≥${thresholds.tieDroughtThreshold}판`
+      return `타이 없음 ≥${thresholds.tieDroughtThreshold}판`
     case 'no_tie_room':
-      return 'Tie 0건'
+      return '타이 0건'
     case 'fresh_room':
       return `신규 ≤${thresholds.freshRoomGames}판`
     case 'fresh_shoe':

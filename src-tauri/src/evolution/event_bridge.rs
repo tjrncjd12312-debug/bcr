@@ -15,6 +15,7 @@ pub mod event_names {
     pub const ROOMS_READY: &str = "evolution_multi_rooms_ready";
     pub const EVENT: &str = "evolution_multi_event";
     pub const RAW: &str = "evolution_multi_raw";
+    pub const RECONNECT_ATTEMPT: &str = "evolution_multi_reconnect_attempt";
 }
 
 /// Tauri 이벤트 브릿지
@@ -88,6 +89,14 @@ impl TauriEventBridge {
                 data,
             } => {
                 self.emit_table_event(table_id, &event_type, data);
+            }
+            EvolutionEvent::ReconnectAttempt {
+                attempt,
+                max_attempts,
+                delay_ms,
+                reason,
+            } => {
+                self.emit_reconnect_attempt(attempt, max_attempts, delay_ms, &reason);
             }
             EvolutionEvent::RawMessage {
                 event_type,
@@ -178,6 +187,25 @@ impl TauriEventBridge {
         // evolution_multi_event로 방출
         if let Err(e) = self.emit_to_main_window(event_names::EVENT, payload) {
             debug!("[EventBridge] Failed to emit table event: {}", e);
+        }
+    }
+
+    /// 재연결 시도 이벤트 방출
+    fn emit_reconnect_attempt(&self, attempt: u32, max_attempts: u32, delay_ms: u64, reason: &str) {
+        warn!(
+            "[EventBridge] Reconnect attempt {}/{} in {}ms (reason: {})",
+            attempt, max_attempts, delay_ms, reason
+        );
+
+        let payload = serde_json::json!({
+            "attempt": attempt,
+            "maxAttempts": max_attempts,
+            "delayMs": delay_ms,
+            "reason": reason
+        });
+
+        if let Err(e) = self.emit_to_main_window(event_names::RECONNECT_ATTEMPT, payload) {
+            error!("[EventBridge] Failed to emit reconnect_attempt: {}", e);
         }
     }
 

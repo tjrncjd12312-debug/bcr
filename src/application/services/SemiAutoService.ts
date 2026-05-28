@@ -16,6 +16,7 @@
 
 import type { Room, Winner, Prediction, BettingPhaseEvent, RoomPredictionState, RoadResult } from '../../domain/entities'
 import { calculateBetAmount } from '../../domain/entities'
+import { winProfit } from '../../domain/betting/payout'
 import type {
   ICasinoAdapter,
   IMultiRoomPredictionPort,
@@ -1545,16 +1546,9 @@ class SemiAutoServiceImpl {
     this.internalState.totalBetAmount += betAmount
 
     if (won) {
-      // WIN
-      const isBankerWin = prediction.prediction === 'B'
-      const isTieWin = prediction.prediction === 'T'
-      const BANKER_COMMISSION = 0.05
-      const TIE_PAYOUT = 8 // 8:1 net profit for a successful Tie bet
-      const profit = isTieWin
-        ? betAmount * TIE_PAYOUT
-        : isBankerWin
-          ? betAmount * (1 - BANKER_COMMISSION)
-          : betAmount
+      // WIN — 단일 페이아웃 정책(domain/betting/payout.winProfit)으로 계산(dup-1):
+      // 플레이어 1:1 / 뱅커 0.95:1 / 타이 8:1, 반올림 통일
+      const profit = winProfit(prediction.prediction as 'B' | 'P' | 'T', betAmount)
       this.internalState.cumulativeProfit += profit
 
       console.log(`[SemiAuto] ✅ 승리! recordWin() 호출 전: martin=${this.statsManager.martin}, wins=${this.statsManager.totalWins}`)
