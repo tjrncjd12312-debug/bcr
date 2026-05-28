@@ -281,9 +281,11 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         messageCountRef.current = 0
         setMessageCount(0)
       }
-      // 🎯 로비소켓: 첫 방 데이터 수신 시 roomsReady = true
-      // (멀티소켓은 evolution_multi_rooms_ready 이벤트로 별도 처리)
-      if (updatedRooms.length > 0 && appModeRef.current === 'predict') {
+      // 첫 방 데이터 수신 시 roomsReady = true.
+      // 구버전 multiwidget은 evolution_multi_rooms_ready 이벤트로도 설정되지만, lobby v2는
+      // widget.availableTables 파싱이 없어 그 이벤트가 안 뜬다 → 실제 방 데이터 도착으로 판정해
+      // auto/predict 모두에서 대기화면이 풀리도록 한다.
+      if (updatedRooms.length > 0) {
         setRoomsReady(true)
       }
     })

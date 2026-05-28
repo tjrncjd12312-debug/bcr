@@ -88,6 +88,40 @@ impl ProtocolSequence {
         ]
     }
 
+    /// Lobby v2 초기화 시퀀스.
+    ///
+    /// Evolution이 멀티테이블 피드를 lobby v2(/public/lobby/socket/v2/)로 통합한 뒤,
+    /// 브라우저는 연결 직후 `lobby.initLobby`(version 2 + features)를 보내 자신을 유효한
+    /// 로비 구독자로 등록한다. 이걸 보내지 않으면 서버가 초기 스냅샷만 흘려보낸 뒤
+    /// 잠시 후 연결을 끊어버려 "재연결 시도 중" 루프에 빠진다(v2 실트래픽으로 확인).
+    pub fn init_lobby_v2() -> Vec<Value> {
+        vec![Self::lobby_init_v2()]
+    }
+
+    /// `lobby.initLobby` 메시지 생성 — 브라우저가 보내는 실제 형식과 동일.
+    /// features는 lobby v2 URL의 `features=` 쿼리 파라미터와 일치(client_version 6.2026 기준).
+    pub fn lobby_init_v2() -> Value {
+        serde_json::json!({
+            "id": Self::generate_random_id(),
+            "type": "lobby.initLobby",
+            "args": {
+                "version": 2,
+                "features": [
+                    "opensAt",
+                    "multipleHero",
+                    "shortThumbnails",
+                    "skipInfosPublished",
+                    "smc",
+                    "uniRouletteHistory",
+                    "bacHistoryV2",
+                    "filters",
+                    "tableDecorations",
+                    "subscriptionModel"
+                ]
+            }
+        })
+    }
+
     /// CONNECTION_ESTABLISHED 메시지 생성
     pub fn connection_established(
         reconnection_count: u32,

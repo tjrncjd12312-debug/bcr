@@ -468,9 +468,11 @@ impl EvolutionMultiSocket {
 
                         let (mut write, mut read) = websocket.split();
 
-                        // 초기화 시퀀스 전송
+                        // 초기화 시퀀스 전송 (lobby v2는 lobby.initLobby, 구버전은 multiwidget init)
                         if is_multiwidget {
-                            if let Err(e) = Self::send_init_sequence(&mut write).await {
+                            let is_lobby_v2 = ws_url.contains("/lobby/socket/v2")
+                                || ws_url.contains("/lobby/socket/V2");
+                            if let Err(e) = Self::send_init_sequence(&mut write, is_lobby_v2).await {
                                 error!("[Evolution-Multi] ❌ Init failed: {}", e);
                                 let _ = event_tx
                                     .send(EvolutionEvent::Error {
@@ -618,14 +620,22 @@ impl EvolutionMultiSocket {
     }
 
     /// 초기화 시퀀스 전송
-    async fn send_init_sequence<W>(write: &mut W) -> Result<(), String>
+    async fn send_init_sequence<W>(write: &mut W, is_lobby_v2: bool) -> Result<(), String>
     where
         W: SinkExt<WsMessage> + Unpin,
         W::Error: std::fmt::Display,
     {
-        info!("[Evolution-Multi] 📤 Sending init sequence...");
+        // lobby v2는 브라우저와 동일하게 `lobby.initLobby`를 보내야 서버가 구독자로 인정하고
+        // 연결을 유지한다. 구버전 multiwidget init을 보내면 v2 서버가 잠시 후 끊는다.
+        let sequence = if is_lobby_v2 {
+            info!("[Evolution-Multi] 📤 Sending lobby v2 init sequence (lobby.initLobby)...");
+            ProtocolSequence::init_lobby_v2()
+        } else {
+            info!("[Evolution-Multi] 📤 Sending init sequence...");
+            ProtocolSequence::init_multiwidget()
+        };
 
-        for (i, msg) in ProtocolSequence::init_multiwidget().iter().enumerate() {
+        for (i, msg) in sequence.iter().enumerate() {
             if let Err(e) = write
                 .send(WsMessage::Text(msg.to_string().into()))
                 .await
