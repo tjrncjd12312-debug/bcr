@@ -218,6 +218,10 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
   private lastHistoryLengths: Map<string, number> = new Map() // 방별 마지막 히스토리 길이 (중복/슈체인지 감지)
   private lastEmittedResults: Map<string, { winner: Winner; timestamp: number; historyLength: number }> = new Map() // 방별 마지막 emit된 결과 (최종 중복 방지)
   private lastProcessedGameIds: Map<string, string> = new Map() // 방별 마지막 처리된 gameId (중복 결과 방지)
+  /** v2 lobby.historyUpdated의 results 형식(c:"R"/"B")으로 '바카라'임이 입증된 테이블 ID.
+   *  암호 ID(예: tzxd9y6k1sqqqztk)는 이름 패턴 필터(shouldIncludeRoom)를 통과 못하므로,
+   *  데이터로 바카라가 확인되면 이 Set에 넣어 방 생성 필터를 우회한다(전체 바카라 멀티방 표시). */
+  private v2BaccaratTables: Set<string> = new Set()
 
   // 🔥 Room update 렉 방지용 타이머
   private roomUpdateTimer: ReturnType<typeof setTimeout> | null = null
@@ -420,7 +424,17 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       }
 
       if (msgType === 'lobby.historyUpdated' && data.args) {
-        this.handleLobbyHistoryUpdated(data.args)
+        const a = data.args as any
+        if (a.historyUpdated) {
+          // CDP 옵저버 경유: args.historyUpdated = 단일 객체
+          this.handleLobbyHistoryUpdated(a.historyUpdated)
+        } else if (a.tableId) {
+          // 단일 객체 형식: args = {tableId, history|results}
+          this.handleLobbyHistoryUpdated(a)
+        } else {
+          // v2 멀티소켓 맵 형식: args = {<tableId>: {results:[...]}}
+          this.handleV2HistoryMap(a as Record<string, unknown>)
+        }
         return { type: msgType, data: data.args }
       }
 
@@ -430,7 +444,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       }
 
       if (msgType === 'lobby.histories' && data.args) {
-        this.handleLobbyHistories(data.args)
+        this.handleV2HistoryMap(data.args as Record<string, unknown>)
         return { type: msgType, data: data.args }
       }
 
@@ -549,23 +563,40 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     }
   }
 
-  private handleLobbyHistories(args: Record<string, unknown>): void {
-    const source = ((args as any).histories || args) as unknown
-
-    if (Array.isArray(source)) {
-      source.forEach((entry) => this.handleLobbyHistoryUpdated(entry))
-      return
-    }
-
+  /**
+   * v2 lobby.historyUpdated / lobby.histories 공통 처리.
+   * args = {<tableId>: {results:[...]}} 맵. 각 테이블의 results 형식으로 바카라 여부를 판별해
+   * (드래곤타이거/식보/룰렛/크랩스 제외) 바카라만 방으로 생성한다. 암호 ID도 데이터로 바카라가
+   * 입증되면 포함한다 → 전체 바카라 멀티방이 표시됨.
+   */
+  private handleV2HistoryMap(argsMap: Record<string, unknown>): void {
+    const source = ((argsMap as any).histories as Record<string, unknown> | undefined) || argsMap
     if (!source || typeof source !== 'object') return
 
-    Object.entries(source as Record<string, unknown>).forEach(([tableId, value]) => {
-      if (Array.isArray(value)) {
-        this.handleLobbyHistoryUpdated({ tableId, history: value })
-      } else if (value && typeof value === 'object') {
-        this.handleLobbyHistoryUpdated({ tableId, ...(value as Record<string, unknown>) })
-      }
+    Object.entries(source).forEach(([tableId, value]) => {
+      if (!tableId || !value || typeof value !== 'object') return
+      const results = (value as { results?: unknown }).results
+      if (!Array.isArray(results) || results.length === 0) return
+      if (!this.isBaccaratV2Results(results)) return // 비-바카라 게임 제외
+      this.v2BaccaratTables.add(tableId)
+      this.handleLobbyHistoryUpdated({ tableId, results })
     })
+  }
+
+  /** results 첫 항목 형식으로 바카라 판별. 바카라: c="R"|"B"(또는 "Banker"/"Player"/"Tie"). */
+  private isBaccaratV2Results(results: unknown[]): boolean {
+    const first = results[0]
+    if (typeof first === 'string') {
+      return /^(b|p|t|banker|player|tie)$/i.test(first.trim())
+    }
+    if (first && typeof first === 'object' && !Array.isArray(first)) {
+      const f = first as Record<string, unknown>
+      // 비-바카라 형식 배제: 드래곤타이거(color/oddEven/lightning), 식보(value), 룰렛(number)
+      if ('color' in f || 'value' in f || 'number' in f || 'oddEven' in f || 'lightning' in f) return false
+      const c = String(f.c ?? '').toUpperCase()
+      return c === 'R' || c === 'B'
+    }
+    return false // 룰렛([{number}]) / 크랩스(raw int) 등
   }
 
   private handleLobbyHistoryUpdated(raw: unknown): void {
@@ -717,8 +748,9 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const existing = this.rooms.get(tableId)
     const effectiveName = tableName || existing?.name || tableId
 
-    // 동적 필터링: 라이트닝/살롱/RNG 제외, 바카라만 포함
-    if (!shouldIncludeRoom(tableId, effectiveName)) return null
+    // 동적 필터링: 라이트닝/살롱/RNG 제외, 바카라만 포함.
+    // 단, v2 결과 형식으로 바카라가 입증된 테이블(암호 ID)은 이름 패턴 필터를 우회한다.
+    if (!this.v2BaccaratTables.has(tableId) && !shouldIncludeRoom(tableId, effectiveName)) return null
 
     // 한글명 매핑 (있으면 사용, 없으면 원본 이름 사용)
     const koreanName = ROOM_MAPPING[tableId] || effectiveName
