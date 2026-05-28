@@ -169,9 +169,6 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   const selectedRoomIdRef = useRef<string | null>(null)
   const cdpStoppedRef = useRef(false)
   const appModeRef = useRef<AppMode>(appMode)
-  // 세션 만료/킥아웃 자동 복구용 (로비 새로고침→신선한 세션 재캡처)
-  const sessionRecoveryAttemptsRef = useRef(0)
-  const sessionRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Pragmatic 이벤트를 위한 콜백 저장소 (Evolution과 동시에 동작)
   const bettingPhaseCallbacksRef = useRef<Set<(event: BettingPhaseEvent) => void>>(new Set())
@@ -290,8 +287,6 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       // auto/predict 모두에서 대기화면이 풀리도록 한다.
       if (updatedRooms.length > 0) {
         setRoomsReady(true)
-        // 실제 방 데이터를 받았다 = 세션 정상 → 세션 복구 백오프 카운터 리셋
-        sessionRecoveryAttemptsRef.current = 0
       }
     })
 
@@ -502,60 +497,34 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         evolutionBaseUrlLockedRef.current = false
         setRoomsReady(false)
 
-        // 세션 만료/킥아웃/타임아웃 등은 모두 "만료된 세션으로는 재연결 불가"가 근본 원인이므로
-        // 동일하게 처리한다: 로비를 새로고침해 신선한 EVOSESSIONID를 재캡처한 뒤 재연결한다.
-        const isRecoverable =
-          reason.includes('kickout') ||           // kickout:inactivity 등 (로비 세션 만료)
+        const isKickout = reason.includes('kickout') ||
           reason.includes('newConnection') ||
           reason.includes('connectionAlreadyExists') ||
-          reason.includes('Max reconnect') ||      // Rust 자동재연결(같은 URL) 소진
-          reason.includes('receive_timeout') ||
-          reason.includes('server_closed') ||
-          reason.includes('network_error') ||
           msgType.includes('kickout') ||
           msgType.includes('connectionAlreadyExists')
 
-        if (isRecoverable) {
-          // 재진입 가드: kickout 이벤트가 연속 발생할 수 있으므로, 복구가 이미 예약돼 있으면 무시한다.
-          if (sessionRecoveryTimerRef.current) return
-
-          const attempt = sessionRecoveryAttemptsRef.current
-          if (attempt >= 3) {
-            sessionRecoveryAttemptsRef.current = 0
-            console.error('[useCasino] ❌ 세션 자동 복구 3회 실패:', reason)
-            showWarning('자동 재연결을 여러 번 시도했지만 실패했습니다. 카지노를 다시 열어주세요.')
-            return
-          }
-          sessionRecoveryAttemptsRef.current = attempt + 1
-          const delayMs = 2000 + attempt * 3000 // 2s → 5s → 8s 백오프
-          setStatus('reconnecting')
-          showWarning(`세션이 만료되어 자동 재연결 중입니다... (${attempt + 1}/3)`)
-          console.warn(`[useCasino] 🔄 세션 만료/킥아웃 → 신선한 세션 재캡처 (attempt ${attempt + 1}/3, reason: ${reason})`)
-
-          sessionRecoveryTimerRef.current = setTimeout(async () => {
-            sessionRecoveryTimerRef.current = null // 복구 실행 → 예약 해제(다음 실패 시 재예약 가능)
-            try {
-              // 1) 만료된 멀티소켓 정리 + 연결 플래그(MULTIWIDGET_CONNECTED) 리셋
-              await invoke('disconnect_multiwidget').catch(() => {})
-              evolutionBaseUrlLockedRef.current = false
-              setRoomsReady(false)
-              // 2) 로비 페이지 새로고침 → 브라우저가 새 EVOSESSIONID로 새 WS를 연다
-              await invoke('refresh_lobby_page').catch(() => {})
-              // 3) CDP 모니터 재시작 → 새 세션 WS를 캡처해 Rust가 자동 재연결
-              await invoke('restart_cdp_monitoring').catch(() => {})
-            } catch (e) {
-              console.warn('[useCasino] 세션 복구 중 오류:', e)
-            }
-          }, delayMs)
+        if (isKickout) {
+          console.warn('[useCasino] ⚠️ Disconnected due to session conflict:', reason)
+          showWarning('세션 충돌로 연결이 종료되었습니다. 브라우저를 새로고침 후 다시 시도하세요.')
           return
         }
 
-        // 그 외 사유: 예측 모드면 CDP 재시작 폴백
+        if (reason.includes('Max reconnect attempts')) {
+          console.error('[useCasino] ❌ All reconnect attempts exhausted:', reason)
+          showWarning('재연결 실패 (최대 시도 횟수 초과). 브라우저를 새로고침 후 다시 시도하세요.')
+          return
+        }
+
+        // predict 모드에서만 CDP 재시작 (Rust 자동 재연결이 실패한 후의 폴백)
         if (appModeRef.current === 'predict') {
+          console.log('[useCasino] 🔄 Rust reconnect exhausted, falling back to CDP restart...')
           setTimeout(() => {
-            invoke('restart_cdp_monitoring').catch(() => {})
+            invoke('restart_cdp_monitoring').catch((e) => {
+              console.warn('[useCasino] Failed to restart CDP monitoring:', e)
+            })
           }, 3000)
         } else {
+          console.log('[useCasino] 📊 Multiwidget disconnected in auto mode:', reason)
           showWarning('멀티소켓 연결이 끊어졌습니다.')
         }
       },
