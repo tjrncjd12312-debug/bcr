@@ -1375,6 +1375,11 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     ties?: number
     c?: string
     color?: string
+    s?: number          // v2: 이긴 쪽 점수
+    score?: number
+    nat?: number
+    pp?: number         // v2: 플레이어 페어
+    bp?: number         // v2: 뱅커 페어
     pairs?: string[]
     pPair?: boolean
     playerPair?: boolean
@@ -1400,18 +1405,31 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
         winner = row % 2 === 1 ? 'B' : 'P'
       }
 
-      // Pairs
+      // Pairs (v2는 pp/bp=1, 구형은 pairs/pPair/bPair)
       const pairs = item.pairs || []
-      const isPlayerPair = Array.isArray(pairs)
+      const isPlayerPair = Array.isArray(pairs) && pairs.length
         ? (pairs.includes('P') || pairs.includes('PLAYER'))
-        : (item.pPair === true || item.playerPair === true)
-      const isBankerPair = Array.isArray(pairs)
+        : (item.pp === 1 || item.pPair === true || item.playerPair === true)
+      const isBankerPair = Array.isArray(pairs) && pairs.length
         ? (pairs.includes('B') || pairs.includes('BANKER'))
-        : (item.bPair === true || item.bankerPair === true)
+        : (item.bp === 1 || item.bPair === true || item.bankerPair === true)
 
-      // 🔥 FIX: ties 필드는 로드맵에서 선으로 표시되는 메타데이터
-      // 별도 결과로 추가하면 안 됨 (원매에서 13개 → 15개 버그 수정)
-      const resultObj: RoadResult = { winner, isPlayerPair, isBankerPair, tieCount: ties }
+      // v2 로드맵은 '이긴 쪽 점수(s)'만 제공한다 → 승자 점수만 채운다(반대쪽은 데이터 없음 → undefined).
+      const winScore = typeof item.s === 'number' ? item.s
+        : typeof item.score === 'number' ? item.score
+          : undefined
+      const playerScore = winner === 'P' ? winScore : undefined
+      const bankerScore = winner === 'B' ? winScore : undefined
+
+      // 🔥 ties 필드는 로드맵에서 선으로 표시되는 메타데이터 → 별도 결과로 추가하지 않음
+      const resultObj: RoadResult = {
+        winner,
+        isPlayerPair,
+        isBankerPair,
+        tieCount: ties,
+        playerScore,
+        bankerScore,
+      }
       history.push(resultObj)
     })
 
