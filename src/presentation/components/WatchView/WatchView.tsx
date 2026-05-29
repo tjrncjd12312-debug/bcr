@@ -19,6 +19,8 @@ interface WatchViewProps {
   onOpenRoom: (id: string) => void
   /** 홈 허브로 복귀 */
   onHome: () => void
+  /** 연결 끊김 시 다시 연결(있으면 오프라인 상태에서 버튼 노출) */
+  onReconnect?: () => void
   className?: string
 }
 
@@ -32,9 +34,11 @@ export function WatchView({
   freshness,
   onOpenRoom,
   onHome,
+  onReconnect,
   className = '',
 }: WatchViewProps) {
   const good = goodCount ?? recommend.length
+  const offline = connection === 'offline'
 
   return (
     <AppShell
@@ -49,7 +53,14 @@ export function WatchView({
           <span className="watch-view__counts">
             보는 방 {rooms.length}개{good > 0 && <> · 흐름 좋은 방 {good}개</>}
           </span>
-          <DensityToggle value={density} onChange={onDensityChange} />
+          <div className="watch-view__statusline-right">
+            {offline && onReconnect && (
+              <button type="button" className="watch-view__reconnect" onClick={onReconnect}>
+                다시 연결
+              </button>
+            )}
+            <DensityToggle value={density} onChange={onDensityChange} />
+          </div>
         </div>
 
         {recommend.length > 0 && (
@@ -57,7 +68,20 @@ export function WatchView({
         )}
 
         {rooms.length === 0 ? (
-          <div className="watch-view__empty">방을 불러오는 중이에요…</div>
+          <div className="watch-view__empty">
+            {offline ? (
+              <>
+                <p>연결이 끊겼어요.</p>
+                {onReconnect && (
+                  <button type="button" className="watch-view__reconnect" onClick={onReconnect}>
+                    다시 연결
+                  </button>
+                )}
+              </>
+            ) : (
+              '방을 불러오는 중이에요…'
+            )}
+          </div>
         ) : (
           <div className={`watch-view__grid watch-view__grid--${density}`}>
             {rooms.map((r) => (

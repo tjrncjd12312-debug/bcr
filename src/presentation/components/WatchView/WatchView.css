@@ -39,7 +39,33 @@
   gap: 12px;
 }
 
+.watch-view__statusline-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.watch-view__reconnect {
+  min-height: 40px;
+  padding: 0 16px;
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+  border: 1px solid rgba(255, 176, 32, 0.35);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-caption);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.watch-view__reconnect:hover {
+  background: rgba(255, 176, 32, 0.2);
+}
+
 .watch-view__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
   padding: 48px 20px;
   text-align: center;
   font-size: var(--fs-body);
