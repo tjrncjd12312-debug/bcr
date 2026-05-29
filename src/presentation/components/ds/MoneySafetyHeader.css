@@ -1,0 +1,114 @@
+/* MoneySafetyHeader — 리디자인 4단계 돈 안전 헤더 */
+.money-header {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.money-header__row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  font-size: var(--fs-body);   /* 18px */
+  color: var(--text-secondary);
+}
+
+.money-header__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 16px;
+  border-radius: var(--radius-full);
+  font-size: var(--fs-label);  /* 20px */
+  font-weight: 800;
+}
+
+/* 실제 = 빨강(가장 위험), 가상 = 중립 */
+.money-header__chip.is-real {
+  color: #fff;
+  background: var(--status-danger);
+}
+
+.money-header__chip.is-virtual {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.money-header__balance strong {
+  font-size: var(--fs-num);    /* 24px */
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  margin-left: 6px;
+}
+
+.money-header__profit-wrap {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.money-header__profit {
+  font-size: var(--fs-hero);   /* 30px */
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.money-header__profit--up { color: var(--status-success); }
+.money-header__profit--down { color: var(--status-danger); }
+.money-header__profit--flat { color: var(--text-primary); }
+
+.money-header__pct {
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+
+.money-header__bars {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .money-header__bars {
+    grid-template-columns: 1fr;
+  }
+}
+
+.money-header__bar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.money-header__bar-label {
+  font-size: var(--fs-caption); /* 16px */
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.money-header__bar-label strong {
+  color: var(--text-primary);
+}
+
+.money-header__bar {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.money-header__bar-fill {
+  display: block;
+  height: 100%;
+  transition: width var(--transition-smooth);
+}
+
+.money-header__bar-fill--target { background: var(--status-success); }
+.money-header__bar-fill--loss { background: var(--status-warning); }
