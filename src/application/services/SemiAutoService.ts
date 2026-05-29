@@ -443,7 +443,16 @@ class SemiAutoServiceImpl {
    * Enter a room - 방 입장 시 상태 초기화
    */
   enterRoom(room: Room): void {
-    if (this.internalState.currentRoomId === room.id) return
+    if (this.internalState.currentRoomId === room.id) {
+      // 이미 같은 방에 있는 경우라도, navigateToRoom 말미에서 호출되어 들어온 것일 수 있다.
+      // 여기서 조기 반환하더라도 isNavigating 플래그는 반드시 정리해야 한다.
+      // (정리하지 않으면 isNavigating이 true로 묶여 이후 수동/자동 방 이동이 모두 차단됨)
+      if (this.internalState.isNavigating) {
+        this.internalState.isNavigating = false
+        this.emitStateChange()
+      }
+      return
+    }
 
     // 방 정보 즉시 스냅샷
     const roomId = room.id

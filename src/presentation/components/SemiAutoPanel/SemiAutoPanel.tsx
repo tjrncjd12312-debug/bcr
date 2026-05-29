@@ -71,7 +71,6 @@ export default function SemiAutoPanel({
     // Actions
     toggle,
     updateSettings,
-    enterRoom,
     navigateToRoom,
     updateAvailableRooms,
     setSelectedRoomIds: setServiceSelectedRoomIds,
@@ -268,12 +267,13 @@ export default function SemiAutoPanel({
   // Handle room entry from the panel
   const handleEnterRoom = useCallback(async (room: Room) => {
     console.log('[SemiAutoPanel] 🎲 handleEnterRoom triggered:', { id: room.id, name: room.koreanName, provider: room.provider })
-    enterRoom(room)
     addHistoryLog(`방 선택: ${room.koreanName}`, 'info')
-    // ✅ FIX: 수동 입장도 자동 모드와 동일하게 navigateToRoom()으로 실제 CDP 방 이동 수행.
-    // 기존엔 enterRoom(상태만)+onEnterRoom(예측모드)에 의존해 실제로 방이 안 바뀌던 문제 수정.
+    // ✅ FIX: navigateToRoom()이 CDP 이동 + 마지막에 enterRoom()까지 모두 수행한다.
+    // 여기서 미리 enterRoom(room)을 호출하면 navigateToRoom 내부의 enterRoom이
+    // "이미 같은 방"으로 조기 반환되어 isNavigating=false 리셋을 건너뛰고,
+    // isNavigating이 영구히 true로 묶여 이후 수동/자동 방 이동이 전부 막힌다.
     await navigateToRoom(room)
-  }, [enterRoom, navigateToRoom, addHistoryLog])
+  }, [navigateToRoom, addHistoryLog])
 
   // Get sorted rooms for quick selection (memoized)
   const sortedRooms = useMemo(() =>
