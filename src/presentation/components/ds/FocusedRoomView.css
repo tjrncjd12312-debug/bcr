@@ -1,0 +1,136 @@
+/* FocusedRoomView — 리디자인 2단계 공용 L2 */
+.focused-room {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.focused-room__top {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .focused-room__top {
+    grid-template-columns: 1fr;
+  }
+}
+
+.focused-room__pred,
+.focused-room__road,
+.focused-room__bead {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.focused-room__pred-label,
+.focused-room__road-label {
+  font-size: var(--fs-caption);   /* 16px */
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.focused-room__pred {
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+
+.focused-room__road-slot,
+.focused-room__bead-slot {
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  min-height: 120px;
+  overflow: auto;
+}
+
+.focused-room__road-empty {
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+}
+
+.focused-room__stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  font-size: var(--fs-label);    /* 20px */
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 카운트는 게임색 결과 표시이므로 게임색 사용 */
+.focused-room__count--banker { color: var(--banker-light); }
+.focused-room__count--player { color: var(--player-light); }
+.focused-room__count--tie { color: var(--tie-color); }
+
+.focused-room__shoe {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.focused-room__pattern {
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+}
+
+.focused-room__primary {
+  min-height: 56px;              /* 단일 주요 액션 ≥ 56px */
+  margin-top: 4px;
+  padding: 0 24px;
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.focused-room__primary:hover {
+  background: var(--accent-secondary);
+}
+
+.focused-room__primary.is-danger {
+  background: var(--status-danger);
+}
+
+.focused-room__primary.is-danger:hover {
+  background: var(--banker-light);
+}
+
+.focused-room__detail-toggle {
+  min-height: 44px;
+  padding: 0 14px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.focused-room__detail-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.focused-room__detail-body {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
