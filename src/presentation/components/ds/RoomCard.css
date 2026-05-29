@@ -1,0 +1,105 @@
+/* RoomCard — 리디자인 2단계 공용 카드. 큰 글씨·단일 액션·1탭 입장 */
+.room-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.room-card:hover {
+  border-color: var(--selection-outline);
+  box-shadow: var(--shadow-md);
+}
+
+.room-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.room-card__name {
+  font-size: var(--fs-label);   /* 20px */
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.room-card__live {
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.room-card__live.is-live {
+  color: var(--status-success);
+}
+
+.room-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.room-card__row--road {
+  align-items: center;
+}
+
+.room-card__label {
+  font-size: var(--fs-caption);  /* 16px */
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.room-card__num {
+  font-size: var(--fs-num);      /* 24px */
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.room-card__dash {
+  font-size: var(--fs-num);
+  color: var(--text-muted);
+}
+
+.room-card__status {
+  margin-top: 2px;
+}
+
+.room-card__open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;             /* 터치 타깃 ≥ 48px, 1탭 입장 */
+  margin-top: 6px;
+  padding: 0 16px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.room-card__open:hover {
+  background: var(--bg-hover);
+  border-color: var(--selection-outline);
+}
+
+/* 촘촘 밀도 — 핵심만(큰길·상태 줄 접힘), 패딩 축소 */
+.room-card--compact {
+  gap: 6px;
+  padding: 12px 14px;
+}
