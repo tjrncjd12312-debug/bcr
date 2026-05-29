@@ -21,7 +21,8 @@ const PRED_KO: Record<'B' | 'P' | 'T', string> = { B: '뱅커', P: '플레이어
 
 interface SemiAutoPanelProps {
   rooms: Map<string, Room>
-  onEnterRoom: (roomId: string) => Promise<void>
+  /** @deprecated 방 이동은 내부 navigateToRoom()이 처리한다. 더 이상 사용되지 않음(하위호환용). */
+  onEnterRoom?: (roomId: string) => Promise<void>
   fullScreen?: boolean
   onSwitchToPredict?: () => void
   // Pattern filter props

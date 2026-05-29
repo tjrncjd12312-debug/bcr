@@ -2,7 +2,8 @@
 // Clean Architecture: Presentation Layer - Routes to appropriate mode panel
 // 리디자인 2단계 배선: 예측 모드 진입점을 작업 중심 홈 허브(HomeHub)로 교체.
 //   - 살펴보기 → WatchContainer (신규, 라이브 배선)
-//   - 도움받기/자동맡기기 → 기존 PredictModePanel 임시 패스스루(후속 단계에서 전용 화면)
+//   - 도움받기 → AssistContainer (검증된 SemiAutoPanel을 공용 셸에 배선; 가상 베팅 기본)
+//   - 자동맡기기 → 기존 PredictModePanel 임시 패스스루(후속 단계에서 전용 화면)
 // GameProvider는 그대로 한 번만 마운트 → 카지노/CDP 동작·appMode 불변(자동배팅 영향 없음).
 
 import { useState } from 'react'
@@ -14,6 +15,7 @@ import AutoModePanel from '../AutoModePanel'
 import PredictModePanel from '../PredictModePanel'
 import { HomeHub, type HubTask } from '../HomeHub'
 import { WatchContainer } from '../WatchView/WatchContainer'
+import { AssistContainer } from '../AssistView/AssistContainer'
 
 interface MainScreenProps {
   user: { username: string; siteUrl: string }
@@ -34,8 +36,13 @@ function PredictHub({ onLogout, sessionWarning, isOnline }: Omit<ModeContentProp
     return <WatchContainer onHome={() => setTask(null)} />
   }
 
-  if (task === 'assist' || task === 'auto') {
-    // 임시 패스스루: 기존 예측 화면(세미오토 진입 포함). 도움받기/자동맡기기 전용 재설계는 후속 단계.
+  if (task === 'assist') {
+    // 도움받기 = 검증된 반자동(SemiAutoPanel)을 공용 셸에 배선. 가상 베팅 기본, 실제 베팅은 기존 플래그 뒤.
+    return <AssistContainer onHome={() => setTask(null)} />
+  }
+
+  if (task === 'auto') {
+    // 임시 패스스루: 자동맡기기 전용 재설계는 후속 단계.
     return <PredictModePanel onLogout={onLogout} sessionWarning={sessionWarning} isOnline={!!isOnline} />
   }
 
