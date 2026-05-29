@@ -1,0 +1,12 @@
+// 통합 디자인시스템 키트 (리디자인 1단계) — 세 작업(살펴보기/도움받기/자동맡기기) 공용
+export { PredictionChip } from './PredictionChip'
+export type { PredictionValue } from './PredictionChip'
+export { StatusBadge } from './StatusBadge'
+export type { RoomStatus } from './StatusBadge'
+export { TaskCard } from './TaskCard'
+export { AppShell } from './AppShell'
+export { DensityToggle } from './DensityToggle'
+export type { Density } from './DensityToggle'
+export { ConfirmModal } from './ConfirmModal'
+export type { ConfirmRow } from './ConfirmModal'
+export { SafetyStrip } from './SafetyStrip'
