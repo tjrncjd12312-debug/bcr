@@ -11,6 +11,8 @@ interface PredictionChipProps {
   size?: 'md' | 'hero'
   /** hero 크기에서만 노출되는 신뢰도(0~100) */
   confidence?: number
+  /** aria-label 접두사: 예측칩이면 '예측', 마지막 결과 표시면 '결과' */
+  kind?: 'prediction' | 'result'
   className?: string
 }
 
@@ -22,13 +24,14 @@ const LABEL: Record<string, { text: string; cls: string }> = {
   pass: { text: '패스', cls: 'pass' },
 }
 
-export function PredictionChip({ value, size = 'md', confidence, className = '' }: PredictionChipProps) {
+export function PredictionChip({ value, size = 'md', confidence, kind = 'prediction', className = '' }: PredictionChipProps) {
   const meta = LABEL[value ?? 'wait'] ?? LABEL.wait
+  const prefix = kind === 'result' ? '결과' : '예측'
   return (
     <div
       className={`pred-chip pred-chip--${meta.cls} pred-chip--${size} ${className}`}
       role="status"
-      aria-label={`예측 ${meta.text}`}
+      aria-label={`${prefix} ${meta.text}`}
     >
       <span className="pred-chip__text">{meta.text}</span>
       {size === 'hero' && typeof confidence === 'number' && (
