@@ -511,6 +511,7 @@ class SemiAutoServiceImpl {
     this.candidatesProvider = null
     this.internalState.currentRoomId = null
     this.internalState.currentRoomName = null
+    this.internalState.isNavigating = false
   }
 
   /**
@@ -569,29 +570,49 @@ class SemiAutoServiceImpl {
 
       const roomUrl = this.buildRoomUrl(baseUrl, room.id)
 
-      try {
-        // 🔧 CDP로 기존 탭에서 방 이동 (수동 입장과 동일한 방식)
-        await this.cdpPort.navigateToRoom(roomUrl)
+      // 🔧 방 이동 전략 우선순위 (회귀 수정)
+      //  - 실제 자동배팅 중: 단일탭 이동(navigate_to_room_with_ws_block) 우선 — 베팅 중 소켓 간섭 차단 유지.
+      //  - 그 외(가상/도움받기 기본): 예측·살펴보기가 쓰는 검증된 새 탭 CDP 이동(open_new_tab_cdp) 우선.
+      //    예측 모드 컨텍스트에선 단일탭 제어가 불가능해 ws-block 이동이 동작하지 않았다(= 방이동 멈춤의 원인).
+      //  실패 시 다음 전략으로 폴백, 최후엔 일반 Chrome.
+      const navStrategies: Array<{ label: string; run: () => Promise<void> }> = this.settingsManager.autoBetting
+        ? [
+            { label: 'navigate_to_room_with_ws_block', run: () => this.cdpPort.navigateToRoom(roomUrl) },
+            { label: 'open_new_tab_cdp', run: () => this.cdpPort.openNewTab(roomUrl) },
+            { label: 'open_in_chrome_normal', run: () => this.cdpPort.openInChromeNormal(roomUrl) },
+          ]
+        : [
+            { label: 'open_new_tab_cdp', run: () => this.cdpPort.openNewTab(roomUrl) },
+            { label: 'navigate_to_room_with_ws_block', run: () => this.cdpPort.navigateToRoom(roomUrl) },
+            { label: 'open_in_chrome_normal', run: () => this.cdpPort.openInChromeNormal(roomUrl) },
+          ]
 
-        // 🔧 방 입장 후 해당 테이블 재구독 요청 (useCasino.enterRoom과 동일)
+      let navigated = false
+      for (const strategy of navStrategies) {
         try {
-          await invoke('resubscribe_evolution_table', { tableId: room.id })
-          console.log('[SemiAutoService] 🔄 Resubscribed to table after room entry:', room.id)
-        } catch (resubErr) {
-          console.warn('[SemiAutoService] Failed to resubscribe table:', resubErr)
+          await strategy.run()
+          navigated = true
+          console.log(`[SemiAutoService] 🚪 방 이동 성공(${strategy.label}):`, room.id)
+          break
+        } catch (navErr) {
+          console.warn(`[SemiAutoService] 방 이동 전략 실패(${strategy.label}), 다음 전략 시도:`, navErr)
         }
-      } catch (cdpError) {
-        console.warn('[SemiAutoService] CDP navigate failed, trying normal Chrome:', cdpError)
-        try {
-          // 🔧 CDP 실패 시 일반 Chrome으로 폴백 (윈도우 등 CDP 미사용 환경)
-          await this.cdpPort.openInChromeNormal(roomUrl)
-        } catch (fallbackError) {
-          console.error('[SemiAutoService] Failed to open room:', fallbackError)
-          this.internalState.isNavigating = false
-          this.setStatus('방 이동 실패')
-          this.emitStateChange()
-          return
-        }
+      }
+
+      if (!navigated) {
+        console.error('[SemiAutoService] 모든 방 이동 전략 실패:', roomUrl)
+        this.internalState.isNavigating = false
+        this.setStatus('방 이동 실패')
+        this.emitStateChange()
+        return
+      }
+
+      // 🔧 방 입장 후 해당 테이블 재구독 요청 (useCasino.enterRoom과 동일)
+      try {
+        await invoke('resubscribe_evolution_table', { tableId: room.id })
+        console.log('[SemiAutoService] 🔄 Resubscribed to table after room entry:', room.id)
+      } catch (resubErr) {
+        console.warn('[SemiAutoService] Failed to resubscribe table:', resubErr)
       }
 
       if (!this.settingsManager.isEnabled() && wasEnabled) {
