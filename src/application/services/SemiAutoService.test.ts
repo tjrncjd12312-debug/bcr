@@ -2,6 +2,22 @@
 // bcrstore의 GameLogic 참조하여 이벤트 기반 아키텍처 테스트
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// 공유 CDP 목 (방 이동 전략 검증용) — 팩토리가 매번 새 객체를 만들지 않도록 hoist
+const { cdpMock } = vi.hoisted(() => ({
+  cdpMock: {
+    navigateChrome: vi.fn().mockResolvedValue(undefined),
+    openInChrome: vi.fn().mockResolvedValue(undefined),
+    navigateToRoom: vi.fn().mockResolvedValue(undefined),
+    openNewTab: vi.fn().mockResolvedValue(undefined),
+    openInChromeNormal: vi.fn().mockResolvedValue(undefined),
+  },
+}))
+
+// Tauri invoke는 테스트 런타임에 없으므로 목으로 대체 (resubscribe 등)
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}))
+
 // Mock dependencies
 vi.mock('../di', () => ({
   container: {
@@ -43,10 +59,7 @@ vi.mock('../di', () => ({
         }
       }
       if (key === 'cdpPort') {
-        return {
-          navigateChrome: vi.fn().mockResolvedValue(undefined),
-          openInChrome: vi.fn().mockResolvedValue(undefined),
-        }
+        return cdpMock
       }
       return {}
     }),
@@ -485,5 +498,46 @@ describe('SemiAutoService preset trigger', () => {
     expect(navigateSpy).toHaveBeenCalledTimes(1)
     expect((navigateSpy.mock.calls[0][0] as any).id).toBe('other')
     navigateSpy.mockRestore()
+  })
+})
+
+describe('SemiAutoService 방 이동 전략 (회귀 가드)', () => {
+  const room = { id: 'roomX', name: 'X', koreanName: '엑스', history: [], gameCount: 0 } as any
+
+  beforeEach(() => {
+    ;(SemiAutoService as any).resetForTest?.()
+    cdpMock.navigateToRoom.mockClear()
+    cdpMock.openNewTab.mockClear()
+    cdpMock.openInChromeNormal.mockClear()
+  })
+
+  it('가상/도움받기 기본(autoBetting=off)에서는 검증된 open_new_tab_cdp를 우선 사용한다', async () => {
+    SemiAutoService.updateSettings({ baseUrl: 'https://casino.test', autoBetting: false })
+
+    await SemiAutoService.navigateToRoom(room)
+
+    // 예측 모드 컨텍스트에서 동작하는 새 탭 CDP 이동이 먼저 호출되고, 단일탭 ws-block는 호출되지 않아야 한다.
+    expect(cdpMock.openNewTab).toHaveBeenCalledTimes(1)
+    expect(cdpMock.navigateToRoom).not.toHaveBeenCalled()
+  })
+
+  it('실제 자동배팅(autoBetting=on)에서는 단일탭 navigate_to_room_with_ws_block를 우선 사용한다', async () => {
+    SemiAutoService.updateSettings({ baseUrl: 'https://casino.test', autoBetting: true })
+
+    await SemiAutoService.navigateToRoom(room)
+
+    expect(cdpMock.navigateToRoom).toHaveBeenCalledTimes(1)
+    expect(cdpMock.openNewTab).not.toHaveBeenCalled()
+  })
+
+  it('우선 전략이 실패하면 다음 전략으로 폴백한다', async () => {
+    SemiAutoService.updateSettings({ baseUrl: 'https://casino.test', autoBetting: false })
+    cdpMock.openNewTab.mockRejectedValueOnce(new Error('no cdp tab'))
+
+    await SemiAutoService.navigateToRoom(room)
+
+    // open_new_tab_cdp 실패 → ws-block로 폴백
+    expect(cdpMock.openNewTab).toHaveBeenCalledTimes(1)
+    expect(cdpMock.navigateToRoom).toHaveBeenCalledTimes(1)
   })
 })
