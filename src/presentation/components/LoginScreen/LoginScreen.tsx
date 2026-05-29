@@ -363,11 +363,7 @@ export default function LoginScreen({ onLogin, isLoading: propIsLoading }: Login
             borderRadius: '50%',
             animation: 'spin 1s linear infinite'
           }}></div>
-          <style>{`
-            @keyframes spin {
-              to { transform: rotate(360deg); }
-            }
-          `}</style>
+          {/* @keyframes spin — global.css 단일 정의 사용 (중복 제거, 리디자인 0단계) */}
         </div>
       )}
     </div>

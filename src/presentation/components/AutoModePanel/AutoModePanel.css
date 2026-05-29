@@ -3596,11 +3596,7 @@
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* @keyframes spin — global.css 단일 정의 사용 (중복 제거, 리디자인 0단계) */
 
 .auto-mode__empty-content p {
   margin-top: 16px;
