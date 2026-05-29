@@ -16,6 +16,9 @@ import { SemiAutoSidebar } from './components/SemiAutoSidebar'
 import { SemiAutoMain } from './components/SemiAutoMain'
 import { SemiAutoSettingsDialog } from './components/SemiAutoSettingsDialog'
 
+// 예측을 한글로 표시 (raw B/P/T 노출 금지 — 고령층 가독)
+const PRED_KO: Record<'B' | 'P' | 'T', string> = { B: '뱅커', P: '플레이어', T: '타이' }
+
 interface SemiAutoPanelProps {
   rooms: Map<string, Room>
   onEnterRoom: (roomId: string) => Promise<void>
@@ -39,7 +42,6 @@ interface HistoryLog {
 
 export default function SemiAutoPanel({
   rooms,
-  onEnterRoom,
   fullScreen = false,
   onSwitchToPredict,
   availableFilters = [],
@@ -70,6 +72,7 @@ export default function SemiAutoPanel({
     toggle,
     updateSettings,
     enterRoom,
+    navigateToRoom,
     updateAvailableRooms,
     setSelectedRoomIds: setServiceSelectedRoomIds,
     // ✅ 이벤트 구독 콜백 (UI 반응용)
@@ -267,12 +270,10 @@ export default function SemiAutoPanel({
     console.log('[SemiAutoPanel] 🎲 handleEnterRoom triggered:', { id: room.id, name: room.koreanName, provider: room.provider })
     enterRoom(room)
     addHistoryLog(`방 선택: ${room.koreanName}`, 'info')
-    if (onEnterRoom) {
-      await onEnterRoom(room.id)
-    } else {
-      console.warn('[SemiAutoPanel] onEnterRoom prop is missing!')
-    }
-  }, [enterRoom, onEnterRoom, addHistoryLog])
+    // ✅ FIX: 수동 입장도 자동 모드와 동일하게 navigateToRoom()으로 실제 CDP 방 이동 수행.
+    // 기존엔 enterRoom(상태만)+onEnterRoom(예측모드)에 의존해 실제로 방이 안 바뀌던 문제 수정.
+    await navigateToRoom(room)
+  }, [enterRoom, navigateToRoom, addHistoryLog])
 
   // Get sorted rooms for quick selection (memoized)
   const sortedRooms = useMemo(() =>
@@ -368,7 +369,7 @@ export default function SemiAutoPanel({
           {waitingForResult ? (
             <div className="sa-compact-pred-waiting">
               <div className={`sa-compact-pred-circle ${lastPrediction?.prediction?.toLowerCase() || ''} ${resultOverlay ? 'has-overlay' : ''}`}>
-                {lastPrediction?.prediction || '?'}
+                {lastPrediction?.prediction ? PRED_KO[lastPrediction.prediction] : '?'}
                 {resultOverlay && (
                   <div className={`sa-compact-result-overlay ${resultOverlay.type}`}>
                     <span className="result-icon">
@@ -409,7 +410,7 @@ export default function SemiAutoPanel({
           ) : lastPrediction && lastPrediction.prediction ? (
             <div className={`sa-compact-pred-display ${isNewPrediction ? 'anim-pop' : ''}`}>
               <div className={`sa-compact-pred-circle ${lastPrediction.prediction.toLowerCase()} ${resultOverlay ? 'has-overlay' : ''}`}>
-                {lastPrediction.prediction}
+                {PRED_KO[lastPrediction.prediction]}
                 {resultOverlay && (
                   <div className={`sa-compact-result-overlay ${resultOverlay.type}`}>
                     <span className="result-icon">
