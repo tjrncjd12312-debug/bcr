@@ -14,9 +14,10 @@
 // 4. 마틴 한도 도달 시 방 이동
 // 5. Chrome CDP 탭 이동 연동 (하나의 탭에서 방 이동)
 
-import type { Room, Winner, Prediction, BettingPhaseEvent, RoomPredictionState, RoadResult } from '../../domain/entities'
+import type { Room, Winner, Prediction, BettingPhaseEvent, RoomPredictionState, RoadResult, BetOutcome } from '../../domain/entities'
 import { calculateBetAmount } from '../../domain/entities'
 import { winProfit } from '../../domain/betting/payout'
+import { isBetAccepted, isBetRejected } from '../../domain/betting/settlement'
 import type {
   ICasinoAdapter,
   IMultiRoomPredictionPort,
@@ -29,7 +30,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { toWinnerArray } from '../../domain/utils/converters'
 import { SemiAutoSettings, SemiAutoSettingsManager } from './semiauto/SemiAutoSettingsManager'
 import { SemiAutoStatsManager } from './semiauto/SemiAutoStatsManager'
-import { AutoBettingService } from './AutoBettingService'
+import { AutoBettingService, type BetExecutionResult, type BetExecutionStatus } from './AutoBettingService'
 import { MultiRoomPredictionService } from './MultiRoomPredictionService'
 import { CallbackManager } from '../utils'
 
@@ -67,6 +68,7 @@ export interface SemiAutoState {
   realBalance: number | null // 실제 잔액 (null = 연결 필요)
   currentBetAmount: number // 현재 배팅액 (마틴 적용)
   pendingBet: boolean // 배팅 전송 대기 중
+  realBetPlacementStatus: BetExecutionStatus | null
   // Room navigation
   isNavigating: boolean // 방 이동 중
   // Betting timer (UI용)
@@ -119,6 +121,7 @@ interface InternalState {
   realBalance: number | null
   currentBetAmount: number
   pendingBet: boolean
+  realBetPlacementStatus: BetExecutionStatus | null
   isNavigating: boolean
   currentRoomProvider: 'evolution' | 'pragmatic' | null
   bettingTimer: number
@@ -148,6 +151,7 @@ class SemiAutoServiceImpl {
     realBalance: null,
     currentBetAmount: 10000,
     pendingBet: false,
+    realBetPlacementStatus: null,
     isNavigating: false,
     bettingTimer: 0,
     lastEventRoomId: null,
@@ -187,6 +191,7 @@ class SemiAutoServiceImpl {
   private availableRooms: Map<string, Room> = new Map()
   private roomPredictionStats: Map<string, { wins: number; losses: number }> = new Map()
   private lastHistoryLengths: Map<string, number> = new Map()
+  private freshShoeDetectedAtByRoom: Map<string, number> = new Map()
 
   // Timer management
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set()
@@ -252,6 +257,8 @@ class SemiAutoServiceImpl {
 
     // Subscribe to shoe change via ICasinoAdapter port
     const unsubShoe = this.casinoAdapter.onShoeChange?.((roomId: string) => {
+      this.freshShoeDetectedAtByRoom.set(roomId, Date.now())
+      this.previousRoomIds.delete(roomId)
       if (roomId === this.internalState.currentRoomId) {
         this.resetRoomState()
         this.setStatus('새 슈 시작')
@@ -271,7 +278,7 @@ class SemiAutoServiceImpl {
         this.internalState.lastEventRoomId = event.roomId
         this.internalState.lastEventType = 'result'
       }
-      this.onGameResult(event.roomId, event.winner, this.internalState.roomHistory)
+      this.onGameResult(event.roomId, event.winner, this.internalState.roomHistory, event.betOutcome)
     })
     this.adapterUnsubscribers.push(unsubResult)
 
@@ -333,6 +340,13 @@ class SemiAutoServiceImpl {
 
   // ==================== Core Actions ====================
 
+  private hasUnsettledEvolutionBet(): boolean {
+    const status = this.internalState.realBetPlacementStatus
+    return this.internalState.currentRoomProvider === 'evolution' &&
+      this.internalState.waitingForResult &&
+      (status === 'confirmed' || status === 'unknown' || status === 'sent')
+  }
+
   /**
    * ✅ Clear all prediction-related state when changing rooms
    * bcrstore의 clearPredictionState() 참조
@@ -344,6 +358,7 @@ class SemiAutoServiceImpl {
     this.internalState.waitingForPrediction = false
     this.internalState.predictionMadeForRound = false
     this.internalState.currentRoomProvider = null
+    this.internalState.realBetPlacementStatus = null
     this.waitingForResultTimestamp = 0  // ✅ 타임스탬프 리셋
     this.predictionRequestRoom = null
     this.lastComparedResult = null
@@ -390,6 +405,11 @@ class SemiAutoServiceImpl {
     this.isStarting = true
 
     try {
+      if (this.hasUnsettledEvolutionBet()) {
+        this.settingsManager.setEnabled(false)
+        this.setStatus('실베팅 결과 대기 후 다시 시작할 수 있습니다')
+        return
+      }
       this.setStatus('시작 중...')
       this.clearPredictionState()
       this.statsManager.isFirstRound = true
@@ -420,10 +440,19 @@ class SemiAutoServiceImpl {
    * 현재 방 정보는 유지하고 예측만 중지
    */
   stop(): void {
-    this.setStatus('정지됨')
-    this.clearPredictionState()
-    this.statsManager.isFirstRound = true
+    this.settingsManager.setEnabled(false)
     this.stopContinuousSearch()
+
+    if (this.hasUnsettledEvolutionBet()) {
+      this.setStatus('정지됨 (실베팅 결과 대기)')
+      this.internalState.waitingForPrediction = false
+      this.predictionRequestRoom = null
+      this.stopBettingTimer()
+    } else {
+      this.setStatus('정지됨')
+      this.clearPredictionState()
+      this.statsManager.isFirstRound = true
+    }
 
     // ✅ Disable multi-room prediction service
     MultiRoomPredictionService.setAutoMode(false)
@@ -451,6 +480,12 @@ class SemiAutoServiceImpl {
         this.internalState.isNavigating = false
         this.emitStateChange()
       }
+      return
+    }
+
+    if (this.hasUnsettledEvolutionBet()) {
+      this.setStatus('실베팅 결과 대기 중에는 방을 이동할 수 없습니다')
+      this.emitStateChange()
       return
     }
 
@@ -483,9 +518,9 @@ class SemiAutoServiceImpl {
 
   // Fresh-Shoe 프리셋 트리거 처리: 후보 fresh-shoe 방 선택 → CDP navigate
   async handlePresetTrigger(currentRoomId: string, reason: import('./freshshoe').TriggerReason): Promise<void> {
-    // 후보 방 산출 — 테스트 훅이 있으면 그것, 아니면 production fallback (현재는 빈 배열, Task 11에서 와이어링)
+    // 후보 방 산출 — 테스트 훅이 있으면 그것, 아니면 검증된 shoe-change 후보를 사용
     const provider = this.candidatesProvider
-    const candidates: any[] = provider ? provider() : await this.collectFreshShoeCandidates()
+    const candidates: Room[] = provider ? provider() : this.collectFreshShoeCandidates()
     const next = candidates.find(r => r && r.id !== currentRoomId)
 
     if (!next) {
@@ -496,9 +531,26 @@ class SemiAutoServiceImpl {
     await this.navigateToRoom(next)
   }
 
-  // RoomFilterService 통해 fresh_shoe 방 후보 산출 — Task 11에서 와이어링.
-  private async collectFreshShoeCandidates(): Promise<any[]> {
-    return []
+  // Explicit shoe-change event + fresh_shoe filter를 모두 만족한 방만 이동 후보로 사용한다.
+  private collectFreshShoeCandidates(): Room[] {
+    const candidates: Array<{ room: Room; score: number }> = []
+    const hasSelectedRooms = this.selectedRoomIds.size > 0
+
+    for (const room of this.availableRooms.values()) {
+      if (room.id === this.internalState.currentRoomId) continue
+      if (!this.freshShoeDetectedAtByRoom.has(room.id)) continue
+      if (hasSelectedRooms && !this.selectedRoomIds.has(room.id)) continue
+      if (!this.settingsManager.isRoomEnabled(room.id)) continue
+      if (this.settingsManager.isRoomResting(room.id)) continue
+
+      const predictionState = this.getRoomPredictionState(room)
+      if (!this.roomFilterUseCase.matchesFilter(room, predictionState, 'fresh_shoe')) continue
+
+      candidates.push({ room, score: this.calculateRoomScore(room) })
+    }
+
+    candidates.sort((a, b) => b.score - a.score)
+    return candidates.map(({ room }) => room)
   }
 
   // 테스트 전용 훅
@@ -509,9 +561,24 @@ class SemiAutoServiceImpl {
 
   resetForTest(): void {
     this.candidatesProvider = null
+    this.freshShoeDetectedAtByRoom.clear()
+    this.availableRooms.clear()
+    this.selectedRoomIds.clear()
+    this.previousRoomIds.clear()
     this.internalState.currentRoomId = null
     this.internalState.currentRoomName = null
     this.internalState.isNavigating = false
+    this.internalState.lastPrediction = null
+    this.internalState.waitingForResult = false
+    this.internalState.waitingForPrediction = false
+    this.internalState.predictionMadeForRound = false
+    this.internalState.realBetPlacementStatus = null
+    this.internalState.totalBetAmount = 0
+    this.internalState.cumulativeProfit = 0
+    this.internalState.maxProfit = 0
+    this.internalState.maxLoss = 0
+    this.waitingForResultTimestamp = 0
+    this.settingsManager.setEnabled(false)
   }
 
   /**
@@ -519,6 +586,11 @@ class SemiAutoServiceImpl {
    */
   async navigateToRoom(room: Room): Promise<void> {
     if (this.internalState.isNavigating) return
+    if (room.id !== this.internalState.currentRoomId && this.hasUnsettledEvolutionBet()) {
+      this.setStatus('실베팅 결과 대기 중에는 방을 이동할 수 없습니다')
+      this.emitStateChange()
+      return
+    }
 
     // 네비게이션 시작 전 방 정보 스냅샷
     const navigationRoomId = room.id
@@ -654,6 +726,11 @@ class SemiAutoServiceImpl {
    * Exit room
    */
   exitRoom(): void {
+    if (this.hasUnsettledEvolutionBet()) {
+      this.setStatus('실베팅 결과 대기 중에는 방을 나갈 수 없습니다')
+      this.emitStateChange()
+      return
+    }
     this.clearPredictionState()
     this.internalState.currentRoomId = null
     this.internalState.currentRoomName = null
@@ -668,6 +745,10 @@ class SemiAutoServiceImpl {
    */
   updateAvailableRooms(rooms: Map<string, Room>): void {
     this.availableRooms = rooms
+
+    for (const roomId of this.freshShoeDetectedAtByRoom.keys()) {
+      if (!rooms.has(roomId)) this.freshShoeDetectedAtByRoom.delete(roomId)
+    }
 
     // Update history lengths for change detection
     rooms.forEach((room, id) => {
@@ -968,7 +1049,7 @@ class SemiAutoServiceImpl {
     // 결과 대기 중이면 스킵 (단, 타임아웃 복구 체크)
     if (this.internalState.waitingForResult) {
       const waitingTime = Date.now() - this.waitingForResultTimestamp
-      if (waitingTime > this.WAITING_RESULT_TIMEOUT_MS) {
+      if (waitingTime > this.WAITING_RESULT_TIMEOUT_MS && !this.hasUnsettledEvolutionBet()) {
         // Timeout Recovery
         this.internalState.waitingForResult = false
         this.internalState.predictionMadeForRound = false
@@ -1003,8 +1084,8 @@ class SemiAutoServiceImpl {
   /**
    * Handle game result - RESULT COMPARISON
    */
-  onGameResult(roomId: string, winner: Winner, history: Winner[]): void {
-    if (!this.settingsManager.isEnabled()) return
+  onGameResult(roomId: string, winner: Winner, history: Winner[], betOutcome?: BetOutcome): void {
+    if (!this.settingsManager.isEnabled() && !this.hasUnsettledEvolutionBet()) return
 
     // Auto-detect room
     if (!this.internalState.currentRoomId && roomId) {
@@ -1043,7 +1124,7 @@ class SemiAutoServiceImpl {
 
     // Compare with prediction (첫 라운드도 포함)
     if (this.internalState.lastPrediction && this.internalState.waitingForResult) {
-      this.compareResult(winner)
+      this.compareResult(winner, betOutcome)
     }
 
     // 첫 라운드 후속 처리
@@ -1231,17 +1312,20 @@ class SemiAutoServiceImpl {
 
   private getRoomPredictionState(room: Room): RoomPredictionState | null {
     const stats = this.roomPredictionStats.get(room.id)
-    if (!stats) return null
+    const shoeChangeDetectedAt = this.freshShoeDetectedAtByRoom.get(room.id)
+    if (!stats && shoeChangeDetectedAt === undefined) return null
 
-    const total = stats.wins + stats.losses
+    const wins = stats?.wins ?? 0
+    const losses = stats?.losses ?? 0
+    const total = wins + losses
     return {
       roomId: room.id,
       roomName: room.koreanName || room.name,
       lastPrediction: null,
       stats: {
         total,
-        correct: stats.wins,
-        winRate: total > 0 ? stats.wins / total : 0,
+        correct: wins,
+        winRate: total > 0 ? wins / total : 0,
         consecutiveWins: 0,
         consecutiveLosses: 0,
         maxConsecutiveWins: 0,
@@ -1251,6 +1335,7 @@ class SemiAutoServiceImpl {
       isFiltered: true,
       predictionCount: 0,
       history: [], // ✅ Fix TS Error
+      shoeChangeDetectedAt,
     }
   }
 
@@ -1311,6 +1396,18 @@ class SemiAutoServiceImpl {
   /**
    * Request prediction from server
    */
+  private applyForcedBetDirection(prediction: Prediction): Prediction {
+    if (prediction.isSkip || this.settingsManager.getSettings().forceBetDirection !== 'tie_only') {
+      return prediction
+    }
+
+    return {
+      ...prediction,
+      prediction: 'T',
+      reasoning: `${prediction.reasoning || 'prediction'} | fresh-shoe tie-only`,
+    }
+  }
+
   private async requestPrediction(): Promise<void> {
     if (!this.internalState.currentRoomId) return
     if (this.internalState.predictionMadeForRound) return
@@ -1356,6 +1453,7 @@ class SemiAutoServiceImpl {
       }
 
       if (prediction) {
+        prediction = this.applyForcedBetDirection(prediction)
         this.internalState.lastPrediction = prediction
         this.internalState.predictionMadeForRound = true
         this.internalState.lastBlockReason = null
@@ -1372,7 +1470,7 @@ class SemiAutoServiceImpl {
         } else {
           this.internalState.waitingForResult = true
           this.waitingForResultTimestamp = Date.now()
-          const pred = prediction.prediction === 'B' ? '뱅커' : '플레이어'
+          const pred = prediction.prediction === 'B' ? '뱅커' : prediction.prediction === 'P' ? '플레이어' : '타이'
           this.setStatus(`예측: ${pred} (${Math.round(prediction.confidence * 100)}%)`)
           if (prediction.prediction === 'B' || prediction.prediction === 'P') {
             if (this.settingsManager.getSettings().soundEnabled) {
@@ -1400,24 +1498,25 @@ class SemiAutoServiceImpl {
       const errorMsg = error instanceof Error ? error.message : 'unknown'
       const fallback = this.createRosePragmaticPrediction(errorMsg)
       if (fallback) {
-        this.internalState.lastPrediction = fallback
+        const effectiveFallback = this.applyForcedBetDirection(fallback)
+        this.internalState.lastPrediction = effectiveFallback
         this.internalState.predictionMadeForRound = true
         this.internalState.lastBlockReason = null
         this.internalState.waitingForResult = true
         this.waitingForResultTimestamp = Date.now()
 
-        const pred = fallback.prediction === 'B' ? '뱅커' : '플레이어'
-        this.setStatus(`ROSE 예측: ${pred} (${Math.round(fallback.confidence * 100)}%)`)
-        if (fallback.prediction === 'B' || fallback.prediction === 'P') {
+        const pred = effectiveFallback.prediction === 'B' ? '뱅커' : effectiveFallback.prediction === 'P' ? '플레이어' : '타이'
+        this.setStatus(`ROSE 예측: ${pred} (${Math.round(effectiveFallback.confidence * 100)}%)`)
+        if (effectiveFallback.prediction === 'B' || effectiveFallback.prediction === 'P') {
           if (this.settingsManager.getSettings().soundEnabled) {
-            this.soundPort.playPrediction(fallback.prediction)
+            this.soundPort.playPrediction(effectiveFallback.prediction)
           }
         }
         if (this.settingsManager.getSettings().autoBetting && this.internalState.currentRoomId) {
-          this.executeAutoBetting(fallback)
+          this.executeAutoBetting(effectiveFallback)
         }
 
-        this.emitPrediction(fallback)
+        this.emitPrediction(effectiveFallback)
         this.emitStateChange()
         return
       }
@@ -1480,13 +1579,18 @@ class SemiAutoServiceImpl {
     const betType: 'Banker' | 'Player' | 'Tie' =
       prediction.prediction === 'B' ? 'Banker' :
       prediction.prediction === 'P' ? 'Player' : 'Tie'
-    const result = this.internalState.currentRoomProvider === 'pragmatic'
+    const isPragmatic = this.internalState.currentRoomProvider === 'pragmatic'
+    const result = isPragmatic
       ? await this.placePragmaticBet(this.internalState.currentRoomId, betType, betAmount)
       : await AutoBettingService.placeBetForPrediction(
         prediction,
         this.internalState.currentRoomId,
         betAmount
       )
+    const placementStatus: BetExecutionStatus = isPragmatic
+      ? (result.success ? 'confirmed' : 'not_sent')
+      : (result as BetExecutionResult).placementStatus
+    this.internalState.realBetPlacementStatus = placementStatus
 
     if (result.success) {
       const pred = prediction.prediction === 'B' ? '뱅커' : prediction.prediction === 'P' ? '플레이어' : '타이'
@@ -1503,9 +1607,13 @@ class SemiAutoServiceImpl {
         martinLevel: this.statsManager.martin,
         timestamp: Date.now(),
       })
+    } else if (placementStatus === 'unknown') {
+      this.setStatus('⚠️ 체결 확인 중 - 결과 대기')
+      console.warn('[SemiAuto] Real bet confirmation unknown; waiting for authoritative resolved outcome')
     } else {
       this.setStatus(`⚠️ 배팅 실패: ${result.error || 'unknown'}`)
       console.log(`[SemiAuto] ❌ Auto bet failed: ${result.error}`)
+      this.internalState.waitingForResult = false
     }
 
     this.internalState.pendingBet = false
@@ -1535,7 +1643,7 @@ class SemiAutoServiceImpl {
   /**
    * Compare result with prediction
    */
-  private compareResult(winner: Winner): void {
+  private compareResult(winner: Winner, betOutcome?: BetOutcome): void {
     if (this.isComparingResult) return
 
     const now = Date.now()
@@ -1543,6 +1651,42 @@ class SemiAutoServiceImpl {
 
     const prediction = this.internalState.lastPrediction
     if (!prediction) return
+
+    if (
+      this.internalState.currentRoomProvider === 'evolution' &&
+      this.internalState.realBetPlacementStatus === 'unknown'
+    ) {
+      const pendingBet = this.internalState.currentRoomId
+        ? AutoBettingService.getPendingBet(this.internalState.currentRoomId)
+        : null
+      if (betOutcome?.gameId && pendingBet?.gameId && betOutcome.gameId !== pendingBet.gameId) return
+      if (!betOutcome) {
+        this.setStatus('체결 확인 중 - 서버 정산 대기')
+        this.emitStateChange()
+        return
+      }
+
+      const accepted = isBetAccepted(betOutcome, prediction.prediction as Winner)
+      const { rejected, errorCode } = isBetRejected(betOutcome, prediction.prediction as Winner)
+      if (!accepted) {
+        const reason = rejected
+          ? `배팅 거절(${errorCode || 'unknown'}) - 정산 제외`
+          : '서버 체결 내역 없음 - 정산 제외'
+        if (this.internalState.currentRoomId) {
+          AutoBettingService.onGameResult(this.internalState.currentRoomId)
+        }
+        this.internalState.lastPrediction = null
+        this.internalState.waitingForResult = false
+        this.internalState.predictionMadeForRound = false
+        this.internalState.realBetPlacementStatus = null
+        this.waitingForResultTimestamp = 0
+        this.setStatus(reason)
+        this.emitStateChange()
+        return
+      }
+
+      this.internalState.realBetPlacementStatus = 'confirmed'
+    }
 
     // Handle Tie outcome
     //   - If the user did NOT bet on Tie, the bet is a push (refunded — fall
@@ -1558,7 +1702,11 @@ class SemiAutoServiceImpl {
       this.internalState.lastPrediction = null
       this.internalState.waitingForResult = false
       this.internalState.predictionMadeForRound = false
+      this.internalState.realBetPlacementStatus = null
       this.waitingForResultTimestamp = 0
+      if (this.settingsManager.autoBetting && this.internalState.currentRoomId) {
+        AutoBettingService.onGameResult(this.internalState.currentRoomId)
+      }
       this.isComparingResult = false
       this.emitStateChange()
       return
@@ -1673,6 +1821,7 @@ class SemiAutoServiceImpl {
     this.internalState.lastPrediction = null
     this.internalState.waitingForResult = false
     this.internalState.predictionMadeForRound = false
+    this.internalState.realBetPlacementStatus = null
     this.waitingForResultTimestamp = 0  // ✅ 타임스탬프 리셋
 
     this.isComparingResult = false
@@ -1709,11 +1858,16 @@ class SemiAutoServiceImpl {
   }
 
   private resetRoomState(): void {
+    if (this.hasUnsettledEvolutionBet()) {
+      this.setStatus('새 슈 감지 - 기존 실베팅 결과 대기')
+      return
+    }
     this.statsManager.isFirstRound = true
     this.internalState.lastPrediction = null
     this.internalState.waitingForResult = false
     this.internalState.waitingForPrediction = false
     this.internalState.predictionMadeForRound = false
+    this.internalState.realBetPlacementStatus = null
     this.waitingForResultTimestamp = 0
     this.statsManager.resetFirstRoundBettingCount()
     this.lastComparedResult = null
@@ -1839,6 +1993,7 @@ class SemiAutoServiceImpl {
     this.availableRooms.clear()
     this.roomPredictionStats.clear()
     this.lastHistoryLengths.clear()
+    this.freshShoeDetectedAtByRoom.clear()
     this.previousRoomIds.clear()
   }
 }

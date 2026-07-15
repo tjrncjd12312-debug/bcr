@@ -251,25 +251,39 @@ export function AutoModeHistory({ logs }: AutoModeHistoryProps) {
 
                       <div className="card-message">{log.message}</div>
 
-                      {/* 카드 점수 표시 (승리/패배/타이 시) */}
-                      {(log.type === 'win' || log.type === 'loss' || (log.type === 'info' && log.winner === 'T')) && (
-                        <div className="card-score-display">
-                          <div className={`score-badge player ${log.winner === 'P' ? 'winner' : ''}`}>
-                            <span className="score-label">플레이어</span>
-                            <span className="score-value">{log.playerScore ?? '-'}</span>
+                      {/* 카드 점수 표시 (승리/패배/타이 시).
+                          로비 감시 방은 카지노가 '이긴 쪽 점수'만 보내므로 진 쪽 숫자는
+                          데이터에 없다 → '-' 대신 아는 쪽(이긴 쪽)만 깔끔히 표시한다.
+                          '대'는 양쪽이 다 있을 때만 보여준다. */}
+                      {(log.type === 'win' || log.type === 'loss' || (log.type === 'info' && log.winner === 'T')) && (() => {
+                        const hasP = typeof log.playerScore === 'number'
+                        const hasB = typeof log.bankerScore === 'number'
+                        if (!hasP && !hasB && log.winner !== 'T') return null
+                        return (
+                          <div className="card-score-display">
+                            {hasP && (
+                              <div className={`score-badge player ${log.winner === 'P' ? 'winner' : ''}`}>
+                                <span className="score-label">플레이어</span>
+                                <span className="score-value">{log.playerScore}</span>
+                              </div>
+                            )}
+                            {hasP && hasB && (
+                              <div className="score-vs">
+                                <span className="vs-text">대</span>
+                              </div>
+                            )}
+                            {hasB && (
+                              <div className={`score-badge banker ${log.winner === 'B' ? 'winner' : ''}`}>
+                                <span className="score-label">뱅커</span>
+                                <span className="score-value">{log.bankerScore}</span>
+                              </div>
+                            )}
+                            {log.winner === 'T' && (
+                              <div className="score-tie-badge">무</div>
+                            )}
                           </div>
-                          <div className="score-vs">
-                            <span className="vs-text">대</span>
-                          </div>
-                          <div className={`score-badge banker ${log.winner === 'B' ? 'winner' : ''}`}>
-                            <span className="score-label">뱅커</span>
-                            <span className="score-value">{log.bankerScore ?? '-'}</span>
-                          </div>
-                          {log.winner === 'T' && (
-                            <div className="score-tie-badge">무</div>
-                          )}
-                        </div>
-                      )}
+                        )
+                      })()}
 
                       {(log.betAmount !== undefined || log.profit !== undefined) && (
                         <div className="card-stats">

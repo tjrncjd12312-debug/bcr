@@ -582,10 +582,8 @@ mod tests {
 
     #[test]
     fn parses_rose_betsopen_state() {
-        let msg = parse_message(
-            r#"{"betsopen":{"table":"413","gameId":"GAME-7","value":15000}}"#,
-        )
-        .expect("message should parse");
+        let msg = parse_message(r#"{"betsopen":{"table":"413","gameId":"GAME-7","value":15000}}"#)
+            .expect("message should parse");
 
         match msg {
             PragmaticMessage::GameState(state) => {

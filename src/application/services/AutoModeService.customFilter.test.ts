@@ -35,6 +35,8 @@ import AutoModeService, { type AutoModeBetLogEvent } from './AutoModeService'
 import { VirtualBettingService } from './VirtualBettingService'
 import { PatternBettingService } from './PatternBettingService'
 import { CustomPatternService } from './CustomPatternService'
+import CustomStrategyService from './CustomStrategyService'
+import CustomStrategyRuntime from './customstrategy/CustomStrategyRuntime'
 
 class MockCasinoAdapter implements ICasinoAdapter {
   readonly name = 'Mock'
@@ -134,6 +136,8 @@ describe('AutoModeService — custom filter end-to-end', () => {
     // Reseed CustomPatternService from cleared localStorage so the pattern
     // created in this test is the only one the system sees.
     CustomPatternService.reinitialize()
+    CustomStrategyService.resetToDefault()
+    CustomStrategyRuntime.resetAll()
 
     AutoModeService.dispose()
     AutoModeService.initialize()
@@ -267,5 +271,87 @@ describe('AutoModeService — custom filter end-to-end', () => {
     expect(capture.betAmount).toBe(BASE_BET)
     // Bet direction still comes from custom pattern (P)
     expect(capture.betType).toBe('Player')
+  })
+
+  it('runs a structured strategy through trigger, first win, second win, and clear', async () => {
+    const chronological = 'PPBBPPBBPPBBPPB'.split('') as Array<'P' | 'B'>
+    const roomId = 'rStructured'
+    const roomAt15 = makeRoom(roomId, [...chronological].reverse())
+    adapter.setRoom(roomAt15)
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms([roomId], 'strategy:no-streak-15-two-hit' as any)
+    await flush(FILTER_TRANSITION_WAIT_MS)
+
+    const placed: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog(event => {
+      if (event.roomId === roomId && event.type === 'bet_placed') placed.push(event)
+    })
+
+    // Hand 15 only arms the strategy. It must not bet until the next P/B result.
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+    expect(placed).toHaveLength(0)
+
+    // Hand 16 is the trigger P; the bet begins in hand 17.
+    const roomAt16 = makeRoom(roomId, ['P', ...[...chronological].reverse()])
+    adapter.setRoom(roomAt16)
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+    expect(placed[0]).toMatchObject({
+      prediction: 'P',
+      betType: 'Player',
+      betAmount: 10000,
+      customStrategyStage: 1,
+      customStrategyAttempt: 1,
+    })
+
+    // First win advances inside the same stage to attempt 2 instead of resetting.
+    const roomAt17 = makeRoom(roomId, ['P', 'P', ...[...chronological].reverse()])
+    adapter.setRoom(roomAt17)
+    adapter.emitGameResult({ roomId, winner: 'P' })
+    await flush()
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+    expect(placed[1]).toMatchObject({ betAmount: 10000, customStrategyStage: 1, customStrategyAttempt: 2 })
+
+    // Second consecutive win clears this room for the shoe.
+    const roomAt18 = makeRoom(roomId, ['P', 'P', 'P', ...[...chronological].reverse()])
+    adapter.setRoom(roomAt18)
+    adapter.emitGameResult({ roomId, winner: 'P' })
+    await flush()
+    expect(CustomStrategyRuntime.getSession('no-streak-15-two-hit', roomId)).toMatchObject({ status: 'cleared' })
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+    expect(placed).toHaveLength(2)
+    unsub()
+  })
+
+  it('moves a first-attempt loss to the next stage amount without invoking martin progression', async () => {
+    const chronological = 'PPBBPPBBPPBBPPB'.split('') as Array<'P' | 'B'>
+    const roomId = 'rStructuredLoss'
+    adapter.setRoom(makeRoom(roomId, [...chronological].reverse()))
+    AutoModeService.start()
+    AutoModeService.setActiveBettingRooms([roomId], 'strategy:no-streak-15-two-hit' as any)
+    await flush(FILTER_TRANSITION_WAIT_MS)
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+
+    const placed: AutoModeBetLogEvent[] = []
+    const unsub = AutoModeService.onBetLog(event => {
+      if (event.roomId === roomId && event.type === 'bet_placed') placed.push(event)
+    })
+    adapter.setRoom(makeRoom(roomId, ['P', ...[...chronological].reverse()]))
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+    expect(placed[0]?.betAmount).toBe(10000)
+
+    adapter.setRoom(makeRoom(roomId, ['B', 'P', ...[...chronological].reverse()]))
+    adapter.emitGameResult({ roomId, winner: 'B' })
+    await flush()
+    adapter.emitBettingPhase({ roomId, remainingSeconds: 10, phase: 'start' })
+    await flush()
+    expect(placed[1]).toMatchObject({ betAmount: 20000, customStrategyStage: 2, customStrategyAttempt: 1 })
+    expect(AutoModeService.getRoomState(roomId)?.martinLevel).toBe(0)
+    unsub()
   })
 })

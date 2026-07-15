@@ -29,7 +29,8 @@ export interface IMartingaleManager {
 
   // 연승/연패 관리
   recordWin(roomId: string): void
-  recordLoss(roomId: string): void
+  // advanceLevel=false면 레벨을 올리지 않고 연패만 카운트(flat 등 비진행형 전략용).
+  recordLoss(roomId: string, advanceLevel?: boolean): void
 
   // 배팅 금액 계산 (Codex 피드백: 여기에 통합)
   calculateBetAmount(
@@ -118,12 +119,16 @@ export class MartingaleManager implements IMartingaleManager {
     state.level = 0
   }
 
-  recordLoss(roomId: string): void {
+  recordLoss(roomId: string, advanceLevel = true): void {
     const state = this.ensureState(roomId)
     state.consecutiveLosses++
     state.consecutiveWins = 0
-    // 패배 시 마틴 레벨 증가 (최대 레벨까지)
-    state.level = Math.min(state.level + 1, this.maxLevel)
+    // 패배 시 마틴 레벨 증가 (최대 레벨까지).
+    // 🆕 2026-06-23: flat 등 비진행형 전략은 advanceLevel=false로 레벨을 0에 고정한다 —
+    //   안 그러면 phantom level>0로 방이 '마틴 락'이 돼 회전/동시배팅 설정을 위반한다. 연패 카운트는 유지.
+    if (advanceLevel) {
+      state.level = Math.min(state.level + 1, this.maxLevel)
+    }
   }
 
   // ==================== 배팅 금액 계산 ====================

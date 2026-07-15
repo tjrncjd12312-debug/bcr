@@ -30,8 +30,14 @@ export const useRoomFilter = ({
     filterSettingsSignature
 }: UseRoomFilterProps) => {
     return useMemo(() => {
+        const isLockedAutoModeRoom = (roomId: string) => {
+            const state = bettingStates.get(roomId)
+            return !!state && (state.waitingForResult || state.martinLevel > 0)
+        }
+
         // 1. Basic Filtering (Baccarat only, excluding special ones)
         let roomList = rooms.filter(room => {
+            if (isLockedAutoModeRoom(room.id)) return true
             const name = (room.koreanName || room.name || '').toLowerCase()
             if (name.includes('salon') || name.includes('lightning')) return false
             if (!name.includes('baccarat') && !name.includes('바카라')) return false
@@ -40,13 +46,14 @@ export const useRoomFilter = ({
 
         // 2. User Selection Filtering
         if (enabledRoomIds && enabledRoomIds.size > 0) {
-            roomList = roomList.filter(room => enabledRoomIds.has(room.id))
+            roomList = roomList.filter(room => enabledRoomIds.has(room.id) || isLockedAutoModeRoom(room.id))
         }
 
         // 3. Pattern Filtering
         const effectiveFilters = activeFilters ?? (selectedPattern === 'all' ? [] : [selectedPattern])
         if (effectiveFilters.length > 0 && matchesFilter) {
             roomList = roomList.filter(room => {
+                if (isLockedAutoModeRoom(room.id)) return true
                 const state = roomStates.get(room.id) || null
                 return effectiveFilters.some(filterType => matchesFilter(room, state, filterType))
             })

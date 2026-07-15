@@ -56,7 +56,7 @@ export class FreshShoeTieMartingalePreset {
   private state: PersistedState = { ...STORAGE_DEFAULT }
   private snapshots: Partial<Record<Mode, Snapshot>> = {}
   private stoppedRooms: Set<string> = new Set()
-  private activeMode: Mode | null = null
+  private filterActivatedByPreset = false
 
   constructor(private readonly deps: PresetDeps) {
     this.loadFromStorage()
@@ -118,14 +118,16 @@ export class FreshShoeTieMartingalePreset {
 
     try {
       // 1. fresh_shoe 필터 활성
-      if (!filterWasActive) this.deps.filterService.toggleFilter('fresh_shoe')
+      if (!filterWasActive) {
+        this.deps.filterService.toggleFilter('fresh_shoe')
+        if (Object.keys(this.snapshots).length === 0) this.filterActivatedByPreset = true
+      }
 
       // 2. forceBetDirection='tie_only'
       bridge.update({ forceBetDirection: 'tie_only' })
 
       // 3. listener 활성
       snap.unsubscribeListener = this.deps.listener.enable(mode)
-      this.activeMode = mode
 
       // 4. listener 트리거 콜백 연결
       snap.unsubscribeTrigger = this.deps.listener.onTrigger((roomId, reason) => {
@@ -134,7 +136,7 @@ export class FreshShoeTieMartingalePreset {
         } else {
           void this.deps.semiAutoTriggerHandler(roomId, reason)
         }
-      })
+      }, mode)
 
       // 5. shoe-change 구독 (auto 모드에서 STOPPED 해제용)
       if (mode === 'auto') {
@@ -155,7 +157,7 @@ export class FreshShoeTieMartingalePreset {
       if (!filterWasActive && this.deps.filterService.getActiveFilters().includes('fresh_shoe')) {
         this.deps.filterService.toggleFilter('fresh_shoe')
       }
-      this.activeMode = null
+      if (Object.keys(this.snapshots).length === 0) this.filterActivatedByPreset = false
       throw err
     }
   }
@@ -168,11 +170,15 @@ export class FreshShoeTieMartingalePreset {
     snap.unsubscribeListener?.()
     const bridge = mode === 'auto' ? this.deps.settingsBridge.auto : this.deps.settingsBridge.semiauto
     bridge.update({ forceBetDirection: snap.prevForceBetDirection })
-    if (!snap.filterWasActive && this.deps.filterService.getActiveFilters().includes('fresh_shoe')) {
+    delete this.snapshots[mode]
+    if (
+      Object.keys(this.snapshots).length === 0 &&
+      this.filterActivatedByPreset &&
+      this.deps.filterService.getActiveFilters().includes('fresh_shoe')
+    ) {
       this.deps.filterService.toggleFilter('fresh_shoe')
     }
-    delete this.snapshots[mode]
-    if (this.activeMode === mode) this.activeMode = null
+    if (Object.keys(this.snapshots).length === 0) this.filterActivatedByPreset = false
     if (mode === 'auto') this.stoppedRooms.clear()
   }
 

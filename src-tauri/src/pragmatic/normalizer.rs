@@ -75,7 +75,9 @@ pub struct NormalizedBalanceUpdate {
 
 pub fn normalize_message(msg: PragmaticMessage) -> Option<CasinoEvent> {
     match msg {
-        PragmaticMessage::TableConfig(data) => normalize_table_configs(data).map(CasinoEvent::RoomUpdate),
+        PragmaticMessage::TableConfig(data) => {
+            normalize_table_configs(data).map(CasinoEvent::RoomUpdate)
+        }
         PragmaticMessage::Statistics(data) => {
             tracing::debug!(
                 "🎲 Normalizer: processing Statistics for tableId={}",

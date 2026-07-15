@@ -26,7 +26,7 @@
   flex-direction: column;
   overflow: hidden;
   animation: modal-pop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  /* Modal-specific: purple accent glow + subtle inner highlight */
+  /* Modal-specific: restrained action glow + subtle inner highlight */
   box-shadow:
     var(--shadow-modal),
     var(--shadow-glow-accent),

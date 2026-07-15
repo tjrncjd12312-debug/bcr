@@ -13,6 +13,7 @@ import type {
 import { TIE_DROUGHT_THRESHOLD, FRESH_ROOM_GAMES } from '../../domain/entities'
 import { toWinnerArray } from '../../domain/utils/converters'
 import CustomPatternService from './CustomPatternService'
+import CustomStrategyService from './CustomStrategyService'
 import FilterThresholdsService from './FilterThresholdsService'
 
 // NOTE: 내장 패턴(FILTER_DEFINITIONS) 제거됨
@@ -109,6 +110,10 @@ class RoomFilterServiceImpl {
     CustomPatternService.onChange((patterns) => {
       this.setCustomPatterns(patterns)
     })
+    CustomStrategyService.onChange(() => {
+      this.cleanupInactiveStrategyFilters()
+      this.emitAvailableFiltersChange()
+    })
     // Re-emit available filters when thresholds change so labels (e.g. "타이 가뭄 (20)") update live
     FilterThresholdsService.onChange(() => {
       this.emitAvailableFiltersChange()
@@ -127,6 +132,7 @@ class RoomFilterServiceImpl {
       tieFrequentStart,
       tieFrequentMinCount,
       tieFrequentMaxCount,
+      tieFrequentRequireFullWindow,
       freshRoomGames,
       freshShoeMaxGameNumber,
     } = FilterThresholdsService.get()
@@ -146,7 +152,10 @@ class RoomFilterServiceImpl {
           ? `타이 없음 (${rangeText})`
           : `타이 자주 (${rangeText})`
         const endGame = tieFrequentStart + tieFrequentWindow - 1
-        description = `${tieFrequentStart}~${endGame}번째 게임 사이에 Tie가 ${rangeText} 나온 방`
+        // requireFullWindow 상태를 설명에 포함 → 체크박스 토글 시 label/description 변경으로
+        // 프론트(filterSettingsSignature)가 즉시 재필터링한다(실시간 반영).
+        const entryText = tieFrequentRequireFullWindow ? '구간 완료 후 진입' : '슈 시작부터 진입'
+        description = `${tieFrequentStart}~${endGame}번째 게임 사이에 Tie가 ${rangeText} 나온 방 · ${entryText}`
       } else if (filter.type === 'fresh_room') {
         label = `신규 방 (≤${freshRoomGames})`
         description = `방 진입 후 ${freshRoomGames}게임 이내`
@@ -178,7 +187,16 @@ class RoomFilterServiceImpl {
         }
       })
 
-    return [...builtin, ...customFilters]
+    const strategyFilters: RoomFilter[] = CustomStrategyService.getEnabledStrategies().map(strategy => ({
+      type: `strategy:${strategy.id}` as RoomFilterType,
+      enabled: this.activeFilters.has(`strategy:${strategy.id}` as RoomFilterType),
+      label: strategy.name,
+      description: CustomStrategyService.getLabel(`strategy:${strategy.id}`)?.description || strategy.description || '커스텀 전략',
+      isStrategy: true,
+      strategyId: strategy.id,
+    }))
+
+    return [...builtin, ...customFilters, ...strategyFilters]
   }
 
   getActiveFilters(): RoomFilterType[] {
@@ -301,6 +319,10 @@ class RoomFilterServiceImpl {
     // history[0] = 가장 최신 결과
     const winners = toWinnerArray(room.history)
 
+    if (this.isStrategyFilter(filterType)) {
+      return CustomStrategyService.matchesFilter(filterType, winners)
+    }
+
     if (this.isCustomFilter(filterType)) {
       const pattern = this.getCustomPatternByType(filterType)
       if (!pattern) return false
@@ -363,14 +385,23 @@ class RoomFilterServiceImpl {
       }
 
       case 'tie_frequent': {
-        const { tieFrequentWindow, tieFrequentStart, tieFrequentMinCount, tieFrequentMaxCount } = FilterThresholdsService.get()
-        // history is newest-first; evaluate the configured shoe interval with
-        // the results seen so far. This lets "1~60 games, Tie 0~0" surface a
-        // brand-new/first-hand shoe immediately instead of waiting for all 60
-        // games to finish.
-        if (winners.length < tieFrequentStart - 1) return false
+        const { tieFrequentWindow, tieFrequentStart, tieFrequentMinCount, tieFrequentMaxCount, tieFrequentRequireFullWindow } = FilterThresholdsService.get()
+        // history는 newest-first. '정확 모델'(사용자 확인 2026-07-07): 슈 시작(game `start`)부터
+        // 현재 최신까지 '전체' 타이 수를 [min,max]로 판정한다 → 타이가 한 번이라도 나오면(창 밖이라도)
+        // 그 방은 목록에서 빠지고, 새 슈로 히스토리가 리셋되면 다시 후보가 된다. window는 '진입에
+        // 필요한 최소 진행 판수' 게이트:
+        //  - requireFullWindow(기본): start+window 판이 다 지나야 판정("1~20판 무타이면 진입").
+        //  - false: 슈 시작부터 조기 진입.
+        // 참고: '20판 무타이'는 원래 드문 조건이라 매칭 방이 적다(버그 아님) — 방을 더 띄우려면
+        //   window를 줄이거나 requireFullWindow를 끈다.
+        const windowEnd = tieFrequentStart - 1 + tieFrequentWindow
+        if (tieFrequentRequireFullWindow) {
+          if (winners.length < windowEnd) return false
+        } else if (winners.length < tieFrequentStart - 1) {
+          return false
+        }
         const chrono = [...winners].reverse()
-        const slice = chrono.slice(tieFrequentStart - 1, tieFrequentStart - 1 + tieFrequentWindow)
+        const slice = chrono.slice(tieFrequentStart - 1)
         const tieCount = slice.filter(w => w === 'T').length
         return tieCount >= tieFrequentMinCount && tieCount <= tieFrequentMaxCount
       }
@@ -386,9 +417,9 @@ class RoomFilterServiceImpl {
 
       case 'fresh_shoe': {
         const { freshShoeMaxGameNumber } = FilterThresholdsService.get()
-        if (predictionState?.isShoeReset === true) return true
         const historyLen = winners.length
-        return historyLen > 0 && historyLen <= freshShoeMaxGameNumber
+        const hasVerifiedShoeChange = typeof predictionState?.shoeChangeDetectedAt === 'number'
+        return hasVerifiedShoeChange && historyLen > 0 && historyLen <= freshShoeMaxGameNumber
       }
 
       default:
@@ -469,6 +500,10 @@ class RoomFilterServiceImpl {
     return typeof type === 'string' && type.startsWith('custom:')
   }
 
+  private isStrategyFilter(type: RoomFilterType): boolean {
+    return CustomStrategyService.isStrategyFilter(type)
+  }
+
   private getCustomPatternByType(type: RoomFilterType): CustomPattern | null {
     if (!this.isCustomFilter(type)) return null
     const id = (type as string).replace('custom:', '')
@@ -523,6 +558,20 @@ class RoomFilterServiceImpl {
     if (changed) {
       this.emitFilterChange()
     }
+  }
+
+  private cleanupInactiveStrategyFilters(): void {
+    const validIds = new Set(
+      CustomStrategyService.getEnabledStrategies().map(strategy => `strategy:${strategy.id}` as RoomFilterType)
+    )
+    let changed = false
+    this.activeFilters.forEach(filter => {
+      if (this.isStrategyFilter(filter) && !validIds.has(filter)) {
+        this.activeFilters.delete(filter)
+        changed = true
+      }
+    })
+    if (changed) this.emitFilterChange()
   }
 
   // ==================== Lifecycle ====================

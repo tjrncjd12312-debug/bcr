@@ -28,6 +28,10 @@ export interface UseAutoModeResult {
   lastEventTime: number | null
   startTime: number | null
   startBalance: number
+  /** 🆕 실모드 표시용 보유금(시작잔액+누적손익−실배팅 pending). 배팅 즉시 차감 반영. 가상/미수신 시 null/undefined. */
+  realDisplayBalance?: number | null
+  /** 🆕 실모드 '진짜 돈' 손익(실잔액 − 시작잔액 + pending). 자체추정 아님. 가상/미수신 시 null/undefined. */
+  realNetProfit?: number | null
   // tie_frequent 자동 배팅에서 이 슈 동안 이미 적중한 방 ID 목록
   tieAutoCompletedRoomIds: string[]
 
@@ -111,6 +115,8 @@ export function useAutoMode(): UseAutoModeResult {
     lastEventTime: state.lastEventTime,
     startTime: state.startTime,
     startBalance: state.startBalance,
+    realDisplayBalance: state.realDisplayBalance,
+    realNetProfit: state.realNetProfit,
     tieAutoCompletedRoomIds: state.tieAutoCompletedRoomIds,
     // Actions
     toggle,

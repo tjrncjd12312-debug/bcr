@@ -99,17 +99,12 @@ export function setupContainer(): void {
     filterService: RoomFilterService,
     settingsBridge: {
       auto: {
-        // AutoModeSettings (public type) doesn't declare forceBetDirection, but the underlying
-        // settings object (from automode/types.ts AutoModeSettings) does — cast to access it.
-        get: () => ({ forceBetDirection: (AutoModeService.getSettings() as unknown as Record<string, unknown>)['forceBetDirection'] as 'auto' | 'tie_only' | undefined }),
+        get: () => ({ forceBetDirection: AutoModeService.getSettings().forceBetDirection }),
         update: (patch) => AutoModeService.updateSettings(patch as Parameters<typeof AutoModeService.updateSettings>[0]),
       },
       semiauto: {
-        // SemiAutoSettings does not include forceBetDirection; use no-op bridge.
-        // TODO(freshshoe-forceBetDirection): expose forceBetDirection on SemiAutoSettings
-        // and wire it through SemiAutoService.updateSettings when needed.
-        get: () => ({ forceBetDirection: 'auto' as const }),
-        update: (_patch) => { /* no-op — SemiAutoService has no forceBetDirection setting */ },
+        get: () => ({ forceBetDirection: SemiAutoService.getState().settings.forceBetDirection }),
+        update: (patch) => SemiAutoService.updateSettings(patch),
       },
     },
     listener: moveOnTieListener,

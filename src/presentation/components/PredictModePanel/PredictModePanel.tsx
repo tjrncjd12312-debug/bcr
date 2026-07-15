@@ -845,7 +845,11 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
           <>
             {/* Room List - Takes most space */}
             <main className="predict-rooms">
-              {status === 'idle' ? (
+              {(status === 'idle' && rooms.size === 0) ? (
+                /* idle 분기는 "방 데이터가 아예 없을 때"만 빈 화면을 띄운다. 끊김/킥아웃으로
+                   evolution_multi_disconnected 핸들러가 status를 'idle'로 떨궈도, rooms Map에
+                   직전 방 데이터가 그대로 남아 있으면(어댑터 disconnect는 호출되지 않음) 목록을
+                   유지한다 — 데이터가 멀쩡한데 화면이 통째로 사라지던 회귀를 막는다. */
                 <div className="predict-empty">
                   <div className="predict-empty__icon">
                     <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -865,8 +869,10 @@ export default function PredictModePanel({ onLogout, sessionWarning, isOnline }:
                   <div className="predict-loading__spinner" />
                   <div className="predict-loading__text">연결 중...</div>
                 </div>
-              ) : !roomsReady ? (
-                /* 로비소켓 연결됨, 방 데이터 수신 중 */
+              ) : (!roomsReady && rooms.size === 0) ? (
+                /* 방 데이터가 아직 0개일 때만 스피너. 데이터가 들어왔는데 roomsReady 플래그가
+                   끊김/재연결로 false에 갇혀도 목록을 가리지 않도록 rooms.size로 게이팅한다.
+                   (데이터는 있는데 필터로 다 걸러진 경우는 아래 "조건에 맞는 방 없음"으로 명확히 구분) */
                 <div className="predict-loading">
                   <div className="predict-loading__spinner" />
                   <div className="predict-loading__text">방 데이터 수신 중...</div>

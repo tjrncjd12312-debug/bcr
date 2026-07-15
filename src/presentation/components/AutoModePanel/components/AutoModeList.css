@@ -16,8 +16,8 @@
     padding: 12px 16px;
     background: var(--bg-tertiary);
     border-bottom: 1px solid var(--border-subtle);
-    font-size: 11px;
-    color: var(--text-muted);
+    font-size: 12px;
+    color: var(--text-secondary);
     text-transform: uppercase;
     font-weight: 700;
     letter-spacing: 0.5px;
@@ -52,7 +52,7 @@
     border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-card);
     transition: var(--transition-smooth);
-    height: 52px;
+    min-height: 60px;
 }
 
 .auto-mode__list-row:hover {
@@ -75,7 +75,7 @@
 
 /* Columns */
 .col-room {
-    width: 160px;
+    width: 175px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -83,7 +83,7 @@
 }
 
 .col-status {
-    width: 70px;
+    width: 145px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -94,34 +94,21 @@
     text-align: center;
 }
 
-.col-game {
-    width: 60px;
-    text-align: right;
-    color: var(--text-secondary);
-    font-size: 11px;
-}
-
 .col-stats {
-    width: 60px;
+    width: 70px;
     text-align: center;
-}
-
-.col-score {
-    width: 80px;
-    text-align: center;
-    font-family: var(--font-mono);
-    font-size: 13px;
 }
 
 .col-trend {
     flex: 1;
+    min-width: 104px;
     display: flex;
     justify-content: flex-end;
     padding-right: 16px;
 }
 
 .col-filter {
-    width: 150px;
+    width: 180px;
     display: flex;
     align-items: center;
     justify-content: flex-start;
@@ -129,7 +116,7 @@
 }
 
 .col-strategy {
-    width: 120px;
+    width: 150px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -138,13 +125,13 @@
 }
 
 .col-predict {
-    width: 140px;
+    width: 165px;
     display: flex;
     justify-content: center;
 }
 
 .col-profit {
-    width: 90px;
+    width: 100px;
     text-align: right;
     font-family: var(--font-mono);
     font-weight: 700;
@@ -152,7 +139,7 @@
 
 /* Column Details */
 .room-name {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text-primary);
     font-weight: 700;
     white-space: nowrap;
@@ -162,7 +149,7 @@
 }
 
 .room-id {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
 }
 

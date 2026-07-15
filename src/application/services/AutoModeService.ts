@@ -19,15 +19,23 @@ import type {
   RoomFilterType,
   PatternBetConfig,
   Winner,
+  BetOutcome,
 } from '../../domain/entities'
 import { winProfit } from '../../domain/betting/payout'
+import { isBetAccepted, isBetRejected, predResultToSpot } from '../../domain/betting/settlement'
 import type { ICasinoAdapter, IMultiRoomPredictionPort } from '../../domain/interfaces'
 import { container } from '../di'
 import { CallbackManager } from '../utils'
 import { VirtualBettingService } from './VirtualBettingService'
-import { AutoBettingService } from './AutoBettingService'
+import { AutoBettingService, type BetExecutionStatus } from './AutoBettingService'
 import { MultiRoomPredictionService } from './MultiRoomPredictionService'
 import { PatternBettingService } from './PatternBettingService'
+import FilterThresholdsService from './FilterThresholdsService'
+import CustomStrategyService from './CustomStrategyService'
+import CustomStrategyRuntime, {
+  type CustomStrategyBetDecision,
+  type CustomStrategySessionStatus,
+} from './customstrategy/CustomStrategyRuntime'
 
 // ==================== AutoMode Modules Integration ====================
 import {
@@ -91,6 +99,8 @@ export interface RoomBettingState {
   lastPrediction: Prediction | null
   /** First bet in the current martingale chain. Kept after a loss so recovery bets use the same direction. */
   martinRecoveryPrediction: Prediction | null
+  /** Strategy captured when the current progression chain started. */
+  martinRecoveryStrategy: AutoModeSettings['betStrategy'] | null
   lastBetAmount: number
   waitingForResult: boolean
   lastBetTime: number | null
@@ -102,6 +112,12 @@ export interface RoomBettingState {
   lastInferenceRetryTime: number | null
   // Bug Fix: 배팅 시점의 모드 저장 (결과 처리 시 모드 불일치 방지)
   wasVirtualBet?: boolean
+  /** Real-bet transport/confirmation state. `unknown` must remain pending until resolved. */
+  placementStatus?: BetExecutionStatus
+  customStrategyId?: string
+  customStrategyStage?: number
+  customStrategyAttempt?: number
+  customStrategyStatus?: CustomStrategySessionStatus
 }
 
 export interface AutoModeState {
@@ -124,7 +140,14 @@ export interface AutoModeState {
   startBalance: number
   // tie_frequent 자동 배팅에서 이 슈 동안 이미 적중(또는 종료)한 방 ID 목록.
   // UI 카운트와 후보 풀에서 제외하기 위해 노출. 슈가 갈리면 자동 비워진다.
+  // Zero-tie tie_frequent only: a Tie completes the room for the current shoe.
+  // Shoe change clears this marker, so the room can re-enter if it matches the
+  // user's current filter thresholds again.
   tieAutoCompletedRoomIds: string[]
+  /** 🆕 실배팅 모드의 실잔액 기반 누적 손익(자체 추정 cumulativeProfit과 별개). 가상/미수신 시 null/undefined. */
+  realNetProfit?: number | null
+  /** 🆕 실모드 표시용 보유금 = 시작잔액 + 누적손익 − 실배팅 pending. 배팅 즉시 차감 반영(가상모드와 동일 모델). */
+  realDisplayBalance?: number | null
 }
 
 // 로그 이벤트 타입
@@ -156,6 +179,9 @@ export interface AutoModeBetLogEvent {
   playerScore?: number
   /** 뱅커 카드 합계 점수 (결과 표시용) */
   bankerScore?: number
+  customStrategyId?: string
+  customStrategyStage?: number
+  customStrategyAttempt?: number
 }
 
 type StateChangeCallback = (state: AutoModeState) => void
@@ -207,8 +233,10 @@ class AutoModeServiceImpl {
       autoBetting: false,
     }
 
-    // globalMaxConsecutiveLosses는 maxMartin과 항상 동일하게 유지 (하위 호환)
+    // globalMaxConsecutiveLosses는 maxMartin과 항상 동일하게 유지 (하위 호환) — 마틴은 MAX 단까지
+    // 진행(이길 때까지)이 정상 동작이므로 연패 횟수로 방을 중간에 멈추지 않는다(사용자 확인 2026-06-24).
     this.settings.globalMaxConsecutiveLosses = this.settings.maxMartin
+    this.normalizeCustomBetSettings()
 
     // MartingaleManager 내부 cap을 사용자 설정과 동기화 — 그렇지 않으면 recordLoss가
     // 내부 기본값(5)에서 막혀 100단 설정해도 level이 5에서 더 안 올라간다.
@@ -217,8 +245,45 @@ class AutoModeServiceImpl {
     console.log('[AutoMode] Settings loaded, enabled forced to false for safety, maxMartin synced:', this.settings.maxMartin)
   }
 
-  // tieAutoCompletedRoomIds는 derived (this.tieAutoCompletedRooms에서 매번 스냅샷),
-  // 그래서 state에 보관하지 않고 getState에서 합쳐서 노출한다.
+  private normalizeCustomBetSettings(): void {
+    if (this.settings.betStrategy !== 'custom') return
+
+    const baseAmount = Number.isFinite(Number(this.settings.baseBetAmount)) && Number(this.settings.baseBetAmount) > 0
+      ? Math.round(Number(this.settings.baseBetAmount))
+      : DEFAULT_SETTINGS.baseBetAmount
+    const rawMaxMartin = Number(this.settings.maxMartin)
+    let maxMartin = Number.isFinite(rawMaxMartin) && rawMaxMartin > 0
+      ? Math.floor(rawMaxMartin)
+      : DEFAULT_SETTINGS.maxMartin
+
+    let customAmounts = Array.isArray(this.settings.customBetAmounts)
+      ? this.settings.customBetAmounts
+        .map(amount => Number(amount))
+        .filter(amount => Number.isFinite(amount) && amount > 0)
+        .map(amount => Math.round(amount))
+      : []
+
+    if (customAmounts.length > maxMartin) {
+      maxMartin = customAmounts.length
+    }
+
+    if (customAmounts.length === 0) {
+      customAmounts = Array(maxMartin).fill(baseAmount)
+    } else if (customAmounts.length < maxMartin) {
+      const fillAmount = customAmounts[customAmounts.length - 1] ?? baseAmount
+      customAmounts = [
+        ...customAmounts,
+        ...Array(maxMartin - customAmounts.length).fill(fillAmount),
+      ]
+    }
+
+    this.settings.maxMartin = maxMartin
+    this.settings.globalMaxConsecutiveLosses = maxMartin
+    this.settings.customBetAmounts = customAmounts
+  }
+
+  // Kept in the public hook shape for compatibility. Tie-auto no longer excludes
+  // rooms after a win; matching rooms can re-enter when a slot is available.
   private state: Omit<AutoModeState, 'settings' | 'tieAutoCompletedRoomIds'> = {
     totalWins: 0,
     totalLosses: 0,
@@ -240,6 +305,8 @@ class AutoModeServiceImpl {
 
   // 🆕 v3.7.0: 실제 사용자 잔액 추적
   private realBalance: number | null = null
+  // 🆕 실배팅 손익 기준선(세션 시작 시 실잔액). getRealNetProfit() = (현재잔액 - 기준선) + 실배팅 pending.
+  private realStartBalance: number | null = null
 
   // 🆕 v2.24: 동시배팅 제한은 사용자 설정으로 이동 (settings.maxConcurrentBets)
   // 0 = 무제한 (예측모드처럼), 1~N = 제한
@@ -252,13 +319,47 @@ class AutoModeServiceImpl {
   // 정책: "한 방에 들어가면 승리(또는 마틴 종료)까지 그 방이 슬롯을 잡는다."
   // 라운드 사이라고 슬롯을 다른 신규 방에 양보하면, 마틴 방이 돌아왔을 때 동시 상한을 초과한다.
   private getActiveBettingCount(): number {
+    // 🐞 라이브락 수정(2026-05-31): bettingInProgress(예측 진행 락)를 슬롯 카운트에서 제외한다.
+    //    예전엔 락도 셌는데, 예측(getPatternBasedPrediction await)이 수초 걸리는 동안 방 2개가
+    //    락만 잡고 나머지를 전부 막았다. 그 2개가 shouldBet=false로 스킵하면 배팅 없이 락만 풀고,
+    //    다음 2개도 또 스킵 → waitingForResult가 영영 0 = "배팅 자체를 안 함"(슬롯 2/2 lock:2 고착).
+    //    이제 슬롯은 '실제 배팅'(waitingForResult)·'마틴 진행'(martinLevel>0)만 점유한다.
+    //    동시 배팅 상한은 placeBet 직전 재확인으로 원자적으로 보장한다(예측 락은 방별 재진입 방지용).
     const activeRoomIds = new Set<string>()
     this.state.roomStates.forEach(state => {
       if (state.waitingForResult) activeRoomIds.add(state.roomId)
       if (state.martinLevel > 0) activeRoomIds.add(state.roomId)
+      if (CustomStrategyRuntime.isProgressionActive(state.roomId)) activeRoomIds.add(state.roomId)
     })
-    this.bettingInProgress.forEach(roomId => activeRoomIds.add(roomId))
     return activeRoomIds.size
+  }
+
+  private isCustomStrategyFilter(filter: RoomFilterType | 'all' = this.currentPatternFilter): boolean {
+    return filter !== 'all' && CustomStrategyService.isStrategyFilter(filter)
+  }
+
+  private isProgressionActive(roomId: string, state?: RoomBettingState): boolean {
+    const roomState = state ?? this.state.roomStates.get(roomId)
+    return Boolean(
+      roomState?.waitingForResult ||
+      (roomState?.martinLevel ?? 0) > 0 ||
+      CustomStrategyRuntime.isProgressionActive(roomId)
+    )
+  }
+
+  private syncCustomStrategyState(roomId: string, state: RoomBettingState): void {
+    const session = CustomStrategyRuntime.getSessionForRoom(roomId)
+    if (!session) {
+      state.customStrategyId = undefined
+      state.customStrategyStage = undefined
+      state.customStrategyAttempt = undefined
+      state.customStrategyStatus = undefined
+      return
+    }
+    state.customStrategyId = session.strategyId
+    state.customStrategyStage = session.stageIndex + 1
+    state.customStrategyAttempt = session.attemptIndex + 1
+    state.customStrategyStatus = session.status
   }
 
   // Lazy-loaded dependencies
@@ -328,7 +429,18 @@ class AutoModeServiceImpl {
     // 🆕 v3.7.0: 실제 잔액 업데이트 구독
     const unsubBalance = this.casinoAdapter.onBalanceUpdate?.((balance) => {
       this.realBalance = balance
+      // 실배팅 시작 후 첫 실잔액을 기준선으로 캡처(시작 시점에 잔액을 아직 못 받은 경우 대비).
+      // 🆕 2026-06-23: 중계 실잔액이 늦게(베팅 몇 판 후) 처음 도착할 수 있으므로, 그 시점의 누적손익·
+      //   진행중배팅을 역산해 기준선을 잡는다 → 표시잔고(getRealDisplayBalance=기준선+누적−pending)가
+      //   캡처 순간 실잔액과 정확히 일치(이중계산 방지). 이후엔 베팅 결과로 즉시 투영(중계 지연 회피).
+      if (!this.settings.isVirtualMode && this.settings.enabled
+        && this.realStartBalance === null && typeof balance === 'number' && balance > 0) {
+        this.realStartBalance = balance - this.state.cumulativeProfit + this.getRealPendingBetAmount()
+        console.log(`[AutoMode] 💰 실배팅 기준선 캡처: 실잔액 ${balance.toLocaleString()} → 기준선 ${this.realStartBalance.toLocaleString()}원`)
+      }
       console.log(`[AutoMode] 💰 Balance updated: ${balance?.toLocaleString()}원`)
+      // 실잔액이 정산될 때마다 실배팅 윈컷/로스컷을 '진짜 돈' 기준으로 재확인(자체 추정 아님).
+      this.checkRealBalanceCuts()
     })
     if (unsubBalance) this.adapterUnsubscribers.push(unsubBalance)
 
@@ -361,7 +473,11 @@ class AutoModeServiceImpl {
       settings: { ...this.settings },
       ...this.state,
       roomStates: new Map(this.state.roomStates),
-      tieAutoCompletedRoomIds: Array.from(this.tieAutoCompletedRooms),
+      tieAutoCompletedRoomIds: Array.from(this.tieAutoCompletedRoomIds),
+      // 🆕 실배팅 실잔액 기반 손익(가상/미수신 시 null) — UI가 '진짜 돈' 손익을 표시할 수 있게 노출.
+      realNetProfit: this.getRealNetProfit(),
+      // 🆕 실모드 표시용 보유금(배팅 즉시 차감 반영). UI 보유금 pod가 이 값을 쓴다.
+      realDisplayBalance: this.getRealDisplayBalance(),
     }
   }
 
@@ -401,6 +517,12 @@ class AutoModeServiceImpl {
     this.state.startBalance = this.settings.isVirtualMode
       ? VirtualBettingService.getSettings().initialBalance
       : (realBalance || 0)
+
+    // 🆕 실배팅 손익 기준선: 전달받은 시작 잔액 → 추적 중 실잔액 순으로 캡처(둘 다 없으면
+    // onBalanceUpdate에서 첫 실잔액을 기준선으로 잡는다). 가상모드는 사용 안 함(null).
+    this.realStartBalance = this.settings.isVirtualMode
+      ? null
+      : ((realBalance && realBalance > 0) ? realBalance : (this.realBalance ?? null))
 
     // 🛡️ AutoBettingService 가상모드 동기화 - 시작 시 즉시 설정
     AutoBettingService.setVirtualMode(this.settings.isVirtualMode)
@@ -445,7 +567,6 @@ class AutoModeServiceImpl {
 
   stop(): void {
     this.settings.enabled = false
-    this.state.statusMessage = '정지됨'
     this.state.startTime = null // 정지 시 초기화
 
     // 🆕 v2.24: 타이머들 정지
@@ -458,23 +579,49 @@ class AutoModeServiceImpl {
     // 🛡️ AutoBettingService 가상모드 해제 - 정지 시 다른 서비스가 배팅 가능하도록
     AutoBettingService.setVirtualMode(false)
 
-    // 중지 시 마틴 리셋 옵션이 활성화되어 있으면 모든 방의 마틴 레벨 초기화
+    // 접수 완료된 실베팅은 서버의 실제 Undo 확인 없이 취소할 수 없다.
+    // 정지는 신규 베팅만 막고, 해당 라운드의 결과 추적 상태는 그대로 보존한다.
+    let pendingRealBetCount = 0
+
+    // 중지 시 마틴 리셋 옵션이 활성화되어 있으면 안전하게 정리 가능한 방만 초기화
     if (this.settings.resetMartinOnStop) {
-      // ✅ MartingaleManager를 통해 모든 레벨 리셋 (Single Source of Truth)
-      this.martingaleManager.resetAllLevels()
       this.state.roomStates.forEach((rs, roomId) => {
+        if (rs.waitingForResult && rs.wasVirtualBet !== true) {
+          pendingRealBetCount++
+          return
+        }
+
+        if (rs.waitingForResult && rs.wasVirtualBet === true) {
+          VirtualBettingService.cancelPendingBet(roomId)
+          CustomStrategyRuntime.releasePending(roomId, '사용자 정지로 가상 베팅 취소')
+        }
+
+        this.martingaleManager.resetLevel(roomId)
         this.syncMartinLevelFromManager(roomId, rs)
         rs.waitingForResult = false
         rs.lastPrediction = null
         rs.martinRecoveryPrediction = null
+        rs.martinRecoveryStrategy = null
+        rs.lastBetHistoryLength = null
+        rs.wasVirtualBet = undefined
+        rs.placementStatus = undefined
       })
       console.log('[AutoMode] Stopped - 마틴 레벨 리셋됨')
     } else {
+      this.state.roomStates.forEach((rs) => {
+        if (rs.waitingForResult && rs.wasVirtualBet !== true) {
+          pendingRealBetCount++
+        }
+      })
       console.log('[AutoMode] Stopped - 마틴 레벨 유지됨')
     }
 
-    // 긴급 정지 시 진행 중인 실배팅이 있으면 즉시 취소 시도
-    this.cancelPendingRealBet()
+    CustomStrategyRuntime.stopNonPendingSessions()
+    this.state.roomStates.forEach((roomState, roomId) => this.syncCustomStrategyState(roomId, roomState))
+
+    this.state.statusMessage = pendingRealBetCount > 0
+      ? `정지됨 (실베팅 ${pendingRealBetCount}건 결과 대기)`
+      : '정지됨'
     this.emitStateChange()
   }
 
@@ -483,7 +630,7 @@ class AutoModeServiceImpl {
     this.stopDiagnosticTimer()  // 기존 타이머가 있으면 먼저 정리
     this.diagnosticTimerId = setInterval(() => {
       this.logDiagnosticStatus()
-    }, 30000)  // 30초마다
+    }, 10000)  // 10초마다 (슬롯 점유 진단)
     // 시작 즉시 한번 출력
     this.logDiagnosticStatus()
   }
@@ -510,6 +657,22 @@ class AutoModeServiceImpl {
 
   // 🆕 v2.25: 결과 대기 중인 방들에 대해 히스토리 기반 결과 추론
   private tryInferPendingResults(): void {
+    // 🆕 stale bettingInProgress 락 강제 해제(2026-05-31): 락을 건 뒤 finally가 안 돈
+    //    (예측 await 무응답/행 등) 락이 영구 남으면 동시배팅 슬롯이 고착돼 "승리해도 슬롯
+    //    초기화 안 됨/새 배팅 안 됨"이 된다. 1초 타이머라 12초 넘게 잡힌 락을 확실히 회수한다.
+    //    (정상 배팅은 락을 수초 내 해제하므로 12초면 hung만 잡힘)
+    const nowTs = Date.now()
+    this.bettingInProgressSince.forEach((since, roomId) => {
+      if (nowTs - since > 12000) {
+        console.warn(`[AutoMode] ⏰ 배팅 진행 락 강제 해제 (${Math.round((nowTs - since) / 1000)}s 고착) - ${roomId}`)
+        this.bettingInProgress.delete(roomId)
+        this.bettingInProgressSince.delete(roomId)
+      }
+    })
+
+    // Progression rooms are never age-reclaimed here. Martingale/custom chains
+    // keep their slot until a confirmed result advances or completes the chain.
+
     let inferredCount = 0
     this.state.roomStates.forEach((roomState, roomId) => {
       if (!roomState.waitingForResult) return
@@ -522,6 +685,36 @@ class AutoModeServiceImpl {
         console.log(`[AutoMode] 🔄 타이머 결과 추론 성공 - ${room.koreanName}: ${inferredWinner}`)
         this.handleGameResult(roomId, inferredWinner)
         inferredCount++
+        return
+      }
+      // Only synthetic virtual bets can be refunded and safely reclaimed.
+      // Unknown legacy state is treated as real until proven otherwise.
+      if (roomState.wasVirtualBet !== true) {
+        return
+      }
+      // Flat bets may be swept when a feed stalls, but martingale/custom
+      // progressions keep the slot from the first pending bet until a confirmed
+      // result advances or completes the chain.
+      const slotAge = roomState.lastBetTime ? Date.now() - roomState.lastBetTime : Infinity
+      const sweepThreshold = 15000
+      const locksUntilWin =
+        roomState.martinRecoveryStrategy === 'martingale' ||
+        roomState.martinRecoveryStrategy === 'custom' ||
+        CustomStrategyRuntime.isProgressionActive(roomId)
+      if (slotAge > sweepThreshold && (roomState.martinLevel ?? 0) === 0 && !locksUntilWin) {
+        console.warn(`[AutoMode] ⏰ 슬롯 강제 반환 (${Math.round(slotAge / 1000)}s 결과 미확인) - ${room.koreanName}`)
+        this.feDiag(`SWEEP-CLEAR room=${room.koreanName} age=${Math.round(slotAge / 1000)}s wasV=${roomState.wasVirtualBet}`)
+        if (roomState.wasVirtualBet) {
+          VirtualBettingService.cancelPendingBet(roomId)
+        }
+        roomState.waitingForResult = false
+        roomState.lastPrediction = null
+        roomState.martinRecoveryPrediction = null
+        roomState.martinRecoveryStrategy = null
+        roomState.lastBetHistoryLength = null
+        roomState.wasVirtualBet = undefined
+        roomState.resultInferenceRetries = 0
+        this.emitStateChange()
       }
     })
     if (inferredCount > 0) {
@@ -543,43 +736,82 @@ class AutoModeServiceImpl {
     const bettingPhaseCount = this.lastBettingPhaseByRoom.size
     const inProgressCount = this.bettingInProgress.size
 
-    let waitingForResultCount = 0
-    let readyToBetCount = 0
-    const waitingRooms: string[] = []
-
-    this.activeBettingRoomIds.forEach(roomId => {
-      const roomState = this.state.roomStates.get(roomId)
-      const room = this.casinoAdapter.getRoom(roomId)
-      if (roomState?.waitingForResult) {
-        waitingForResultCount++
-        waitingRooms.push(room?.koreanName || roomId)
-      } else if (this.lastBettingPhaseByRoom.has(roomId)) {
-        readyToBetCount++
+    // 슬롯 점유 방 전수 조사(getActiveBettingCount와 동일 기준): waiting / martin>0 / lock + 사유·경과
+    const now = Date.now()
+    let waitingCount = 0
+    let martinCount = 0
+    const holders: string[] = []
+    this.state.roomStates.forEach((s, roomId) => {
+      const waiting = !!s.waitingForResult
+      const martin = (s.martinLevel ?? 0) > 0
+      const lock = this.bettingInProgress.has(roomId)
+      if (waiting || martin || lock) {
+        if (waiting) waitingCount++
+        if (martin) martinCount++
+        const room = this.casinoAdapter.getRoom(roomId)
+        const age = s.lastBetTime ? Math.round((now - s.lastBetTime) / 1000) : -1
+        holders.push(`${room?.koreanName || roomId}{w:${waiting ? 'Y' : 'N'},m:${s.martinLevel ?? 0},lock:${lock ? 'Y' : 'N'},${age}s}`)
       }
     })
 
     const currentBetCount = this.getActiveBettingCount()
-
     const maxBets = this.settings.maxConcurrentBets
     const maxDisplay = maxBets > 0 ? maxBets : '∞'
 
-    console.log(`[AutoMode] 📊 상태진단 ===`)
-    console.log(`  - 대상 방: ${activeRoomCount}개 (Top6+마틴)`)
-    console.log(`  - 배팅 페이즈 중: ${bettingPhaseCount}개`)
-    console.log(`  - 결과 대기 중: ${waitingForResultCount}개 ${waitingRooms.length > 0 ? `[${waitingRooms.slice(0, 3).join(', ')}${waitingRooms.length > 3 ? '...' : ''}]` : ''}`)
-    console.log(`  - 배팅 진행 락: ${inProgressCount}개`)
-    console.log(`  - 동시배팅 슬롯: ${currentBetCount}/${maxDisplay}`)
-    console.log(`  - 배팅 가능: ${readyToBetCount}개`)
-    console.log(`[AutoMode] ===============`)
+    // 🆕 실제 락 나이(2026-05-31): bettingInProgressSince 기준 가장 오래된 락의 경과초.
+    //    예측이 빠르면 작게(<2s), 느리면/포화면 크게(12s 근처, sweep 상한). 점유 표시의 'Ns'는
+    //    lastBetTime 경과라 락 나이와 무관 — 이 oldestLock이 예측 부하의 진짜 지표다.
+    let oldestLockAge = 0
+    this.bettingInProgressSince.forEach((since) => {
+      const a = now - since
+      if (a > oldestLockAge) oldestLockAge = a
+    })
+    const oldestLockSec = Math.round(oldestLockAge / 1000)
+
+    // 🆕 한 줄로 출력(2026-05-31): 여러 줄이면 콘솔 필터('상태진단')에 헤더만 잡혀 상세가 누락된다.
+    const holderStr = `${holders.slice(0, 6).join(' | ')}${holders.length > 6 ? ` …(+${holders.length - 6})` : ''}`
+    const diagLine = `📊 상태진단 — 슬롯 ${currentBetCount}/${maxDisplay} (waiting:${waitingCount} martin>0:${martinCount} lock:${inProgressCount} 락최고:${oldestLockSec}s) | 대상 ${activeRoomCount}개/페이즈 ${bettingPhaseCount}개 | 점유: ${holderStr || '없음'}`
+    console.log(`[AutoMode] ${diagLine}`)
+    this.feDiag(diagLine)
+  }
+
+  /** 🔬 [임시 진단] 프론트 콘솔은 Tauri 웹뷰에만 떠 파일에 안 남으므로, 슬롯/정산 핵심 결정을
+   *  Rust(fe_diag)로 포워딩해 bcr-runtime.log에 남긴다(실시간 슬롯 흐름 디버그용, 확정 후 제거).
+   *  테스트/비-Tauri 환경에선 import/invoke가 실패해 조용히 no-op. */
+  private feDiag(line: string): void {
+    try {
+      import('@tauri-apps/api/core')
+        .then((m) => m.invoke('fe_diag', { line }).catch(() => {}))
+        .catch(() => {})
+    } catch { /* ignore */ }
   }
 
   updateSettings(newSettings: Partial<AutoModeSettings>): void {
     const prevVirtualMode = this.settings.isVirtualMode
 
     this.settings = { ...this.settings, ...newSettings }
+    const maxMartinBeforeNormalization = this.settings.maxMartin
+    this.normalizeCustomBetSettings()
+    const normalizedMaxMartinChanged = this.settings.maxMartin !== maxMartinBeforeNormalization
+
+    // 🆕 2026-07-08 (적대적 검증 확정): 배팅전략을 라이브로 바꾸면(예: martingale→custom)
+    // 진행중 방에 캡처된 stale martinRecoveryStrategy를 비워, 다음 배팅부터 즉시 새 전략이
+    // 반영되게 한다. 안 그러면 resolveRoomProgressionStrategy가 stale 값에 단락되어 전환이
+    // 씹힌다(그 방들은 다음 타이 적중 전까지 옛 전략으로 계속 배팅).
+    if (newSettings.betStrategy !== undefined) {
+      this.state.roomStates.forEach((rs) => {
+        rs.martinRecoveryStrategy = null
+      })
+    }
 
     // ✅ VirtualBettingService와 설정 동기화
-    if (newSettings.baseBetAmount !== undefined || newSettings.maxMartin !== undefined) {
+    if (
+      newSettings.baseBetAmount !== undefined ||
+      newSettings.maxMartin !== undefined ||
+      newSettings.customBetAmounts !== undefined ||
+      newSettings.betStrategy !== undefined ||
+      normalizedMaxMartinChanged
+    ) {
       const currentVS = VirtualBettingService.getSettings()
       VirtualBettingService.updateSettings({
         martingale: {
@@ -591,11 +823,31 @@ class AutoModeServiceImpl {
     }
 
     // 🔧 Bug Fix: maxMartin 변경 시 globalMaxConsecutiveLosses도 동기화 (하위 호환)
-    if (newSettings.maxMartin !== undefined) {
-      this.settings.globalMaxConsecutiveLosses = newSettings.maxMartin
+    if (
+      newSettings.maxMartin !== undefined ||
+      newSettings.customBetAmounts !== undefined ||
+      newSettings.betStrategy !== undefined ||
+      normalizedMaxMartinChanged
+    ) {
+      this.settings.globalMaxConsecutiveLosses = this.settings.maxMartin
       // MartingaleManager 내부 cap도 같이 갱신 — 안 그러면 recordLoss가
       // 내부 기본값에서 막혀 사용자가 설정한 단계까지 못 올라간다.
-      this.martingaleManager.setMaxLevel(newSettings.maxMartin)
+      this.martingaleManager.setMaxLevel(this.settings.maxMartin)
+    }
+
+    // 🆕 2026-07-08 (적대적 검증 확정): 커스텀 전략은 사용자가 정의한 단계 수
+    // (customBetAmounts.length)가 곧 마틴 깊이다. maxMartin이 배열보다 짧으면 마틴 레벨이
+    // maxMartin-1에서 캡되어 상위 티어(예: 8~16단계=이만원)에 절대 도달하지 못한다.
+    // 두 UI(고급 다이얼로그 vs 타이-자동 카드)가 maxMartin을 따로 쓰다 어긋나도, 커스텀일 때는
+    // 배열 길이까지 상한을 끌어올려 모든 티어가 나가게 보장한다(내리지는 않음).
+    if (
+      this.settings.betStrategy === 'custom' &&
+      this.settings.customBetAmounts &&
+      this.settings.customBetAmounts.length > this.settings.maxMartin
+    ) {
+      this.settings.maxMartin = this.settings.customBetAmounts.length
+      this.settings.globalMaxConsecutiveLosses = this.settings.maxMartin
+      this.martingaleManager.setMaxLevel(this.settings.maxMartin)
     }
 
     // 🛡️ AutoBettingService 가상모드 동기화 - 실제 소켓 전송 차단
@@ -634,8 +886,10 @@ class AutoModeServiceImpl {
           roomState.waitingForResult = false
           roomState.lastPrediction = null
           roomState.martinRecoveryPrediction = null
+          roomState.martinRecoveryStrategy = null
           roomState.lastBetHistoryLength = null
           roomState.wasVirtualBet = undefined
+          roomState.placementStatus = undefined
           cancelledCount++
           console.log(`[AutoMode] ↩️ Virtual pending cancelled for ${roomState.roomName}`)
         }
@@ -671,6 +925,15 @@ class AutoModeServiceImpl {
   }
 
   resetStats(): void {
+    const pendingRealBetCount = Array.from(this.state.roomStates.values())
+      .filter(rs => rs.waitingForResult && rs.wasVirtualBet !== true)
+      .length
+    if (pendingRealBetCount > 0) {
+      this.state.statusMessage = `통계 초기화 보류 (실베팅 ${pendingRealBetCount}건 결과 대기)`
+      this.emitStateChange()
+      return
+    }
+
     // 1. 글로벌 통계 리셋
     this.state.totalWins = 0
     this.state.totalLosses = 0
@@ -681,6 +944,7 @@ class AutoModeServiceImpl {
 
     // ✅ MartingaleManager 전체 리셋 (Single Source of Truth)
     this.martingaleManager.resetAllLevels()
+    CustomStrategyRuntime.resetAll()
 
     // 2. 방별 통계 및 상태 완전 리셋
     this.state.roomStates.forEach((rs, roomId) => {
@@ -699,11 +963,13 @@ class AutoModeServiceImpl {
       rs.waitingForResult = false
       rs.lastPrediction = null
       rs.martinRecoveryPrediction = null
+      rs.martinRecoveryStrategy = null
       rs.lastBetAmount = 0
       rs.lastBetTime = null
       rs.lastBetHistoryLength = null
       rs.lastResultTime = null
       rs.wasVirtualBet = undefined
+      rs.placementStatus = undefined
 
       // Bug Fix: 결과 추론 재시도 상태 리셋
       rs.resultInferenceRetries = 0
@@ -718,26 +984,6 @@ class AutoModeServiceImpl {
 
     console.log('[AutoMode] 📊 통계 완전 리셋 완료 (pending 상태 포함)')
     this.emitStateChange()
-  }
-
-  /** 진행 중인 모든 실배팅(Undo) 취소 시도 (멀티룸 지원) */
-  private cancelPendingRealBet(): void {
-    const pendingCount = AutoBettingService.getPendingBetCount()
-    if (pendingCount === 0) return
-
-    console.log(`[AutoMode] 🛑 긴급정지: ${pendingCount}개의 pending bet 취소 시도...`)
-
-    AutoBettingService.cancelAllBets()
-      .then((res) => {
-        if (res.success) {
-          console.log(`[AutoMode] ✅ 긴급정지: 모든 pending bet 취소 완료 (${res.cancelled}개)`)
-        } else {
-          console.warn(`[AutoMode] ⚠️ 긴급정지: 일부 취소 실패 (성공: ${res.cancelled}, 실패: ${res.failed})`)
-        }
-      })
-      .catch((e) => {
-        console.warn('[AutoMode] ⚠️ 긴급정지: 취소 중 오류', e)
-      })
   }
 
   // ==================== Room Management ====================
@@ -760,6 +1006,7 @@ class AutoModeServiceImpl {
         totalProfit: 0,
         lastPrediction: null,
         martinRecoveryPrediction: null,
+        martinRecoveryStrategy: null,
         lastBetAmount: 0,
         waitingForResult: false,
         lastBetTime: null,
@@ -789,6 +1036,7 @@ class AutoModeServiceImpl {
   // 외부에서 설정한 배팅 가능 방 ID 목록 (패턴 필터 적용 결과)
   private activeBettingRoomIds: Set<string> = new Set()
   private hasReceivedActiveRoomList = false
+  private tieAutoCompletedRoomIds: Set<string> = new Set()
 
   // 현재 선택된 패턴 필터 (예: 'long_streak', 'short_streak', 'all')
   private currentPatternFilter: RoomFilterType | 'all' = 'all'
@@ -796,6 +1044,10 @@ class AutoModeServiceImpl {
 
   // 방별 배팅 진행 중 락 (동시 배팅 방지)
   private bettingInProgress: Set<string> = new Set()
+  /** roomId → bettingInProgress 락을 건 시각. 배팅 진행 중 await(예측요청 등)가 멈춰 finally가
+   *  안 돌면 락이 영구 누수→슬롯 고착→"승리해도 슬롯 초기화 안 됨/배팅 안 함"이 된다.
+   *  1초 타이머에서 일정 시간 지난 락을 강제 해제하는 데 사용. */
+  private bettingInProgressSince: Map<string, number> = new Map()
 
   // Bug 4 Fix: 필터 전환 락 (race condition 방지)
   private isFilterTransitioning: boolean = false
@@ -807,6 +1059,9 @@ class AutoModeServiceImpl {
   // 🆕 v2.24: 진단 타이머 (30초마다 상태 요약 출력)
   private diagnosticTimerId: ReturnType<typeof setInterval> | null = null
 
+  // 🆕 동시배팅 상한 초과 로그 throttle (3초당 1회) — 콘솔 노이즈 억제
+  private lastCapLogAt = 0
+
   // 🆕 v2.24: 연속 배팅 타이머 (2초마다 배팅 가능한 방 체크)
   private continuousBettingTimerId: ReturnType<typeof setInterval> | null = null
 
@@ -814,7 +1069,8 @@ class AutoModeServiceImpl {
   setActiveBettingRooms(roomIds: string[], patternFilter?: RoomFilterType | 'all'): void {
     const requestedFilter = patternFilter ?? this.currentPatternFilter
     const lockedMartinRoomIds = this.getLockedMartinRoomIds(requestedFilter)
-    const mergedRoomIds = Array.from(new Set([...lockedMartinRoomIds, ...roomIds]))
+    const allowedRoomIds = roomIds.filter(roomId => !this.isTieAutoCompletedRoom(roomId, requestedFilter))
+    const mergedRoomIds = Array.from(new Set([...lockedMartinRoomIds, ...allowedRoomIds]))
     const effectiveRoomIds = mergedRoomIds
     const nextRoomIds = new Set(effectiveRoomIds)
     const prevRoomIds = this.activeBettingRoomIds
@@ -883,6 +1139,10 @@ class AutoModeServiceImpl {
       return true
     }
 
+    if (this.isTieAutoCompletedRoom(roomId)) {
+      return false
+    }
+
     // Bug 4 Fix: 필터 전환 중에는 모든 방 비활성화
     // Safety: auto-release lock if held too long (prevents stuck state)
     if (this.isFilterTransitioning) {
@@ -900,13 +1160,10 @@ class AutoModeServiceImpl {
       }
     }
 
-    // 🆕 v2.23: 추천필터 방은 roomConfigs 체크 우회
-    // 추천필터(activeBettingRoomIds)에 포함된 방은 무조건 배팅 허용
-    if (this.activeBettingRoomIds.size > 0 && this.activeBettingRoomIds.has(roomId)) {
-      return true
-    }
-
-    // 1) 사용자가 방을 선택했다면 그 방만 허용
+    // 1) 사용자 방 선택 우선: 선택이 있으면 그 밖의 방은 추천필터에 떠도 배팅하지 않는다.
+    //    (이전 버그: 추천필터(activeBettingRoomIds) 방이 이 체크를 우회(return true)해서
+    //     사용자가 고르지 않은 방에도 배팅됨 — "방 선택 무시" 증상의 원인. 마틴 진행 중인 방은
+    //     위 getLockedMartinRoomIds 분기에서 이미 통과하므로 선택/필터와 무관하게 끝까지 간다.)
     const configuredRoomIds = new Set(
       (this.settings.roomConfigs || [])
         .filter(c => c.enabled)
@@ -916,7 +1173,8 @@ class AutoModeServiceImpl {
       return false
     }
 
-    // 2) AutoModePanel에서 패턴 필터 결과(실시간) 목록이 왔다면 그 목록만 허용
+    // 2) 추천필터(실시간 매칭) 목록이 있으면 그 안에서만 허용.
+    //    사용자 선택이 있으면 위 1)을 이미 통과했으므로 결과적으로 (선택 ∩ 추천)으로 동작한다.
     if (this.activeBettingRoomIds.size > 0) {
       return this.activeBettingRoomIds.has(roomId)
     }
@@ -950,28 +1208,44 @@ class AutoModeServiceImpl {
 
   // ==================== Martingale Continuation Locks ====================
 
-  // tie_frequent 프리셋의 트리거(예: 0-0)는 슈 처음 N판만 보므로, 한 번
-  // 적중하거나 마틴 한도에 도달해도 그 룸의 트리거 자체는 그대로 유지된다.
-  // 그래서 별도로 "이 슈에서는 끝난 방" 집합을 두고 같은 슈 안에서는
-  // 재선택하지 못하도록 한다. 슈가 바뀌면 자동으로 초기화 (onShoeChange).
-  private tieAutoCompletedRooms: Set<string> = new Set()
-
+  // Only in-flight rooms are locked: waiting for a result or carrying a
+  // martingale/custom progression level.
   private getLockedMartinRoomIds(_filter: RoomFilterType | 'all' = this.currentPatternFilter): string[] {
-    const lockedRoomIds: string[] = []
+    const lockedRoomIds = new Set<string>(CustomStrategyRuntime.getActiveRoomIds())
     for (const [roomId, state] of this.state.roomStates) {
-      if (state.waitingForResult || state.martinLevel > 0) {
-        lockedRoomIds.push(roomId)
+      if (state.waitingForResult || state.martinLevel > 0 || CustomStrategyRuntime.isProgressionActive(roomId)) {
+        lockedRoomIds.add(roomId)
       }
     }
 
-    return lockedRoomIds
+    return Array.from(lockedRoomIds)
+  }
+
+  private getMissingLockedMartinRoom(roomId: string, remainingSeconds = 0): Room | null {
+    const state = this.state.roomStates.get(roomId)
+    if (!state || !this.isProgressionActive(roomId, state) || state.waitingForResult) return null
+
+    const roomName = state.roomName || roomId
+    return {
+      id: roomId,
+      name: roomName,
+      koreanName: roomName,
+      history: [],
+      gameCount: 0,
+      remainingSeconds,
+      phase: 'betting',
+      gameState: {
+        playerHand: { score: 0, cards: [] },
+        bankerHand: { score: 0, cards: [] },
+      },
+    }
   }
 
   private getPendingMartinRoomIds(excludeRoomId?: string): string[] {
     const pendingRoomIds: string[] = []
     for (const [roomId, state] of this.state.roomStates) {
       if (roomId === excludeRoomId) continue
-      if (state.martinLevel > 0 && !state.waitingForResult && !this.bettingInProgress.has(roomId)) {
+      if (this.isProgressionActive(roomId, state) && !state.waitingForResult && !this.bettingInProgress.has(roomId)) {
         pendingRoomIds.push(roomId)
       }
     }
@@ -989,20 +1263,30 @@ class AutoModeServiceImpl {
     return Array.from(new Set(prioritizedRoomIds))
   }
 
-  private isTieAutoMode(): boolean {
-    return this.currentPatternFilter === 'tie_frequent'
+  private isZeroTieFrequentFilter(filter: RoomFilterType | 'all' = this.currentPatternFilter): boolean {
+    if (filter !== 'tie_frequent') return false
+    const { tieFrequentMinCount, tieFrequentMaxCount } = FilterThresholdsService.get()
+    return tieFrequentMinCount === 0 && tieFrequentMaxCount === 0
   }
 
-  // 한 방의 시퀀스가 끝났는지 여부 (적중 or 마틴 한도 도달).
-  // tie_frequent 프리셋일 때만 의미가 있고, 같은 슈 안에서는 재진입 금지.
-  private isTieAutoCompleted(roomId: string): boolean {
-    if (this.currentPatternFilter !== 'tie_frequent') return false
-    return this.tieAutoCompletedRooms.has(roomId)
+  private isTieAutoCompletedRoom(roomId: string, filter: RoomFilterType | 'all' = this.currentPatternFilter): boolean {
+    return this.isZeroTieFrequentFilter(filter) && this.tieAutoCompletedRoomIds.has(roomId)
+  }
+
+  private markTieAutoCompletedRoom(roomId: string, roomName: string, winner: Winner): boolean {
+    if (winner !== 'T' || !this.isZeroTieFrequentFilter()) return false
+
+    this.tieAutoCompletedRoomIds.add(roomId)
+    this.activeBettingRoomIds.delete(roomId)
+    this.lastBettingPhaseByRoom.delete(roomId)
+    console.log(`[AutoMode] Tie-auto no-tie room completed and removed: ${roomName}`)
+    this.feDiag(`TIE-AUTO-COMPLETE room=${roomName} filter=${this.currentPatternFilter}`)
+    return true
   }
 
   // ==================== Event Handlers ====================
 
-  private async onBettingPhase(event: BettingPhaseEvent): Promise<void> {
+  private async onBettingPhase(event: BettingPhaseEvent, source: 'adapter' | 'poll' = 'adapter'): Promise<void> {
     const { roomId, phase, remainingSeconds } = event
     const roomForDebug = this.casinoAdapter.getRoom(roomId)
     const roomNameForDebug = roomForDebug?.koreanName || roomId
@@ -1030,8 +1314,8 @@ class AutoModeServiceImpl {
     // 필터 전환과 무관하게 승리·마틴 종료까지 계속 배팅해야 함.
     if (this.isFilterTransitioning) {
       const existingState = this.state.roomStates.get(roomId)
-      const isInMartinOrWaiting = existingState && (existingState.martinLevel > 0 || existingState.waitingForResult)
-      if (!isInMartinOrWaiting) {
+      const isInProgressionOrWaiting = existingState && this.isProgressionActive(roomId, existingState)
+      if (!isInProgressionOrWaiting) {
         console.log(`[AutoMode] ❌ 필터 전환 중 - ${roomNameForDebug} 스킵`)
         return
       }
@@ -1043,19 +1327,43 @@ class AutoModeServiceImpl {
       console.log(`[AutoMode] ❌ 배팅 진행 중 - ${roomNameForDebug} 스킵 (동시 배팅 방지)`)
       return
     }
+
+    // 🆕 예측 동시 실행 제한(2026-05-31): 락을 슬롯 상한에서 뺀 뒤(라이브락 수정) 베팅창에 든
+    //    방 20여 개가 동시에 예측을 돌려 백엔드가 포화 → 예측이 안 끝나 빈 슬롯이 있어도 배팅이
+    //    안 되는 역증상(슬롯 0/2 lock:21 waiting:0)이 생겼다. 동시 예측 수를 배팅 슬롯보다 약간
+    //    크게(스킵 많아도 배팅 후보가 굶지 않도록) 제한해 폭주를 막는다. 배팅 슬롯 상한은
+    //    placeBet 직전 재확인에서 별도로 보장하므로, 이 제한은 순수 '예측 부하' 제어용이다.
+    //    마틴 이어치기/결과 대기 방은 자기 슬롯이므로 제한에서 예외(반드시 이어쳐야 함).
+    const existingForThrottle = this.state.roomStates.get(roomId)
+    const isMartinOrWaitingRebet = !!existingForThrottle && this.isProgressionActive(roomId, existingForThrottle)
+    const PREDICTION_CONCURRENCY = Math.max(this.settings.maxConcurrentBets + 6, 8)
+    if (!isMartinOrWaitingRebet && this.bettingInProgress.size >= PREDICTION_CONCURRENCY) {
+      // 다음 페이즈/1초 연속배팅 타이머에서 재시도된다(슬롯이 비고 예측 부하가 내려가면 진입).
+      const nowThrottle = Date.now()
+      if (nowThrottle - this.lastCapLogAt > 3000) {
+        this.lastCapLogAt = nowThrottle
+        console.log(`[AutoMode] ⏸ 예측 동시 실행 제한 (${this.bettingInProgress.size}/${PREDICTION_CONCURRENCY}) — 부하 제어, 3초당 1회만 표시`)
+      }
+      return
+    }
+
     // 즉시 락 설정 (race condition 방지)
     this.bettingInProgress.add(roomId)
+    this.bettingInProgressSince.set(roomId, Date.now())
 
     // 이후 모든 코드는 try-finally로 감싸서 어떤 경로로든 락이 해제되도록 함
     try {
       // ========== Bug Fix: waitingForResult 타임아웃 체크를 isRoomEnabled보다 먼저 실행 ==========
       // 방이 비활성화되어도 stuck 상태를 해제할 수 있도록 함
-      const room = this.casinoAdapter.getRoom(roomId)
+      const liveRoom = this.casinoAdapter.getRoom(roomId)
+      const room = liveRoom || this.getMissingLockedMartinRoom(roomId, remainingSeconds)
       if (!room) return
+      const hasReliableHistory = !!liveRoom
 
       const roomState = this.getOrCreateRoomState(roomId, room.koreanName || room.name)
       const isInMartinRecovery = roomState.martinLevel > 0
-      const minRequiredSeconds = isInMartinRecovery ? 2 : 3
+      const isInProgressionRecovery = this.isProgressionActive(roomId, roomState)
+      const minRequiredSeconds = isInProgressionRecovery ? 2 : 3
 
       // phase 체크 완화: 마틴 회복 중인 타이 자동 방은 놓치지 않도록 2초까지 재시도한다.
       if (remainingSeconds < minRequiredSeconds) {
@@ -1076,6 +1384,7 @@ class AutoModeServiceImpl {
           roomState.waitingForResult = false
           roomState.lastPrediction = null
           roomState.martinRecoveryPrediction = null
+          roomState.martinRecoveryStrategy = null
           roomState.lastBetHistoryLength = null
           roomState.wasVirtualBet = undefined
           this.emitStateChange()
@@ -1101,14 +1410,28 @@ class AutoModeServiceImpl {
           this.handleGameResult(roomId, inferredWinner)
         } else {
           // 🆕 v2.25: 타임아웃 단축 (45초 → 15초) - 더 빠른 슬롯 회수
-          const EXTENDED_TIMEOUT_MS = 15000
+          // 🆕 2026-06-23: 실배팅은 결과(resolved)가 라운드 종료(~30-45s) 후에 오므로 15초면 결과 도착 전에
+          //   강제리셋→정산 유실(졌는데 손익 미반영, 보유금이 차감됐다 7만으로 복귀)된다. 실배팅만 60초로
+          //   늘려 결과를 기다린다(가상은 15초 유지 — 환불되므로 무해). tryInferPendingResults sweep(60s)과 일관.
+          const isRealPending = roomState.wasVirtualBet === false
+          const EXTENDED_TIMEOUT_MS = isRealPending ? 60000 : 15000
           const MAX_RETRIES = 5
+
+          if (isRealPending) {
+            if (waitingTime > EXTENDED_TIMEOUT_MS && roomState.resultInferenceRetries % MAX_RETRIES === 0) {
+              console.warn(`[AutoMode] Real pending result still waiting (${Math.round(waitingTime / 1000)}s, retry=${roomState.resultInferenceRetries}) - ${roomNameForDebug}`)
+              this.feDiag(`REAL-PENDING-WAIT room=${roomNameForDebug} waited=${Math.round(waitingTime / 1000)}s retries=${roomState.resultInferenceRetries}`)
+            }
+            return
+          }
 
           if (waitingTime > EXTENDED_TIMEOUT_MS || roomState.resultInferenceRetries >= MAX_RETRIES) {
             console.warn(`[AutoMode] ⚠️ 결과 대기 타임아웃 (${Math.round(waitingTime / 1000)}초, ${roomState.resultInferenceRetries}회 재시도) - ${roomNameForDebug}, 강제 리셋`)
+            if (isRealPending) this.feDiag(`REAL-FORCE-RESET room=${roomNameForDebug} waited=${Math.round(waitingTime / 1000)}s retries=${roomState.resultInferenceRetries} — 정산 유실 위험`)
             roomState.waitingForResult = false
             roomState.lastPrediction = null
             roomState.martinRecoveryPrediction = null
+            roomState.martinRecoveryStrategy = null
             roomState.lastBetHistoryLength = null
             roomState.resultInferenceRetries = 0
             roomState.lastInferenceRetryTime = null
@@ -1125,6 +1448,21 @@ class AutoModeServiceImpl {
       if (!this.isRoomEnabled(roomId)) {
         console.log(`[AutoMode] ❌ 방 ${roomNameForDebug} 비활성화 (activeRooms: ${this.activeBettingRoomIds.size}개, 포함여부: ${this.activeBettingRoomIds.has(roomId)})`)
         return
+      }
+
+      // 🆕 [실배팅 안전] '결과를 받는 테이블에만 신규 베팅'(2026-06-02, 라이브로 근본원인 확정):
+      // 결과(히스토리)가 들어오지 않는 테이블에 베팅하면 정산이 안 돼(히스토리 미증가 → 15초
+      // 타임아웃 강제리셋) "배팅됨"에 영영 멈추고, UI(앱이 추적 중인 방)와 히스토리(실제 베팅한 방)가
+      // 어긋난다. Top6 방은 히스토리 체크를 우회해 결과 안 오는 방에도 베팅하던 게 원인.
+      // → 실제 모드에서는 '최근 결과 활동(room.lastResultTime)'이 있는 방에만 신규 베팅한다.
+      // 마틴 이어치기(martinLevel>0)는 자기 슬롯이라 예외(이길 때까지 그 방 고정). 가상 모드는 무영향.
+      if (!this.settings.isVirtualMode && !isInProgressionRecovery) {
+        const lastResultAge = Date.now() - (room.lastResultTime ?? 0)
+        const RESULT_FRESHNESS_MS = 90000
+        if (lastResultAge > RESULT_FRESHNESS_MS) {
+          console.log(`[AutoMode] ⏭ 실배팅 스킵 — ${roomNameForDebug}: 최근 결과 없음(${Math.round(lastResultAge / 1000)}s) → 정산 불가 방 회피('결과 받는 방만' 정책)`)
+          return
+        }
       }
 
       console.log(`[AutoMode] ✅ 방 ${roomNameForDebug} 활성화됨, 배팅 진행 시작...`)
@@ -1160,23 +1498,26 @@ class AutoModeServiceImpl {
 
       // 1. 윈컷/로스컷 체크 (BettingDecisionService 위임)
       // NOTE: checkCutConditions는 winCutAmount/lossCutAmount만 사용 (Codex 피드백)
+      // 실배팅은 실잔액 기반 손익으로, 가상은 자체 추정으로 판정(getEffectiveProfit).
+      // 베팅 직전이라 직전 라운드 잔액 정산이 끝난 상태 → 실잔액 기준이 안전(레이스 없음).
+      const profitForCut = this.getEffectiveProfit()
       const cutConditions = this.bettingDecisionService.checkCutConditions(
-        this.state.cumulativeProfit,
+        profitForCut,
         this.settings
       )
 
       if (cutConditions.winCutReached) {
-        console.log(`[AutoMode] 윈컷 도달! 목표: ${this.settings.winCutAmount}, 현재: ${this.state.cumulativeProfit}`)
+        console.log(`[AutoMode] 윈컷 도달! 목표: ${this.settings.winCutAmount}, 현재: ${profitForCut}`)
         this.stop()
-        this.state.statusMessage = `윈컷 도달 (+${this.state.cumulativeProfit.toLocaleString()}원)`
+        this.state.statusMessage = `윈컷 도달 (+${profitForCut.toLocaleString()}원)`
         this.emitStateChange()
         return
       }
 
       if (cutConditions.lossCutReached) {
-        console.log(`[AutoMode] 로스컷 도달! 한도: -${this.settings.lossCutAmount}, 현재: ${this.state.cumulativeProfit}`)
+        console.log(`[AutoMode] 로스컷 도달! 한도: -${this.settings.lossCutAmount}, 현재: ${profitForCut}`)
         this.stop()
-        this.state.statusMessage = `로스컷 도달 (${this.state.cumulativeProfit.toLocaleString()}원)`
+        this.state.statusMessage = `로스컷 도달 (${profitForCut.toLocaleString()}원)`
         this.emitStateChange()
         return
       }
@@ -1189,10 +1530,19 @@ class AutoModeServiceImpl {
       //   - 신규 방은 점유된 슬롯 수가 maxConcurrentBets 미만일 때만 진입.
       const currentBetCount = this.getActiveBettingCount()
       const maxBets = this.settings.maxConcurrentBets
-      const isCurrentlyInMartin = roomState.martinLevel > 0
+      const isCurrentlyInMartin = isInProgressionRecovery
 
-      if (!isCurrentlyInMartin && maxBets > 0 && currentBetCount > maxBets) {
-        console.log(`[AutoMode] 🚫 동시배팅 상한 초과: ${room.koreanName} (점유=${currentBetCount}/${maxBets})`)
+      // 게이트 기준 변경(2026-05-31): getActiveBettingCount가 락(자기 자신)을 더 이상 세지 않으므로
+      //    '>' → '>='로 바꾼다. count=실제 배팅 중인 다른 방 수. 그 수가 상한 이상이면 신규 진입 차단.
+      //    (이건 예측 전 조기 차단일 뿐이고, 최종 보장은 placeBet 직전 재확인에서 한다.)
+      if (!isCurrentlyInMartin && maxBets > 0 && currentBetCount >= maxBets) {
+        // 노이즈 억제(2026-05-31): 상한이 차면 매 방·매 페이즈마다 찍혀 콘솔을 뒤덮어
+        //    실제 배팅 로그가 안 보였다. 3초당 1회만 출력(점유 현황은 📊 상태진단에 있음).
+        const nowCap = Date.now()
+        if (nowCap - this.lastCapLogAt > 3000) {
+          this.lastCapLogAt = nowCap
+          console.log(`[AutoMode] 🚫 동시배팅 상한 (배팅중=${currentBetCount}/${maxBets}) — 차단 방 다수, 3초당 1회만 표시`)
+        }
         return
       }
 
@@ -1205,6 +1555,19 @@ class AutoModeServiceImpl {
         // - 'B'/'P': 해당 방향으로 고정 배팅
         // - 'skip': 배팅 안 함
         // - 'ai': AI 서버 예측 또는 스마트 로직
+        const customStrategyDecision = CustomStrategyRuntime.prepareDecision(
+          String(this.currentPatternFilter),
+          room,
+          source === 'adapter',
+        )
+        this.syncCustomStrategyState(roomId, roomState)
+        const usesCustomStrategy = this.isCustomStrategyFilter() || CustomStrategyRuntime.isProgressionActive(roomId)
+        if (usesCustomStrategy && !customStrategyDecision) {
+          const session = CustomStrategyRuntime.getSessionForRoom(roomId)
+          console.log(`[AutoMode] 커스텀 전략 대기 - ${room.koreanName}: ${session?.reason || session?.status || '조건/트리거 대기'}`)
+          return
+        }
+
         const storedRecoveryPrediction = isInMartinRecovery ? roomState.martinRecoveryPrediction : null
         // 같은 마틴 이어치기 reasoning이 라운드마다 누적되지 않도록 매번 베이스에서 한 번만 붙인다.
         const MARTIN_KEEP_SUFFIX = ' / 승리 전까지 같은 방향 유지'
@@ -1227,7 +1590,18 @@ class AutoModeServiceImpl {
           console.log(`[AutoMode] getPatternBasedPrediction 호출: ${room.koreanName}`)
         }
 
-        const prediction = recoveryPrediction
+        const customStrategyPrediction: Prediction | null = customStrategyDecision
+          ? {
+            roomId,
+            prediction: customStrategyDecision.direction,
+            confidence: 1,
+            reasoning: `[전략] ${customStrategyDecision.strategyName} · ${customStrategyDecision.stageIndex + 1}단계 ${customStrategyDecision.attemptIndex + 1}차`,
+            isSkip: false,
+            timestamp: Date.now(),
+          }
+          : null
+
+        const prediction = customStrategyPrediction ?? recoveryPrediction
           ?? (isInMartinRecovery && this.isTieOnlyFilter(this.currentPatternFilter)
             ? { roomId, prediction: 'T' as const, confidence: 90, reasoning: '마틴 회복 (타이 유지)', isSkip: false, timestamp: Date.now() }
             : await this.getPatternBasedPrediction(room, remainingSeconds))
@@ -1248,32 +1622,26 @@ class AutoModeServiceImpl {
           return
         }
 
-        // 타이 자동: 이 슈에서 이미 한 번 끝난 방은 재진입 금지
-        if (!isInMartinRecovery && this.isTieAutoCompleted(roomId)) {
-          this.emitDecisionOnce({
-            roomId,
-            roomName: room.koreanName,
-            martinLevel: roomState.martinLevel,
-            historyLength: room.history.length,
-            code: 'tie_auto_room_done',
-            level: 'info',
-            status: 'pass',
-            message: '타이 자동: 이 슈에서 이미 종료된 방',
-          })
-          return
-        }
-
         // BettingDecisionService.shouldBet()에 위임하여 배팅 결정
         // RoomBettingState → RoomContext 변환
         // 현재 활성 필터에 per-filter 전략이 있으면 settings의 전략을 그것으로 교체해서 전달
         const roomContext: RoomContext = fromRoomBettingState(roomState)
-        const effectiveSettings = this.getSettingsForActiveFilter()
+        const effectiveSettings = this.getSettingsForActiveFilter(roomState)
         const betDecision = this.bettingDecisionService.shouldBet(
           roomId,
           prediction,
           effectiveSettings,
           roomContext
         )
+
+        if (customStrategyDecision && betDecision.shouldBet) {
+          betDecision.betAmount = customStrategyDecision.amount
+          betDecision.betType = customStrategyDecision.direction === 'P'
+            ? 'Player'
+            : customStrategyDecision.direction === 'B'
+              ? 'Banker'
+              : 'Tie'
+        }
 
         if (!betDecision.shouldBet) {
           this.emitDecisionOnce({
@@ -1317,6 +1685,19 @@ class AutoModeServiceImpl {
           roomState.martinLevel,
           room.koreanName,
         )
+        if (customStrategyDecision && cappedAmount !== betDecision.betAmount) {
+          this.emitDecisionOnce({
+            roomId,
+            roomName: room.koreanName,
+            martinLevel: roomState.martinLevel,
+            historyLength: room.history.length,
+            code: 'custom_strategy_amount_over_limit',
+            level: 'error',
+            status: 'failed',
+            message: `전략 금액 ${betDecision.betAmount.toLocaleString()}원이 테이블 한도를 초과하여 베팅을 차단했습니다.`,
+          })
+          return
+        }
         if (cappedAmount !== betDecision.betAmount) {
           betDecision.betAmount = cappedAmount
         }
@@ -1337,11 +1718,31 @@ class AutoModeServiceImpl {
           timestamp: Date.now(),
         })
 
+        // 🆕 원자적 상한 재확인(2026-05-31): 예측 await 동안 다른 방들이 먼저 배팅을 커밋했을 수
+        //    있다. 락은 더 이상 슬롯으로 안 세므로(라이브락 수정), 실제 커밋 직전 여기서 한 번 더
+        //    waiting+martin 수를 확인해 동시 배팅 상한을 원자적으로 보장한다(이 지점~waitingForResult
+        //    설정까지 await 없이 동기 진행되므로 race 없음). 마틴 이어치기는 자기 슬롯이라 예외.
+        const recheckCount = this.getActiveBettingCount()
+        if (!isCurrentlyInMartin && !customStrategyDecision && maxBets > 0 && recheckCount >= maxBets) {
+          console.log(`[AutoMode] 🚫 배팅 직전 상한 재확인 차단: ${room.koreanName} (배팅중=${recheckCount}/${maxBets})`)
+          roomState.lastPrediction = null
+          return
+        }
+
         roomState.lastPrediction = actualPrediction
         this.state.lastEventTime = Date.now()
 
         // 바로 배팅 실행. shouldBet()이 확정한 금액/방향을 그대로 사용한다.
-        await this.placeBet(roomId, room, actualPrediction, roomState, betDecision)
+        await this.placeBet(
+          roomId,
+          room,
+          actualPrediction,
+          roomState,
+          betDecision,
+          effectiveSettings.betStrategy,
+          hasReliableHistory,
+          customStrategyDecision,
+        )
 
       } catch (error) {
         console.error(`[AutoMode] Prediction failed for ${room.koreanName}:`, error)
@@ -1359,6 +1760,7 @@ class AutoModeServiceImpl {
       // 락 해제 (placeBet에서도 해제하지만, early return 경로를 위해 여기서도 해제)
       // Set.delete()는 이미 삭제된 요소에 대해 안전하게 동작
       this.bettingInProgress.delete(roomId)
+      this.bettingInProgressSince.delete(roomId)
     }
   }
 
@@ -1429,7 +1831,10 @@ class AutoModeServiceImpl {
     room: Room,
     prediction: Prediction,
     roomState: RoomBettingState,
-    decision?: BetDecision
+    decision?: BetDecision,
+    progressionStrategy?: AutoModeSettings['betStrategy'],
+    hasReliableHistory = true,
+    customStrategyDecision?: CustomStrategyBetDecision | null,
   ): Promise<void> {
     // NOTE: 락은 onBettingPhase에서 이미 설정됨 (bettingInProgress.add)
     // placeBet는 try-finally로 락 해제만 담당
@@ -1476,13 +1881,17 @@ class AutoModeServiceImpl {
       roomState.lastBetAmount = betAmount
       roomState.waitingForResult = true
       roomState.lastBetTime = Date.now()
-      roomState.lastBetHistoryLength = room.history.length
+      roomState.lastBetHistoryLength = hasReliableHistory ? room.history.length : null
       roomState.martinRecoveryPrediction = prediction
+      roomState.martinRecoveryStrategy = roomState.martinRecoveryStrategy ?? progressionStrategy ?? this.resolveActiveFilterStrategy()
       // Bug Fix: 배팅 시점의 모드 저장 (결과 처리 시 모드 불일치 방지)
       roomState.wasVirtualBet = this.settings.isVirtualMode
+      roomState.placementStatus = undefined
 
       const maxBetsLog = this.settings.maxConcurrentBets > 0 ? this.settings.maxConcurrentBets : '∞'
       console.log(`[AutoMode] 🎰 배팅 시작: ${room.koreanName} (활성=${this.getActiveBettingCount()}/${maxBetsLog}개)`)
+      // 🔬 커스텀 금액 검증용: 실제 적용된 전략·단계·금액을 남긴다(전략=custom인데 금액이 시퀀스와 다르면 배열 확인).
+      this.feDiag(`BET-AMT room=${room.koreanName} strat=${this.resolveRoomProgressionStrategy(roomState)} lv=${roomState.martinLevel} amt=${betAmount} custom=[${(this.settings.customBetAmounts ?? []).slice(0, 16).join(',')}]`)
 
       if (this.settings.isVirtualMode) {
         // 🔥 FIX: VirtualBettingService 잔액 동기화 (두 시스템 간 잔액 불일치 해결)
@@ -1492,6 +1901,10 @@ class AutoModeServiceImpl {
 
         // 가상 배팅 - AutoModeService 설정 기반 금액 사용 (실제 배팅과 동일한 동작)
         console.log(`[AutoMode] 가상 배팅 실행: ${room.koreanName} -> ${betCode} (${betAmount}원)`)
+        if (customStrategyDecision && !CustomStrategyRuntime.markPending(customStrategyDecision)) {
+          roomState.waitingForResult = false
+          throw new Error('커스텀 전략 상태가 변경되어 베팅을 안전하게 취소했습니다.')
+        }
         const result = VirtualBettingService.placeBetWithAmount(roomId, room.koreanName, betCode, betAmount)
 
         // 실패 처리 - 새로운 반환 형식 지원 (boolean | { success: false, reason: string })
@@ -1521,6 +1934,7 @@ class AutoModeServiceImpl {
 
           console.log(`[AutoMode] Virtual betting failed - reason: ${failReason}, balance: ${balance}`)
           roomState.waitingForResult = false
+          if (customStrategyDecision) CustomStrategyRuntime.releasePending(roomId, reasonText)
 
           // ✅ FIX: 중복 배팅은 내부 로그만 (히스토리에 표시 안 함)
           if (failReason === 'duplicate_bet') {
@@ -1551,6 +1965,18 @@ class AutoModeServiceImpl {
         // 실제 배팅 - 가상 배팅과 동일한 로직, 실제 메시지만 전송
         console.log(`[AutoMode] 실제 배팅 실행: ${room.koreanName} -> ${betType} (${betAmount}원)`)
 
+        // ⏱️ [실배팅 타이밍 가드] 예측/처리 지연 동안 베팅창이 닫히면(BetsClosed→phase 'dealing'/'result')
+        //   베팅이 마감 후 도착해 Evolution이 조용히 무시한다(라이브 확인 2026-06-23: 닫힌 뒤 전송→미등록,
+        //   HasBet:false). 전송 직전 실시간 방 상태를 재확인해 '명확히 닫힌' 경우만 이번 판 스킵한다.
+        //   (phase 미상/betting이면 진행 — 과차단으로 "배팅 안 함" 회귀 방지.)
+        const liveRoom = this.casinoAdapter.getRoom(roomId)
+        if (liveRoom && (liveRoom.phase === 'dealing' || liveRoom.phase === 'result')) {
+          console.warn(`[AutoMode] ⏱️ 베팅창 마감 — 실배팅 스킵: ${room.koreanName} (phase=${liveRoom.phase}, tRemain=${liveRoom.remainingSeconds ?? '?'})`)
+          this.feDiag(`SKIP-WINDOW-CLOSED room=${room.koreanName} phase=${liveRoom.phase} tRemain=${liveRoom.remainingSeconds ?? '?'} martin=${roomState.martinLevel} betType=${betType}`)
+          roomState.waitingForResult = false
+          return
+        }
+
         // 🛡️ 실제 배팅 직전 동기화 재확인 (최종 안전장치)
         // AutoBettingService의 virtualModeEnabled가 true면 소켓 전송이 차단되므로
         // 실제 배팅 시점에 한 번 더 동기화하여 불일치 방지
@@ -1560,6 +1986,11 @@ class AutoModeServiceImpl {
           console.log(`[AutoMode] 🛡️ AutoBettingService virtual mode 재동기화: ${this.settings.isVirtualMode}`)
         }
 
+        if (customStrategyDecision && !CustomStrategyRuntime.markPending(customStrategyDecision)) {
+          roomState.waitingForResult = false
+          throw new Error('커스텀 전략 상태가 변경되어 실베팅을 안전하게 취소했습니다.')
+        }
+
         const result = await AutoBettingService.placeBet(
           roomId,
           betType,
@@ -1567,29 +1998,60 @@ class AutoModeServiceImpl {
           undefined,
           true  // isRealBetting: 실제 메시지 전송
         )
-        if (!result.success) {
-          console.error(`[AutoMode] Real betting failed: ${result.error}`)
+        if (!result.success && result.placementStatus !== 'unknown') {
+          const err = result.error || '실제 배팅 실패'
+          console.warn(`[AutoMode] 실제배팅 실패/스킵: ${err}`)
           roomState.waitingForResult = false
+          if (customStrategyDecision) CustomStrategyRuntime.releasePending(roomId, err)
+          roomState.placementStatus = result.placementStatus
+
+          // 🛑 잔액 부족 = 더 이상 베팅 불가 → 자동 정지(히스토리 도배 대신 한 번만 알리고 멈춤). 사용자 요청 2026-06-23.
+          if (err.includes('잔액이 부족') || err.includes('Insufficient')) {
+            console.warn(`[AutoMode] 🛑 잔액 부족 — 자동 정지: ${err}`)
+            this.emitBetLog({
+              type: 'bet_result', roomId, roomName: room.koreanName,
+              prediction: prediction.prediction, betType, betAmount,
+              martinLevel: roomState.martinLevel, status: 'failed', level: 'error',
+              reasoning: `잔액 부족 — 자동 정지 (${err})`, timestamp: Date.now(),
+            })
+            this.stop()
+            this.state.statusMessage = '잔액 부족으로 자동 정지'
+            this.emitStateChange()
+            return
+          }
+
           // 🆕 v2.23: 슬롯 추적은 waitingForResult + bettingInProgress 기반 (Single Source of Truth)
-          // waitingForResult = false 설정으로 자동 슬롯 반환됨
-          this.emitBetLog({
-            type: 'bet_result',
-            roomId,
-            roomName: room.koreanName,
-            prediction: prediction.prediction,
-            betType,
-            betAmount,
-            martinLevel: roomState.martinLevel,
-            status: 'failed',
-            level: 'error',
-            reasoning: result.error || '실제 배팅 실패',
-            timestamp: Date.now(),
-          })
-          console.log(`[AutoMode] 실제배팅 실패, 슬롯 반환`)
+          // 일시적 스킵(중복 베팅·게임정보 대기)은 결과 대기 중 1초 타이머 재시도마다 반복 발생하므로
+          // 히스토리에 도배하지 않고 콘솔만 남긴다(사용자 보고 "이미 배팅됨 연속으로 나옴"). 진짜 오류만 히스토리 표시.
+          const isTransientSkip = err.includes('이미 배팅') || err.includes('게임 정보를 받는 중')
+          if (!isTransientSkip) {
+            this.emitBetLog({
+              type: 'bet_result',
+              roomId,
+              roomName: room.koreanName,
+              prediction: prediction.prediction,
+              betType,
+              betAmount,
+              martinLevel: roomState.martinLevel,
+              status: 'failed',
+              level: 'error',
+              reasoning: err,
+              timestamp: Date.now(),
+            })
+          }
+          console.log(`[AutoMode] 실제배팅 실패/스킵, 슬롯 반환`)
           return
         }
-        console.log(`[AutoMode] 실제 배팅 성공!`)
+        roomState.placementStatus = result.placementStatus
+        if (result.placementStatus === 'unknown') {
+          console.warn('[AutoMode] 실제배팅 체결 미확정 — 재전송하지 않고 resolved 결과를 기다립니다')
+        } else {
+          console.log(`[AutoMode] 실제 배팅 성공!`)
+        }
+        this.feDiag(`BET-SENT room=${room.koreanName} betType=${betType} amount=${betAmount} gid=${AutoBettingService.getPendingBet(roomId)?.gameId ?? '?'}`)
       }
+
+      if (customStrategyDecision) this.syncCustomStrategyState(roomId, roomState)
 
       // 배팅 실행 로그 — 락 해제 전에 emit해서 락 풀린 사이 같은 방으로 재진입이
       //   발생하더라도 같은 bet_placed 가 중복 emit 되지 않도록 한다.
@@ -1605,6 +2067,9 @@ class AutoModeServiceImpl {
         reasoning: prediction.reasoning,  // 패턴 정보 전달
         cumulativeProfit: this.state.cumulativeProfit,
         timestamp: Date.now(),
+        customStrategyId: customStrategyDecision?.strategyId,
+        customStrategyStage: customStrategyDecision ? customStrategyDecision.stageIndex + 1 : undefined,
+        customStrategyAttempt: customStrategyDecision ? customStrategyDecision.attemptIndex + 1 : undefined,
       })
 
       const prevTotal = this.state.totalBetAmount
@@ -1614,6 +2079,7 @@ class AutoModeServiceImpl {
     } finally {
       // 동시 배팅 방지: 락 해제 (emit 이후에 해제해서 중복 진입 차단)
       this.bettingInProgress.delete(roomId)
+      this.bettingInProgressSince.delete(roomId)
     }
   }
 
@@ -1627,7 +2093,7 @@ class AutoModeServiceImpl {
   private tryBetOnCurrentBettingWindows(roomIds?: string[], options?: { requestedFirst?: boolean }): void {
     if (!this.settings.enabled) return
 
-    const targetIds = this.prioritizeMartinRoomIds((() => {
+    const baseTargets = (() => {
       if (Array.isArray(roomIds) && roomIds.length > 0) return roomIds
 
       // 패턴 필터가 걸려 있고, 매칭된 방 목록이 0개면 아무 것도 하지 않는다.
@@ -1643,7 +2109,19 @@ class AutoModeServiceImpl {
 
       // 마지막 fallback: 모든 방
       return Array.from(this.casinoAdapter.getRooms().keys())
-    })(), options?.requestedFirst === true)
+    })()
+
+    // 🔒 마틴 진행 중(martinLevel>0 / waitingForResult)인 방은 필터/activeBettingRoomIds에서
+    // 빠져도 "이길 때까지" 이어쳐야 한다(사용자 핵심 요구). 연속배팅 타이머(1초)의 후보를
+    // activeBettingRoomIds로만 만들면, 필터에서 빠진 락 방을 놓쳐 마틴이 중단(버려짐)된다.
+    // → 항상 락 방을 후보에 union한다. 다운스트림 가드는 이미 안전: isRoomEnabled가 락 방을
+    //    허용(881-883), maxConcurrentBets도 마틴 방은 면제(1192-1197). 베이스가 []여도 락 방은 이어침.
+    const lockedMartin = this.getLockedMartinRoomIds()
+    const mergedTargets = lockedMartin.length > 0
+      ? Array.from(new Set([...baseTargets, ...lockedMartin]))
+      : baseTargets
+
+    const targetIds = this.prioritizeMartinRoomIds(mergedTargets, options?.requestedFirst === true)
 
     if (targetIds.length === 0) return
 
@@ -1653,8 +2131,10 @@ class AutoModeServiceImpl {
         if (!this.isRoomEnabled(roomId)) return
 
         // 🆕 v2.24: 실시간 방 데이터에서 배팅 가능 여부 확인 (스냅샷보다 우선)
+        const roomState = this.state.roomStates.get(roomId)
         const room = this.casinoAdapter.getRoom(roomId)
-        if (!room) return
+        const missingLockedMartinRoom = !room ? this.getMissingLockedMartinRoom(roomId) : null
+        if (!room && !missingLockedMartinRoom) return
 
         let remainingSeconds = 0
 
@@ -1670,7 +2150,7 @@ class AutoModeServiceImpl {
 
         // 방법 2: 스냅샷 없거나 만료됐으면 실시간 데이터 사용
         if (remainingSeconds <= 0) {
-          remainingSeconds = room.remainingSeconds ?? 0
+          remainingSeconds = (room || missingLockedMartinRoom)?.remainingSeconds ?? 0
           // 🆕 phase 체크 완화: remainingSeconds > 0이면 배팅 가능으로 간주
           if (remainingSeconds <= 0) return
         }
@@ -1678,14 +2158,13 @@ class AutoModeServiceImpl {
         // 이미 배팅 진행 중이면 스킵 (중복 배팅 방지)
         if (this.bettingInProgress.has(roomId)) return
 
-        const roomState = this.state.roomStates.get(roomId)
         if (roomState?.waitingForResult) return
 
-        const minRequiredSeconds = this.isTieAutoMode() && (roomState?.martinLevel ?? 0) > 0 ? 2 : 3
+        const minRequiredSeconds = this.isProgressionActive(roomId, roomState) ? 2 : 3
         if (remainingSeconds < minRequiredSeconds) return
 
         // 기존 이벤트 핸들러 재사용 (동일한 안전장치/로직 적용)
-        void this.onBettingPhase({ roomId, remainingSeconds, phase: 'start' })
+        void this.onBettingPhase({ roomId, remainingSeconds, phase: 'start' }, 'poll')
         triggeredCount++
       } catch (e) {
         console.error('[AutoMode] tryBetOnCurrentBettingWindows error:', e)
@@ -1705,7 +2184,7 @@ class AutoModeServiceImpl {
    * 결과가 1번 추가되면 length = N+1 이고 결과는 history[0]
    * 결과가 d번 추가되면 length = N+d 이고, 베팅 결과는 history[d-1]
    */
-  private getPendingBetResultWinnerFromHistory(room: Room, roomState: RoomBettingState): Winner | null {
+  private getPendingBetResultWinnerFromHistory(room: Room, roomState: RoomBettingState, fromConfirmedResult = false): Winner | null {
     const baseLength = roomState.lastBetHistoryLength
     // ✅ Bug Fix: baseLength 타입 및 값 방어
     if (typeof baseLength !== 'number' || baseLength < 0) return null
@@ -1713,7 +2192,16 @@ class AutoModeServiceImpl {
     const currentLength = room.history.length
     if (currentLength <= baseLength) return null
 
-    if (baseLength === 0 && currentLength > 1) {
+    // 🐞 타이 적중 유실 수정(2026-07-07): baseLength===0(빈 방 = '새 슈 첫 판부터' 배팅,
+    // 사용자 fresh-shoe/타이 전략의 정상 경로)에서 결과가 배치로 2개 이상 한꺼번에 들어온 경우.
+    //  - fromConfirmedResult=true (실제 GameResult 이벤트로 확정된 정산): 배팅은 '히스토리가
+    //    빈 상태'에서 걸었으므로 새로 관측된 결과 중 가장 오래된 것(history[currentLength-1]
+    //    = 아래 idx=delta-1)이 바로 그 배팅 라운드다 → 그 결과로 정산한다. 종전엔 무조건
+    //    null을 반환해 타이 적중을 놓쳤고(→ handleGameResult가 winnerFromEvent=최신 B/P로
+    //    폴백·오판) '타이를 먹었는데 승리가 패배로 정산'되는 근본 원인이었다.
+    //  - fromConfirmedResult=false (수동적 스냅샷/타임아웃 추론): 갑자기 나타난 다판 스냅샷을
+    //    오판(가짜 정산)하지 않도록 종전대로 보수적으로 건너뛴다.
+    if (baseLength === 0 && currentLength > 1 && !fromConfirmedResult) {
       console.warn(`[AutoMode] Ambiguous first-hand history snapshot ignored - ${room.koreanName || room.id}: baseLen=0, currentLen=${currentLength}`)
       return null
     }
@@ -1762,18 +2250,38 @@ class AutoModeServiceImpl {
     )
   }
 
-  private handleGameResult(roomId: string, winnerFromEvent: Winner, eventPlayerScore?: number, eventBankerScore?: number): void {
+  private handleGameResult(roomId: string, winnerFromEvent: Winner, eventPlayerScore?: number, eventBankerScore?: number, betOutcome?: BetOutcome): void {
     const roomState = this.state.roomStates.get(roomId)
     const room = this.casinoAdapter.getRoom(roomId)
     const roomName = room?.koreanName || roomState?.roomName || roomId
 
     console.log(`[AutoMode] handleGameResult - room: ${roomName}, winner: ${winnerFromEvent}, waitingForResult: ${roomState?.waitingForResult}, lastPrediction: ${roomState?.lastPrediction?.prediction}`)
+    this.feDiag(`RESULT room=${roomName} winner=${winnerFromEvent} waiting=${roomState?.waitingForResult} wasV=${roomState?.wasVirtualBet} betHL=${roomState?.lastBetHistoryLength} curHL=${room?.history.length}`)
 
     // 🆕 v2.23: 슬롯 추적은 waitingForResult 기반 Single Source of Truth
     // 결과 처리 후 waitingForResult = false로 설정되어 자동으로 슬롯이 반환됨
 
-    if (!roomState || !roomState.waitingForResult || !roomState.lastPrediction) {
-      console.log(`[AutoMode] 결과 무시 - waitingForResult: ${roomState?.waitingForResult}, hasLastPrediction: ${!!roomState?.lastPrediction}`)
+    if (!roomState || !roomState.waitingForResult) {
+      console.log(`[AutoMode] 결과 무시 - waitingForResult: ${roomState?.waitingForResult}`)
+      this.feDiag(`RESULT-ignore room=${roomName} reason=not-waiting(${roomState?.waitingForResult})`)
+      return
+    }
+
+    // 🐞 슬롯 누수 수정(2026-05-31): waitingForResult=true인데 lastPrediction이 비어 있는 경우
+    // (예측 2초 클리어 타이머/새 예측 사이클과 결과 도착의 비동기 틈) — 예전엔 여기서 그냥 return해
+    // 슬롯(waitingForResult)을 반환하지 않아, 그 방이 동시배팅 슬롯을 영구 점유했다. 그러면
+    // maxConcurrentBets(특히 1)에서 "🚫 동시배팅 상한 초과(점유=2/1)"로 모든 신규 배팅이 멈춘다.
+    // → 결과가 온 이상 슬롯은 반드시 반환한다(가상 pending도 환불).
+    if (!roomState.lastPrediction) {
+      console.log(`[AutoMode] ⚠️ lastPrediction 없음 — 슬롯 반환(누수 방지): ${roomName}`)
+      if (roomState.wasVirtualBet) {
+        VirtualBettingService.cancelPendingBet(roomId)
+      }
+      CustomStrategyRuntime.releasePending(roomId, '결과는 왔지만 예측 정보가 없어 같은 차수를 유지합니다.')
+      roomState.waitingForResult = false
+      roomState.lastBetHistoryLength = null
+      roomState.wasVirtualBet = undefined
+      this.emitStateChange()
       return
     }
 
@@ -1788,26 +2296,21 @@ class AutoModeServiceImpl {
     // (예: BettingPhase가 먼저 들어와서 다음 라운드 베팅이 잡힌 뒤, 이전 라운드 GameResult가 늦게 도착하는 경우)
     if (room && typeof roomState.lastBetHistoryLength === 'number') {
       if (room.history.length <= roomState.lastBetHistoryLength) {
-        // ✅ FIX: stale이면 강제로 pending 해제 (VirtualBettingService도 환불 처리)
-        if (isStale) {
-          console.log(`[AutoMode] ⚠️ Stale pending 강제 해제 (${Math.floor(pendingDuration / 1000)}s) - ${roomName}`)
-          if (roomState.wasVirtualBet) {
-            VirtualBettingService.cancelPendingBet(roomId)
-          }
-          roomState.waitingForResult = false
-          roomState.lastPrediction = null
-          roomState.martinRecoveryPrediction = null
-          roomState.lastBetHistoryLength = null
-          roomState.wasVirtualBet = undefined
-          this.emitStateChange()
+        const acceptZeroTieResultBeforeHistory = winnerFromEvent === 'T' && this.isZeroTieFrequentFilter()
+        if (acceptZeroTieResultBeforeHistory) {
+          console.log(`[AutoMode] Accepting zero-tie filter Tie result before history growth - ${roomName}`)
+          this.feDiag(`RESULT-accept-zero-tie-before-history room=${roomName} betHL=${roomState.lastBetHistoryLength} curHL=${room.history.length}`)
         } else {
+          // A result event is only actionable after the room history grows past
+          // the recorded bet history length. Age alone must not release the slot.
           console.log(`[AutoMode] 결과 무시 - 히스토리 증가 없음 (betHistory=${roomState.lastBetHistoryLength}, currentHistory=${room.history.length})`)
+          this.feDiag(`RESULT-ignore room=${roomName} reason=hist-not-grown betHL=${roomState.lastBetHistoryLength} curHL=${room.history.length} stale=${isStale}`)
+          return
         }
-        return
-      }
+    }
     }
 
-    const inferredWinner = room ? this.getPendingBetResultWinnerFromHistory(room, roomState) : null
+    const inferredWinner = room ? this.getPendingBetResultWinnerFromHistory(room, roomState, true) : null
     const winner = inferredWinner || winnerFromEvent
 
     if (inferredWinner && inferredWinner !== winnerFromEvent) {
@@ -1820,6 +2323,7 @@ class AutoModeServiceImpl {
       roomState.waitingForResult = false
       roomState.lastPrediction = null
       roomState.martinRecoveryPrediction = null
+      roomState.martinRecoveryStrategy = null
       roomState.lastBetHistoryLength = null
       this.emitStateChange()
       return
@@ -1835,6 +2339,15 @@ class AutoModeServiceImpl {
       if (delta <= 0) return undefined
       return delta - 1
     })()
+    const customSessionAtBet = CustomStrategyRuntime.getSessionForRoom(roomId)
+    const customStrategyStageAtBet = customSessionAtBet?.stageIndex !== undefined
+      ? customSessionAtBet.stageIndex + 1
+      : undefined
+    const customStrategyAttemptAtBet = customSessionAtBet?.attemptIndex !== undefined
+      ? customSessionAtBet.attemptIndex + 1
+      : undefined
+    const customResultKey = betOutcome?.gameId
+      || `${roomId}:${roomState.lastBetHistoryLength ?? 'unknown'}:${historyIndex ?? 'event'}:${winner}:${roomState.lastBetTime ?? 'time'}`
 
     // 카드 점수 추출 (이벤트 → 히스토리 → gameState 순으로 폴백)
     const latestResult = room?.history[0]
@@ -1848,9 +2361,99 @@ class AutoModeServiceImpl {
     }
     const wasVirtualBet = roomState.wasVirtualBet ?? this.settings.isVirtualMode
 
+    // A confirmation timeout means the request may still have been accepted. Do not
+    // infer a financial result from shoe history alone; wait for authoritative
+    // baccarat.resolved acceptedBets/rejectedBets for this exact round and spot.
+    if (!wasVirtualBet && roomState.placementStatus === 'unknown') {
+      const pendingBet = AutoBettingService.getPendingBet(roomId)
+      if (betOutcome?.gameId && pendingBet?.gameId && betOutcome.gameId !== pendingBet.gameId) {
+        console.warn(`[AutoMode] 체결 미확정 결과 무시 — gameId 불일치 (${roomName})`)
+        return
+      }
+
+      if (!betOutcome) {
+        console.warn(`[AutoMode] 체결 미확정 결과 보류 — authoritative resolved 대기 (${roomName})`)
+        return
+      }
+
+      const accepted = isBetAccepted(betOutcome, predResult as Winner)
+      const { rejected } = isBetRejected(betOutcome, predResult as Winner)
+      if (!accepted && !rejected) {
+        const spot = predResultToSpot(predResult as Winner)
+        console.warn(`[AutoMode] 체결 내역 없음 — 정산 제외: ${roomName} spot=${spot}`)
+        this.emitBetLog({
+          type: 'bet_result',
+          roomId,
+          roomName,
+          prediction: predResult,
+          betType: spot,
+          betAmount,
+          martinLevel: roomState.martinLevel,
+          status: 'failed',
+          level: 'error',
+          reasoning: '서버 체결 내역 없음 — 손익/마틴 정산 제외',
+          timestamp: Date.now(),
+        })
+        AutoBettingService.onGameResult(roomId)
+        CustomStrategyRuntime.releasePending(roomId, '서버 체결 내역 없음')
+        roomState.waitingForResult = false
+        roomState.lastPrediction = null
+        roomState.lastBetHistoryLength = null
+        roomState.wasVirtualBet = undefined
+        roomState.placementStatus = undefined
+        roomState.lastResultTime = Date.now()
+        this.state.lastEventTime = Date.now()
+        this.emitStateChange()
+        if (this.settings.enabled) this.tryBetOnCurrentBettingWindows()
+        return
+      }
+    }
+
+    // 🎯 실배팅 거절 정산 제외(2026-06-23): Evolution이 거절한 베팅(rejectedBets, 예 '1013'=최소금액 미달)은
+    // 지갑이 움직이지 않았으므로 손익/마틴에 반영하지 않는다 — "돈만 나가고 이겨도 안 들어옴"의 근본 원인인
+    // 가짜 정산(phantom)을 막는다. betOutcome은 baccarat.resolved에서만 옴(없으면 아래 기존 정산으로 폴백).
+    if (!wasVirtualBet) {
+      const { rejected, errorCode } = isBetRejected(betOutcome, predResult as Winner)
+      if (rejected) {
+        const spot = predResultToSpot(predResult as Winner)
+        console.warn(`[AutoMode] 🚫 실배팅 거절 — 정산 제외: ${roomName} spot=${spot} error=${errorCode ?? '?'}`)
+        this.feDiag(`SETTLE-SKIP-REJECTED room=${roomName} spot=${spot} err=${errorCode ?? '?'}`)
+        this.emitBetLog({
+          type: 'bet_result',
+          roomId,
+          roomName,
+          prediction: predResult,
+          betType: spot,
+          betAmount,
+          martinLevel: roomState.martinLevel,
+          status: 'failed',
+          level: 'error',
+          reasoning: errorCode === '1013'
+            ? '최소 배팅금액 미달로 거절됨 — 정산 제외 (돈 안 빠짐)'
+            : `배팅 거절(${errorCode ?? '?'}) — 정산 제외`,
+          timestamp: Date.now(),
+        })
+        // 거절은 손실이 아니므로 마틴 단계를 올리지 않는다. 상태만 정리하고 슬롯 반환.
+        AutoBettingService.onGameResult(roomId)
+        CustomStrategyRuntime.releasePending(roomId, `배팅 거절(${errorCode ?? '?'})`)
+        roomState.waitingForResult = false
+        roomState.lastPrediction = null
+        roomState.lastBetHistoryLength = null
+        roomState.wasVirtualBet = undefined
+        roomState.placementStatus = undefined
+        roomState.lastResultTime = Date.now()
+        this.state.lastEventTime = Date.now()
+        this.emitStateChange()
+        if (this.settings.enabled) this.tryBetOnCurrentBettingWindows()
+        return
+      }
+    }
+
     // 타이 처리 (push) - 손익/마틴 변화 없음, 환불 처리
     // 단, predResult가 'T'인 경우는 Tie 배팅이 적중한 경우이므로 일반 승리 처리(아래로) 진행
     if (winner === 'T' && predResult !== 'T') {
+      const customTransition = CustomStrategyRuntime.settle(roomId, 'push', customResultKey)
+      if (customTransition.handled) this.syncCustomStrategyState(roomId, roomState)
       if (wasVirtualBet) {
         VirtualBettingService.resolveBet(roomId, roomName, predResult, 'T')
         // ✅ 결과 처리 후 잔액 동기화 (Single Source of Truth: cumulativeProfit)
@@ -1867,11 +2470,14 @@ class AutoModeServiceImpl {
       roomState.lastPrediction = null
       if (roomState.martinLevel === 0) {
         roomState.martinRecoveryPrediction = null
+        roomState.martinRecoveryStrategy = null
       }
       roomState.lastBetHistoryLength = null
       roomState.wasVirtualBet = undefined  // Bug Fix: 모드 정보 초기화
+      roomState.placementStatus = undefined
       roomState.lastResultTime = Date.now()
       this.state.lastEventTime = Date.now()
+      this.markTieAutoCompletedRoom(roomId, roomName, 'T')
 
       this.emitBetLog({
         type: 'bet_result',
@@ -1889,13 +2495,16 @@ class AutoModeServiceImpl {
         timestamp: Date.now(),
         playerScore,
         bankerScore,
+        customStrategyId: customSessionAtBet?.strategyId,
+        customStrategyStage: customStrategyStageAtBet,
+        customStrategyAttempt: customStrategyAttemptAtBet,
       })
 
       this.emitStateChange()
 
       // 🆕 v2.24: 타이 결과 후에도 즉시 다른 방 배팅 시도
       if (this.settings.enabled) {
-        if (roomState.martinLevel > 0) {
+        if (this.isProgressionActive(roomId, roomState)) {
           this.tryBetOnCurrentBettingWindows([roomId], { requestedFirst: true })
         }
         this.tryBetOnCurrentBettingWindows()
@@ -1915,60 +2524,86 @@ class AutoModeServiceImpl {
     roomState.totalBets++
     roomState.totalProfit += profit
     roomState.lastResultTime = Date.now()
+    const customTransition = CustomStrategyRuntime.settle(roomId, won ? 'win' : 'loss', customResultKey)
+    if (customTransition.handled) this.syncCustomStrategyState(roomId, roomState)
 
     if (won) {
       // ========== 승리 처리 ==========
       roomState.totalWins++
       this.state.totalWins++
 
-      // ✅ MartingaleManager를 Single Source of Truth로 사용
-      // recordWin은 level=0, consecutiveWins++, consecutiveLosses=0 처리
-      this.martingaleManager.recordWin(roomId)
-      this.syncMartinLevelFromManager(roomId, roomState)
-      roomState.martinRecoveryPrediction = null
-
-      // 타이 자동: 적중한 방은 이 슈에서는 끝 → 다음 매칭 방으로 이동
-      if (this.currentPatternFilter === 'tie_frequent') {
-        this.tieAutoCompletedRooms.add(roomId)
+      if (customTransition.handled) {
+        roomState.martinRecoveryPrediction = null
+        roomState.martinRecoveryStrategy = null
+        console.log(`[AutoMode] ${roomName} - 커스텀 전략 승리! ${customTransition.stageIndex + 1}단계 ${customTransition.attemptIndex + 1}차 상태=${customTransition.status}`)
+      } else {
+        // ✅ MartingaleManager를 Single Source of Truth로 사용
+        // recordWin은 level=0, consecutiveWins++, consecutiveLosses=0 처리
+        this.martingaleManager.recordWin(roomId)
+        this.syncMartinLevelFromManager(roomId, roomState)
+        roomState.martinRecoveryPrediction = null
+        roomState.martinRecoveryStrategy = null
+        console.log(`[AutoMode] ${roomName} - 승리! 마틴 리셋, 손익: +${profit.toLocaleString()}원`)
       }
-
-      console.log(`[AutoMode] ${roomName} - 승리! 마틴 리셋, 손익: +${profit.toLocaleString()}원`)
+      this.feDiag(`SETTLE-WIN room=${roomName} winner=${winner} profit=${profit} cum=${this.state.cumulativeProfit + profit}`)
     } else {
       // ========== 패배 처리 ==========
       roomState.totalLosses++
       this.state.totalLosses++
 
-      // 마틴 레벨 증가 (다음 배팅용)
-      // martinLevel은 0-indexed: 0=1단계, 1=2단계, 2=3단계
-      // maxMartin=3 설정 시:
-      //   - martinLevel=0(1단계) 패배 → martinLevel=1(2단계)
-      //   - martinLevel=1(2단계) 패배 → martinLevel=2(3단계)
-      //   - martinLevel=2(3단계) 패배 → 같은 최대 금액으로 계속 진행
-      const maxMartin = this.settings.maxMartin
-      const currentLevel = this.martingaleManager.getLevel(roomId)
-
-      if (currentLevel >= maxMartin - 1) {
-        // 최대 단계에서 패배 → 최대 금액 유지
-        const previousMartin = currentLevel
-
-        // 한 번 진입한 마틴은 승리 전까지 같은 방/같은 방향으로 계속 간다.
-        // 최대 단계에서는 금액만 cap으로 유지하고, 방 종료/리셋은 하지 않는다.
-        this.martingaleManager.recordLoss(roomId)
-        this.martingaleManager.decrementLevel(roomId)
+      // 🆕 2026-06-23: 레벨 상승은 '진행형 전략'에서만. flat(플랫)은 패배해도 레벨 0을 유지한다 —
+      //   안 그러면 phantom martinLevel>0로 방이 '마틴 락'(슬롯 점유·동시배팅 상한 면제·같은 방/방향
+      //   고착)이 돼 사용자의 flat·동시배팅 설정을 위반한다(레벨 0 = 슬롯 반환 → 다음 매칭 방으로 회전).
+      const effectiveStrategy = this.resolveRoomProgressionStrategy(roomState)
+      if (customTransition.handled) {
+        roomState.martinRecoveryPrediction = null
+        roomState.martinRecoveryStrategy = null
+        console.log(`[AutoMode] ${roomName} - 커스텀 전략 패배! 상태=${customTransition.status}, 다음 ${customTransition.stageIndex + 1}단계 ${customTransition.attemptIndex + 1}차`)
+      } else if (effectiveStrategy === 'flat') {
+        this.martingaleManager.recordLoss(roomId, false) // 연패 카운트만, 레벨 미상승
         this.syncMartinLevelFromManager(roomId, roomState)
-        console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${previousMartin + 1}/${maxMartin}단계 (최대 유지), 승리까지 같은 방향으로 계속 진행, 손익: ${profit.toLocaleString()}원`)
+        roomState.martinRecoveryPrediction = null
+        roomState.martinRecoveryStrategy = null
+        console.log(`[AutoMode] ${roomName} - 패배(flat, 레벨 0 유지 → 슬롯 반환·회전), 손익: ${profit.toLocaleString()}원`)
       } else {
-        // 최대 단계 미만에서 패배 → 레벨 증가
-        // ✅ MartingaleManager를 Single Source of Truth로 사용
-        // recordLoss는 level++, consecutiveLosses++, consecutiveWins=0 처리
-        this.martingaleManager.recordLoss(roomId)
-        this.syncMartinLevelFromManager(roomId, roomState)
-        console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${roomState.martinLevel + 1}/${maxMartin}단계, 손익: ${profit.toLocaleString()}원`)
+        // 마틴 레벨 증가 (다음 배팅용)
+        // martinLevel은 0-indexed: 0=1단계, 1=2단계, 2=3단계
+        // maxMartin=3 설정 시:
+        //   - martinLevel=0(1단계) 패배 → martinLevel=1(2단계)
+        //   - martinLevel=1(2단계) 패배 → martinLevel=2(3단계)
+        //   - martinLevel=2(3단계) 패배 → 같은 최대 금액으로 계속 진행
+        const maxMartin = this.settings.maxMartin
+        const currentLevel = this.martingaleManager.getLevel(roomId)
+
+        if (currentLevel >= maxMartin - 1) {
+          // 최대 단계에서 패배 → 최대 금액 유지
+          const previousMartin = currentLevel
+
+          // 한 번 진입한 마틴은 승리 전까지 같은 방/같은 방향으로 계속 간다.
+          // 최대 단계에서는 금액만 cap으로 유지하고, 방 종료/리셋은 하지 않는다.
+          this.martingaleManager.recordLoss(roomId)
+          this.martingaleManager.decrementLevel(roomId)
+          this.syncMartinLevelFromManager(roomId, roomState)
+          console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${previousMartin + 1}/${maxMartin}단계 (최대 유지), 승리까지 같은 방향으로 계속 진행, 손익: ${profit.toLocaleString()}원`)
+        } else {
+          // 최대 단계 미만에서 패배 → 레벨 증가
+          // ✅ MartingaleManager를 Single Source of Truth로 사용
+          // recordLoss는 level++, consecutiveLosses++, consecutiveWins=0 처리
+          this.martingaleManager.recordLoss(roomId)
+          this.syncMartinLevelFromManager(roomId, roomState)
+          console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${roomState.martinLevel + 1}/${maxMartin}단계, 손익: ${profit.toLocaleString()}원`)
+        }
       }
     }
 
     // profit은 이미 반올림된 정수이므로 다시 반올림하지 않음 (누적 오차 방지)
     this.state.cumulativeProfit += profit
+
+    // 🆕 손실도 SETTLE-WIN과 대칭으로 로그(2026-06-23) — 종전엔 패배가 feDiag에 안 남아 "졌을때 계산"이
+    // 로그상 안 보였다. 이제 한 런으로 패배 차감(cum 감소)을 확인 가능.
+    if (!won) {
+      this.feDiag(`SETTLE-LOSS room=${roomName} winner=${winner} profit=${profit} cum=${this.state.cumulativeProfit}`)
+    }
 
     // 최대 수익/손실 갱신
     if (this.state.cumulativeProfit > this.state.maxProfit) {
@@ -1998,7 +2633,9 @@ class AutoModeServiceImpl {
     roomState.waitingForResult = false
     roomState.lastPrediction = null
     roomState.lastBetHistoryLength = null
+    this.markTieAutoCompletedRoom(roomId, roomName, winner)
     roomState.wasVirtualBet = undefined  // Bug Fix: 모드 정보 초기화
+    roomState.placementStatus = undefined
 
     // 결과 로그 — 배팅 시점의 마틴 레벨을 사용해 히스토리 표시와 일치시킴
     this.emitBetLog({
@@ -2017,21 +2654,33 @@ class AutoModeServiceImpl {
       timestamp: Date.now(),
       playerScore,
       bankerScore,
+      customStrategyId: customSessionAtBet?.strategyId,
+      customStrategyStage: customStrategyStageAtBet,
+      customStrategyAttempt: customStrategyAttemptAtBet,
     })
 
     // ========== 결과 후 윈컷/로스컷 체크 ==========
-    // 윈컷 도달 시 자동 정지
-    if (this.settings.winCutAmount > 0 && this.state.cumulativeProfit >= this.settings.winCutAmount) {
-      console.log(`[AutoMode] 🎉 윈컷 도달! 목표: ${this.settings.winCutAmount.toLocaleString()}원, 달성: ${this.state.cumulativeProfit.toLocaleString()}원`)
-      this.stop()
-      this.state.statusMessage = `윈컷 달성! +${this.state.cumulativeProfit.toLocaleString()}원`
-    }
-
-    // 로스컷 도달 시 자동 정지
-    if (this.settings.lossCutAmount > 0 && this.state.cumulativeProfit <= -this.settings.lossCutAmount) {
-      console.log(`[AutoMode] ⛔ 로스컷 도달! 한도: -${this.settings.lossCutAmount.toLocaleString()}원, 현재: ${this.state.cumulativeProfit.toLocaleString()}원`)
-      this.stop()
-      this.state.statusMessage = `로스컷 도달! ${this.state.cumulativeProfit.toLocaleString()}원`
+    // 가상모드: 자체 손익(cumulativeProfit)이 정확하므로 결과 시점에 즉시 판정.
+    // 실배팅모드: 자체 추정은 무효처리/거부된 베팅을 '승리'로 잘못 셀 수 있어(가짜 P&L) 여기서
+    //   판정하지 않는다. 대신 실잔액이 정산되는 onBalanceUpdate(checkRealBalanceCuts) +
+    //   다음 베팅 직전 게이트(getEffectiveProfit)에서 '진짜 돈' 기준으로 판정한다.
+    if (this.settings.isVirtualMode) {
+      if (this.settings.winCutAmount > 0 && this.state.cumulativeProfit >= this.settings.winCutAmount) {
+        console.log(`[AutoMode] 🎉 윈컷 도달! 목표: ${this.settings.winCutAmount.toLocaleString()}원, 달성: ${this.state.cumulativeProfit.toLocaleString()}원`)
+        this.stop()
+        this.state.statusMessage = `윈컷 달성! +${this.state.cumulativeProfit.toLocaleString()}원`
+      }
+      if (this.settings.lossCutAmount > 0 && this.state.cumulativeProfit <= -this.settings.lossCutAmount) {
+        console.log(`[AutoMode] ⛔ 로스컷 도달! 한도: -${this.settings.lossCutAmount.toLocaleString()}원, 현재: ${this.state.cumulativeProfit.toLocaleString()}원`)
+        this.stop()
+        this.state.statusMessage = `로스컷 도달! ${this.state.cumulativeProfit.toLocaleString()}원`
+      }
+    } else {
+      // 실배팅: 표시(자체 추정)와 실잔액 손익이 크게 어긋나면 무효처리/거부 의심 → 경고로 표면화.
+      const realNet = this.getRealNetProfit()
+      if (realNet !== null && Math.abs(realNet - this.state.cumulativeProfit) > Math.max(this.settings.baseBetAmount, 1)) {
+        console.warn(`[AutoMode] ⚠️ 손익 불일치 — 표시(추정)=${this.state.cumulativeProfit.toLocaleString()}원 vs 실잔액기준=${realNet.toLocaleString()}원. 베팅이 무효처리/거부됐을 수 있습니다.`)
+      }
     }
 
     this.emitStateChange()
@@ -2039,7 +2688,7 @@ class AutoModeServiceImpl {
     // 🆕 v2.24: 결과 처리 후 즉시 다른 방 배팅 시도 (슬롯이 비었으므로)
     // 윈컷/로스컷으로 정지되지 않았으면 실행
     if (this.settings.enabled) {
-      if (!won && roomState.martinLevel > 0) {
+      if (this.isProgressionActive(roomId, roomState)) {
         this.tryBetOnCurrentBettingWindows([roomId], { requestedFirst: true })
       }
       this.tryBetOnCurrentBettingWindows()
@@ -2048,13 +2697,12 @@ class AutoModeServiceImpl {
 
   private onGameResult(event: GameResultEvent): void {
     const { roomId, winner, playerScore, bankerScore } = event
-    this.handleGameResult(roomId, winner, playerScore, bankerScore)
+    this.handleGameResult(roomId, winner, playerScore, bankerScore, event.betOutcome)
   }
 
   private onShoeChange(roomId: string): void {
-    // 새 슈 시작 → 타이 자동의 "이 슈에서 끝난 방" 마킹 해제
-    this.tieAutoCompletedRooms.delete(roomId)
-
+    this.tieAutoCompletedRoomIds.delete(roomId)
+    CustomStrategyRuntime.resetRoom(roomId)
     const roomState = this.state.roomStates.get(roomId)
     if (!roomState) return
 
@@ -2082,12 +2730,14 @@ class AutoModeServiceImpl {
       roomState.waitingForResult = false
       roomState.lastPrediction = null
       roomState.martinRecoveryPrediction = null
+      roomState.martinRecoveryStrategy = null
       roomState.lastBetHistoryLength = null
       if (this.settings.isVirtualMode) {
         VirtualBettingService.cancelPendingBet(roomId)
       }
       console.log(`[AutoMode] Shoe change for ${roomState.roomName}, resetting state`)
     }
+    this.syncCustomStrategyState(roomId, roomState)
     this.emitStateChange()
   }
 
@@ -2106,6 +2756,79 @@ class AutoModeServiceImpl {
       }
     })
     return pendingAmount
+  }
+
+  /** 현재 테이블에 걸린 '실배팅' pending 합계(결과 대기 중, 실모드). getRealNetProfit 보정용. */
+  private getRealPendingBetAmount(): number {
+    let pendingAmount = 0
+    this.state.roomStates.forEach(rs => {
+      if (rs.waitingForResult && rs.wasVirtualBet === false) {
+        pendingAmount += rs.lastBetAmount ?? 0
+      }
+    })
+    return pendingAmount
+  }
+
+  /**
+   * 실배팅 모드의 '진짜 돈' 누적 손익. Evolution 실잔액 델타 기반(자체 추정 cumulativeProfit 아님).
+   *   = (현재 실잔액 - 시작 실잔액) + 현재 실배팅 pending 합계
+   * pending을 더해 '베팅~정산 사이 잔액 하락분'을 보정 → 정산된 순손익만 남는다(타이밍에 강건).
+   * 가상모드이거나 실잔액/기준선을 모르면 null(확정 불가 → 호출부가 자체 추정으로 폴백).
+   */
+  private getRealNetProfit(): number | null {
+    if (this.settings.isVirtualMode) return null
+    if (this.realBalance === null) return null
+    if (this.realStartBalance === null || this.realStartBalance <= 0) return null
+    return (this.realBalance - this.realStartBalance) + this.getRealPendingBetAmount()
+  }
+
+  /**
+   * 실모드 표시용 보유금(2026-06-23 사용자 요청). Evolution 실잔액 프레임은 배팅을 placement에 차감하지만
+   * UI 갱신 타이밍이 불안정해 "배팅해도 안 빠짐/졌을때 안 빠짐"으로 보였다. 그래서 가상모드와 동일한 모델로
+   * 지갑을 투영한다:  시작 실잔액 + 누적손익 − 현재 실배팅 pending.
+   *   - 배팅 거는 즉시: pending↑ → 보유금↓ (7만→6만, 승패 오기 전에)
+   *   - 승리: 누적손익↑ → 올라감 / 패배: 누적손익↓·pending↓ → 6만 유지(안 되돌아옴)
+   * 자체손익이 거절(1013) 제외 후 정확하므로 실지갑과 수렴. 기준선 미확보 시 realBalance로 폴백.
+   */
+  private getRealDisplayBalance(): number | null {
+    if (this.settings.isVirtualMode) return null
+    // 🆕 2026-07-08 실잔액 기준 통일(사용자: "실잔액 -6만인데 프로그램 -4만 불일치"):
+    // 종전엔 자체추정(cumulativeProfit)으로 보유금을 투영했는데, 실배팅 정산 유실(force-reset로
+    // 결과 미정산)이 있으면 실제와 어긋난다(2판 손실 누락 → -4만으로 과소표시). 이제 '진짜 돈'인
+    // 실잔액 기반 손익(getRealNetProfit)으로 투영해 실제 지갑과 맞춘다(= 실잔액 그 자체).
+    const net = this.getRealNetProfit()
+    if (net !== null && this.realStartBalance !== null && this.realStartBalance > 0) {
+      return this.realStartBalance + net - this.getRealPendingBetAmount()
+    }
+    return this.realBalance
+  }
+
+  /** 윈컷/로스컷·표시에 쓸 손익: 실배팅은 실잔액 기반(getRealNetProfit), 불가 시 자체 추정으로 폴백. */
+  private getEffectiveProfit(): number {
+    const real = this.getRealNetProfit()
+    return real !== null ? real : this.state.cumulativeProfit
+  }
+
+  /**
+   * 실배팅 윈컷/로스컷을 '진짜 돈'(실잔액 정산) 기준으로 판정. onBalanceUpdate에서 호출 —
+   * 결과 시점이 아니라 실잔액이 실제로 갱신된 시점이라 승리 입금 타이밍 레이스가 없다.
+   */
+  private checkRealBalanceCuts(): void {
+    if (!this.settings.enabled || this.settings.isVirtualMode) return
+    const real = this.getRealNetProfit()
+    if (real === null) return
+
+    if (this.settings.winCutAmount > 0 && real >= this.settings.winCutAmount) {
+      console.log(`[AutoMode] 🎉 윈컷 도달(실잔액 기준)! 목표: ${this.settings.winCutAmount.toLocaleString()}원, 실손익: +${real.toLocaleString()}원`)
+      this.stop()
+      this.state.statusMessage = `윈컷 달성! +${real.toLocaleString()}원`
+      this.emitStateChange()
+    } else if (this.settings.lossCutAmount > 0 && real <= -this.settings.lossCutAmount) {
+      console.log(`[AutoMode] ⛔ 로스컷 도달(실잔액 기준)! 한도: -${this.settings.lossCutAmount.toLocaleString()}원, 실손익: ${real.toLocaleString()}원`)
+      this.stop()
+      this.state.statusMessage = `로스컷 도달! ${real.toLocaleString()}원`
+      this.emitStateChange()
+    }
   }
 
   private calculateBetAmount(martinLevel: number): number {
@@ -2164,6 +2887,7 @@ class AutoModeServiceImpl {
     console.log(
       `[AutoMode] 💰 베팅 캡 적용: ${roomName} [${betType}] ${amount.toLocaleString()}원 → ${effectiveCap.toLocaleString()}원 (마틴 ${martinLevel + 1}단계)`
     )
+    this.feDiag(`BET-CAP room=${roomName} betType=${betType} lv=${martinLevel} raw=${amount} cap=${effectiveCap} tieCap=${tieCap} tableCap=${tableCap}`)
     return effectiveCap
   }
 
@@ -2173,11 +2897,27 @@ class AutoModeServiceImpl {
    * the filter has no per-filter override.
    */
   private resolveActiveFilterStrategy() {
+    // 🆕 2026-07-08 (사용자 요청 "배팅전략을 커스텀으로 하면 거기에 맞게 배팅돼야 함"):
+    // 전역 전략이 '커스텀'(단계별 직접 금액)이면 그게 최우선이다. 커스텀은 사용자가 명시적으로
+    // 정한 '돈 계획'이라, 필터별 전략 오버라이드(예: 타이 필터 세부설정이 martingale로 잡혀 있어도)가
+    // 이 커스텀 시퀀스를 조용히 무시(→ base×2^단계로 폭주)하면 안 된다.
+    if (this.settings.betStrategy === 'custom') return 'custom'
     if (this.currentPatternFilter === 'all') return this.settings.betStrategy
     return PatternBettingService.resolveBetStrategy(
       this.currentPatternFilter as RoomFilterType,
       this.settings.betStrategy
     )
+  }
+
+  private resolveRoomProgressionStrategy(roomState?: RoomBettingState): AutoModeSettings['betStrategy'] {
+    // 🆕 2026-07-08 (적대적 검증 확정): 커스텀은 사용자가 명시한 '돈 계획'이라 진행중 방에
+    // 캡처된 stale martinRecoveryStrategy보다 항상 우선한다. 이 단락이 없으면 아래 `??`가
+    // 좌변(예: 첫 배팅에서 굳은 'martingale')에서 단락되어 커스텀 시퀀스를 무시하고
+    // base×2^단계로 폭주한다. resolveActiveFilterStrategy 내부의 동일 가드는 바로 이 `??`
+    // 때문에 호출조차 되지 않았다 — 실제 배팅금액 경로(getSettingsForActiveFilter)가 부르는
+    // 함수는 resolveActiveFilterStrategy가 아니라 이 함수다.
+    if (this.settings.betStrategy === 'custom') return 'custom'
+    return roomState?.martinRecoveryStrategy ?? this.resolveActiveFilterStrategy()
   }
 
   // 필터가 Tie 방향만 의미를 갖는지 — Tie 계열 필터는 stale localStorage의
@@ -2198,16 +2938,27 @@ class AutoModeServiceImpl {
    * per-filter override (if any). When no override applies, returns the live
    * settings reference to avoid unnecessary allocation.
    */
-  private getSettingsForActiveFilter() {
-    const effective = this.resolveActiveFilterStrategy()
+  private getSettingsForActiveFilter(roomState?: RoomBettingState) {
+    const effective = this.resolveRoomProgressionStrategy(roomState)
+    // 🐞 stale tie_only 누수 차단: '전체(all)'는 AI 자동(betDirection 'ai')이라 Tie 강제가
+    // 있을 수 없다. Fresh-Shoe 타이 프리셋은 켜질 때 항상 fresh_shoe 필터를 활성화하므로
+    // 필터가 'all'이면 프리셋이 활성이 아닌 것 — 그런데도 settings.forceBetDirection이
+    // 'tie_only'면, 프리셋 비활성 시 복원이 누락된 stale 상태다(restore snapshot이 메모리에만
+    // 있어 앱 재시작 후 applyDisable이 복원을 건너뜀 → forceBetDirection이 'tie_only'에 고착).
+    // 이 경우 '전체 AI'인데도 모든 방이 예측을 무시하고 Tie로 새므로, all에서는 auto로 본다.
+    const staleTieUnderAll =
+      this.currentPatternFilter === 'all' && this.settings.forceBetDirection === 'tie_only'
     const tieOnlyOverride =
       this.isTieOnlyFilter(this.currentPatternFilter) &&
       this.settings.forceBetDirection !== 'tie_only'
-    if (effective === this.settings.betStrategy && !tieOnlyOverride) return this.settings
+    const effectiveForce: 'auto' | 'tie_only' | undefined =
+      staleTieUnderAll ? 'auto' : tieOnlyOverride ? 'tie_only' : this.settings.forceBetDirection
+    const forceChanged = effectiveForce !== this.settings.forceBetDirection
+    if (effective === this.settings.betStrategy && !forceChanged) return this.settings
     return {
       ...this.settings,
       betStrategy: effective,
-      forceBetDirection: tieOnlyOverride ? 'tie_only' : this.settings.forceBetDirection,
+      forceBetDirection: effectiveForce,
     }
   }
 
@@ -2257,16 +3008,22 @@ class AutoModeServiceImpl {
   // ==================== Cleanup ====================
 
   dispose(): void {
+    this.settings.enabled = false
+    this.stopDiagnosticTimer()
+    this.stopContinuousBettingTimer()
     this.cleanupAdapterSubscriptions()
     this.stateManager.clear()
     this.betLogManager.clear()
     this.state.roomStates.clear()
     this.activeBettingRoomIds.clear()
+    this.tieAutoCompletedRoomIds.clear()
     this.hasReceivedActiveRoomList = false
     this.currentPatternFilter = 'all'
+    CustomStrategyRuntime.resetAll()
     this.lastBettingPhaseByRoom.clear()
     this.lastDecisionKeyByRoom.clear()
     this.bettingInProgress.clear()  // 배팅 진행 락 초기화
+    this.bettingInProgressSince.clear()
     // Bug 4 Fix: 필터 전환 타임아웃 정리
     if (this.filterTransitionTimeout) {
       clearTimeout(this.filterTransitionTimeout)

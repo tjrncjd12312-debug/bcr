@@ -3,7 +3,7 @@
 import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
-import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount, compactAmount } from '../utils/autoModeStatus'
+import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel, compactAmount } from '../utils/autoModeStatus'
 import '../AutoModePanel.css'
 
 type RoomBetStatus = 'pending' | 'win' | 'loss' | 'tie' | 'failed' | 'pass'
@@ -64,9 +64,15 @@ export function AutoModeRoomGrid({
   // 2. 선택된 방이 없으면 → 모든 바카라 방 표시
   // 3. 패턴 필터가 'all'이 아니면 → 패턴 매칭되는 방만 표시
   const filteredRooms = useMemo(() => {
+    const isLockedAutoModeRoom = (roomId: string) => {
+      const state = autoModeRoomStates.get(roomId)
+      return !!state && (state.waitingForResult || state.martinLevel > 0)
+    }
+
     // 바카라 방 기본 필터
     let roomList = Array.from(rooms.values())
       .filter(room => {
+        if (isLockedAutoModeRoom(room.id)) return true
         const name = (room.koreanName || room.name || '').toLowerCase()
         if (name.includes('salon') || name.includes('lightning')) return false
         if (!name.includes('baccarat') && !name.includes('바카라')) return false
@@ -75,13 +81,14 @@ export function AutoModeRoomGrid({
 
     // 설정에서 선택된 방이 있으면 해당 방만 필터링
     if (enabledRoomIds.size > 0) {
-      roomList = roomList.filter(room => enabledRoomIds.has(room.id))
+      roomList = roomList.filter(room => enabledRoomIds.has(room.id) || isLockedAutoModeRoom(room.id))
     }
 
     // 패턴 필터 적용 (선택된 방 중에서 패턴 매칭되는 방만)
     const effectiveFilters = activeFilters ?? (selectedPattern === 'all' ? [] : [selectedPattern])
     if (effectiveFilters.length > 0) {
       roomList = roomList.filter(room => {
+        if (isLockedAutoModeRoom(room.id)) return true
         const state = roomStates.get(room.id) || null
         return effectiveFilters.some(filterType => matchesFilter(room, state, filterType))
       })
@@ -254,11 +261,8 @@ function AutoModeRoomCard({
   settings,
   activeFilters,
 }: AutoModeRoomCardProps) {
-  const maxMartin = settings.maxMartin || 5
-
   // 오토 ON 상태일 때만 예측 표시
   const prediction = isAutoEnabled ? autoState?.lastPrediction?.prediction : null
-  const martinLevel = autoState?.martinLevel || 0
   const isBetting = autoState?.waitingForResult || false
 
   // 상태 칩 + 필터 매칭 라벨 (공용 헬퍼)
@@ -267,13 +271,17 @@ function AutoModeRoomCard({
     [autoState, settings, isEnabled, isAutoEnabled]
   )
   const filterLabel = useMemo(() => getFilterShortLabel(activeFilters), [activeFilters])
-  const isTieFilter = filterLabel?.startsWith('Tie') ?? false
+  const isTieFilter = isTieFilterLabel(filterLabel)
 
-  // 현재 마틴 레벨에서 다음 배팅 금액 (공용 헬퍼 — AutoModeService와 동일 로직)
-  const currentBetAmount = useMemo(
-    () => getNextBetAmount(settings, martinLevel, { isTieBet: isTieFilter }),
-    [settings, martinLevel, isTieFilter]
+  const progression = useMemo(
+    () => getRoomProgressionDisplay(settings, autoState, { isTieBet: isTieFilter }),
+    [settings, autoState, isTieFilter]
   )
+  const currentBetAmount = isBetting && (autoState?.lastBetAmount ?? 0) > 0
+    ? autoState!.lastBetAmount
+    : progression.amount
+  const progressionRisk = progression.stage >= Math.max(3, progression.maxStage - 1)
+  const progressionWarning = progression.stage > 1
 
   // 방별 세션 손익 계산
   const sessionProfit = useMemo(() => {
@@ -475,16 +483,16 @@ function AutoModeRoomCard({
             <div className="auto-mode__profit-section empty" />
           )}
 
-          {/* Right: Martin */}
+          {/* Right: active progression */}
           <div className="auto-mode__martin-section">
-            <span className={`auto-mode__martin-label ${martinLevel >= 3 ? 'danger' : martinLevel >= 1 ? 'warning' : ''}`}>
-              마틴 {martinLevel + 1}단계
+            <span className={`auto-mode__martin-label ${progressionRisk ? 'danger' : progressionWarning ? 'warning' : ''}`}>
+              진행 {progression.stepLabel}
             </span>
             <div className="auto-mode__martin-gauge">
-              {Array.from({ length: maxMartin }).map((_, idx) => (
+              {Array.from({ length: progression.maxStage }).map((_, idx) => (
                 <div
                   key={idx}
-                  className={`auto-mode__martin-step ${idx <= martinLevel ? 'active' : ''} ${martinLevel >= 3 ? 'danger' : martinLevel >= 1 ? 'warning' : ''}`}
+                  className={`auto-mode__martin-step ${idx < progression.stage ? 'active' : ''} ${progressionRisk ? 'danger' : progressionWarning ? 'warning' : ''}`}
                 />
               ))}
             </div>
@@ -510,23 +518,20 @@ function AutoModeRoomCard({
         )}
       </div>
 
-      {/* 4. Fusion Footer: 마틴 단계 · 손익 · 승패 */}
+      {/* 4. 실행 요약: 방향·금액·진행·승패 */}
       <div className="auto-mode__room-card-footer">
         <div className="auto-mode__room-card-footer-left">
           {prediction ? (
             <span className={`auto-mode__room-card-footer-pred ${prediction === 'B' ? 'banker' : prediction === 'P' ? 'player' : 'tie'}`}>
-              {prediction === 'B' ? '뱅커' : prediction === 'P' ? '플레이어' : '타이'} {compactAmount(currentBetAmount)}
+            {prediction === 'B' ? '뱅커' : prediction === 'P' ? '플레이어' : '타이'} {compactAmount(currentBetAmount)}
             </span>
           ) : (
             <span className="auto-mode__room-card-footer-pred idle">대기</span>
           )}
         </div>
         <div className="auto-mode__room-card-footer-info">
-          <span className={`auto-mode__room-card-footer-martin ${martinLevel <= 1 ? 'safe' : martinLevel <= 3 ? 'warn' : 'danger'}`}>
-            {martinLevel + 1}단
-          </span>
-          <span className={`auto-mode__room-card-footer-pnl ${sessionProfit > 0 ? 'positive' : sessionProfit < 0 ? 'negative' : ''}`}>
-            {sessionProfit > 0 ? '+' : ''}{compactAmount(sessionProfit)}
+          <span className={`auto-mode__room-card-footer-martin ${!progressionWarning ? 'safe' : progressionRisk ? 'danger' : 'warn'}`}>
+            {progression.compactStepLabel}
           </span>
           <span className="auto-mode__room-card-footer-wl">
             {autoState?.totalWins || 0}승 {autoState?.totalLosses || 0}패

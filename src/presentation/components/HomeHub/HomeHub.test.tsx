@@ -3,25 +3,25 @@ import { render, screen, fireEvent, within } from '@testing-library/react'
 import { HomeHub } from './HomeHub'
 
 describe('HomeHub', () => {
-  it('세 작업(살펴보기/도움받기/자동맡기기)을 신뢰 사다리 순으로 렌더한다', () => {
+  it('세 작업(예측 보기/추천 받기/자동 배팅)을 신뢰 사다리 순으로 렌더한다', () => {
     render(<HomeHub onSelectTask={() => {}} />)
     expect(screen.getByRole('heading', { name: '무엇을 도와드릴까요?' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '살펴보기' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '도움받기' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '자동맡기기' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '예측 보기' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '추천 받기' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '자동 배팅' })).toBeInTheDocument()
   })
 
   it('각 작업 카드의 시작 버튼이 올바른 task로 onSelectTask를 호출한다', () => {
     const onSelectTask = vi.fn()
     render(<HomeHub onSelectTask={onSelectTask} />)
 
-    fireEvent.click(within(screen.getByRole('region', { name: '살펴보기' })).getByRole('button', { name: /시작하기/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: '예측 보기' })).getByRole('button', { name: /시작하기/ }))
     expect(onSelectTask).toHaveBeenLastCalledWith('watch')
 
-    fireEvent.click(within(screen.getByRole('region', { name: '도움받기' })).getByRole('button', { name: /시작하기/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: '추천 받기' })).getByRole('button', { name: /시작하기/ }))
     expect(onSelectTask).toHaveBeenLastCalledWith('assist')
 
-    fireEvent.click(within(screen.getByRole('region', { name: '자동맡기기' })).getByRole('button', { name: /시작하기/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: '자동 배팅' })).getByRole('button', { name: /시작하기/ }))
     expect(onSelectTask).toHaveBeenLastCalledWith('auto')
   })
 

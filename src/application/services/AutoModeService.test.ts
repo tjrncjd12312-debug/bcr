@@ -260,4 +260,64 @@ describe('AutoModeService', () => {
     expect(VirtualBettingService.getRoomState('room1')?.lastBetResult).toBe('pending')
   })
 
+  it('stops new bets without discarding an accepted real bet result', async () => {
+    const room: Room = {
+      id: 'room1',
+      name: 'Room 1',
+      koreanName: 'Room 1',
+      history: makeHistory(['B', 'P', 'B', 'P', 'B']),
+      gameCount: 5,
+      gameState: {
+        playerHand: { score: 0, cards: ['AS', 'KD'] },
+        bankerHand: { score: 0, cards: ['2H', '3C'] },
+      },
+    }
+    adapter.setRoom(room)
+
+    AutoModeService.start()
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    const pendingState = AutoModeService.getRoomState('room1')
+    expect(pendingState?.waitingForResult).toBe(true)
+
+    // The placement path records this flag as false after a confirmed real bet.
+    pendingState!.wasVirtualBet = false
+    pendingState!.lastBetTime = Date.now() - 20_000
+    ;(AutoModeService as unknown as { tryInferPendingResults: () => void }).tryInferPendingResults()
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
+
+    const totalBetAmountBeforeReset = AutoModeService.getState().totalBetAmount
+    AutoModeService.resetStats()
+
+    expect(AutoModeService.getState().totalBetAmount).toBe(totalBetAmountBeforeReset)
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
+    expect(AutoModeService.getState().statusMessage).toBe('통계 초기화 보류 (실베팅 1건 결과 대기)')
+
+    AutoModeService.stop()
+
+    expect(AutoModeService.getSettings().enabled).toBe(false)
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
+    expect(AutoModeService.getRoomState('room1')?.lastPrediction?.prediction).toBe('B')
+    expect(AutoModeService.getState().statusMessage).toBe('정지됨 (실베팅 1건 결과 대기)')
+  })
+
+  it('dispose disables the service and clears its periodic timers', () => {
+    const internal = AutoModeService as unknown as {
+      diagnosticTimerId: ReturnType<typeof setInterval> | null
+      continuousBettingTimerId: ReturnType<typeof setInterval> | null
+    }
+
+    AutoModeService.start()
+    expect(internal.diagnosticTimerId).not.toBeNull()
+    expect(internal.continuousBettingTimerId).not.toBeNull()
+
+    AutoModeService.dispose()
+
+    expect(AutoModeService.getSettings().enabled).toBe(false)
+    expect(internal.diagnosticTimerId).toBeNull()
+    expect(internal.continuousBettingTimerId).toBeNull()
+  })
+
 })

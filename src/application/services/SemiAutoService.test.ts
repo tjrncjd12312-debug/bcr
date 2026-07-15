@@ -462,6 +462,7 @@ describe('SemiAutoService Room URL Building', () => {
 
 import SemiAutoService from './SemiAutoService'
 import type { TriggerReason } from './freshshoe'
+import AutoBettingService from './AutoBettingService'
 
 describe('SemiAutoService preset trigger', () => {
   beforeEach(() => {
@@ -498,6 +499,86 @@ describe('SemiAutoService preset trigger', () => {
     expect(navigateSpy).toHaveBeenCalledTimes(1)
     expect((navigateSpy.mock.calls[0][0] as any).id).toBe('other')
     navigateSpy.mockRestore()
+  })
+
+  it('production candidates require an explicit shoe-change signal', () => {
+    const verified = {
+      id: 'verified', name: 'Verified', koreanName: '검증됨',
+      history: Array.from({ length: 5 }, () => ({ winner: 'B' })), gameCount: 5,
+    } as any
+    const inferredOnly = {
+      id: 'inferred', name: 'Inferred', koreanName: '추정만',
+      history: Array.from({ length: 2 }, () => ({ winner: 'P' })), gameCount: 2,
+    } as any
+
+    SemiAutoService.updateAvailableRooms(new Map([
+      [verified.id, verified],
+      [inferredOnly.id, inferredOnly],
+    ]))
+    ;(SemiAutoService as any).freshShoeDetectedAtByRoom.set(verified.id, Date.now())
+
+    const candidates = (SemiAutoService as any).collectFreshShoeCandidates() as any[]
+    expect(candidates.map(room => room.id)).toEqual(['verified'])
+  })
+
+  it('forces a non-skip prediction to Tie while the preset direction is active', () => {
+    SemiAutoService.updateSettings({ forceBetDirection: 'tie_only' })
+    const prediction = {
+      roomId: 'room1', prediction: 'B', confidence: 0.8,
+      reasoning: 'server', isSkip: false, timestamp: Date.now(),
+    } as const
+
+    const forced = (SemiAutoService as any).applyForcedBetDirection(prediction)
+    expect(forced.prediction).toBe('T')
+    expect(forced.isSkip).toBe(false)
+
+    SemiAutoService.updateSettings({ forceBetDirection: 'auto' })
+  })
+
+  it('preserves an unknown real bet through stop and waits for explicit acceptance', async () => {
+    const prediction = {
+      roomId: 'room-real', prediction: 'B', confidence: 0.8,
+      reasoning: 'server', isSkip: false, timestamp: Date.now(),
+    } as const
+    const internal = (SemiAutoService as any).internalState
+    Object.assign(internal, {
+      currentRoomId: 'room-real',
+      currentRoomName: '실베팅 방',
+      currentRoomProvider: 'evolution',
+      currentBetAmount: 10_000,
+      lastPrediction: prediction,
+      waitingForResult: true,
+      predictionMadeForRound: true,
+      roomHistory: ['B'],
+    })
+    SemiAutoService.updateSettings({ enabled: true, autoBetting: true, baseBetAmount: 10_000 })
+    const placeSpy = vi.spyOn(AutoBettingService, 'placeBetForPrediction').mockResolvedValue({
+      success: false,
+      placementStatus: 'unknown',
+      error: 'confirmation-timeout',
+    })
+
+    await (SemiAutoService as any).executeAutoBetting(prediction)
+    expect(internal.realBetPlacementStatus).toBe('unknown')
+    expect(internal.waitingForResult).toBe(true)
+
+    SemiAutoService.stop()
+    expect(SemiAutoService.getState().settings.enabled).toBe(false)
+    expect(internal.waitingForResult).toBe(true)
+
+    SemiAutoService.onGameResult('room-real', 'P', ['P', 'B'])
+    expect(internal.waitingForResult).toBe(true)
+    expect(internal.cumulativeProfit).toBe(0)
+
+    SemiAutoService.onGameResult('room-real', 'P', ['P', 'B'], {
+      acceptedBets: { Banker: 10_000 },
+      rejectedBets: {},
+    })
+    expect(internal.waitingForResult).toBe(false)
+    expect(internal.realBetPlacementStatus).toBeNull()
+    expect(internal.cumulativeProfit).toBe(-10_000)
+
+    placeSpy.mockRestore()
   })
 })
 

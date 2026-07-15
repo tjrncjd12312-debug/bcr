@@ -8,7 +8,7 @@ import type { RoomBetLog } from './AutoModeRoomGrid'
 import './AutoModeMosaic.css'
 import '../AutoModePanel.css'
 import { useRoomFilter } from '../hooks/useRoomFilter'
-import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount, compactAmount } from '../utils/autoModeStatus'
+import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel, compactAmount } from '../utils/autoModeStatus'
 
 interface AutoModeMosaicProps {
   rooms: Room[]
@@ -75,7 +75,6 @@ export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
     }
   }, [onSelectRoom, onToggleRoom])
 
-  const maxMartin = settings.maxMartin ?? 10
   const filterLabel = useMemo(() => getFilterShortLabel(activeFilters), [activeFilters])
   const isAutoEnabled = settings.enabled ?? false
 
@@ -109,7 +108,6 @@ export const AutoModeMosaic: React.FC<AutoModeMosaicProps> = ({
             prediction={activePredictions.get(room.id)}
             lastLog={betLogs[0]}
             betLogs={betLogs}
-            maxMartin={maxMartin}
             isSelected={selectedRoomId === room.id}
             onClick={() => handleTileClick(room.id)}
             timer={timer}
@@ -131,7 +129,6 @@ interface MosaicTileProps {
   prediction?: Prediction
   lastLog?: RoomBetLog
   betLogs: RoomBetLog[]
-  maxMartin: number
   isSelected: boolean
   onClick: () => void
   timer?: number
@@ -148,7 +145,6 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
   prediction,
   lastLog,
   betLogs,
-  maxMartin,
   isSelected,
   onClick,
   timer,
@@ -159,7 +155,6 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
 }) => {
   // === State Calculations ===
   const isBetting = bettingState?.waitingForResult ?? false
-  const martinLevel = bettingState?.martinLevel ?? 0
 
   const RESULT_DISPLAY_DURATION = 4000
   const PASS_DISPLAY_DURATION = 3000
@@ -194,10 +189,11 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
     return { ...chip, isResult: false }
   }, [recentResultLog, recentPassLog, bettingState, settings, isEnabled, isAutoEnabled])
 
-  const nextBetAmount = useMemo(
-    () => getNextBetAmount(settings, martinLevel, { isTieBet: filterLabel?.startsWith('Tie') ?? false }),
-    [settings, martinLevel, filterLabel]
+  const progression = useMemo(
+    () => getRoomProgressionDisplay(settings, bettingState ?? null, { isTieBet: isTieFilterLabel(filterLabel) }),
+    [settings, bettingState, filterLabel]
   )
+  const progressionRisk = progression.stage >= Math.max(3, progression.maxStage - 1)
 
   const tileClass = useMemo(() => {
     const classes = ['mosaic-tile']
@@ -208,18 +204,18 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
     // else if (thinkingState === 'thinking') classes.push('thinking') // Removed
     else classes.push('idle')
 
-    if (martinLevel >= 4) classes.push('danger')
+    if (progressionRisk) classes.push('danger')
     if (isSelected) classes.push('selected')
     return classes.join(' ')
-  }, [isBetting, recentResultLog, recentPassLog, martinLevel, isSelected])
+  }, [isBetting, recentResultLog, recentPassLog, progressionRisk, isSelected])
 
-  const martinWidth = Math.min(100, (martinLevel / maxMartin) * 100)
-  const martinFillClass = `mosaic-martin-fill level-${Math.min(martinLevel, 10)}`
+  const progressionWidth = progression.progressPercent
+  const progressionFillClass = `mosaic-martin-fill level-${Math.min(progression.stage - 1, 10)}`
   const predictionBadge = isBetting
     ? (prediction?.prediction || bettingState?.lastPrediction?.prediction || null)
     : null
   const winRateClass = winRate >= 55 ? 'good' : winRate < 45 ? 'bad' : ''
-  const martinLabelClass = martinLevel >= 4 ? 'danger' : martinLevel >= 2 ? 'warning' : ''
+  const progressionLabelClass = progressionRisk ? 'danger' : progression.stage > 1 ? 'warning' : ''
   const statusDotClass = useMemo(() => {
     if (isBetting) return 'betting'
     if (lastStatus === 'win') return 'hot'
@@ -244,7 +240,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
       {/* Filter Reason — 왜 이 방이 풀에 들어왔는지 */}
       {filterLabel && (
         <div className="mosaic-filter-row">
-          <span className={`auto-filter-reason ${filterLabel.startsWith('Tie') ? 'tie-tone' : ''}`}>{filterLabel}</span>
+          <span className={`auto-filter-reason ${isTieFilterLabel(filterLabel) ? 'tie-tone' : ''}`}>{filterLabel}</span>
         </div>
       )}
 
@@ -266,12 +262,12 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
               {recentProfit > 0 ? '+' : ''}{compactAmount(recentProfit)}원
             </span>
           ) : (
-            <span className="mosaic-bet-amount">→ {compactAmount(nextBetAmount)}원</span>
+            <span className="mosaic-bet-amount">→ {compactAmount(progression.amount)}원</span>
           )}
         </div>
 
-        <div className={`mosaic-martin-badge ${martinLabelClass}`}>
-          {martinLevel + 1}단
+        <div className={`mosaic-martin-badge ${progressionLabelClass}`} title={progression.strategyLabel}>
+          {progression.compactStepLabel}
         </div>
       </div>
 
@@ -295,8 +291,8 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
       <div className="mosaic-footer">
         <div className="mosaic-martin-gauge">
           <div
-            className={martinFillClass}
-            style={{ width: `${martinWidth}%` }}
+            className={progressionFillClass}
+            style={{ width: `${progressionWidth}%` }}
           />
         </div>
         <span className={`mosaic-footer-stats`}>
@@ -309,6 +305,18 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
 
       {/* Tooltip */}
       <div className="mosaic-tooltip">
+        <div className="mosaic-tooltip-row">
+          <span className="mosaic-tooltip-label">실행 전략</span>
+          <span className="mosaic-tooltip-value">{progression.strategyLabel}</span>
+        </div>
+        <div className="mosaic-tooltip-row">
+          <span className="mosaic-tooltip-label">진행</span>
+          <span className="mosaic-tooltip-value">{progression.stepLabel}</span>
+        </div>
+        <div className="mosaic-tooltip-row">
+          <span className="mosaic-tooltip-label">다음 금액</span>
+          <span className="mosaic-tooltip-value">{progression.amount.toLocaleString()}원</span>
+        </div>
         <div className="mosaic-tooltip-row">
           <span className="mosaic-tooltip-label">배팅 횟수</span>
           <span className="mosaic-tooltip-value">{bettingState?.totalBets ?? 0}회</span>

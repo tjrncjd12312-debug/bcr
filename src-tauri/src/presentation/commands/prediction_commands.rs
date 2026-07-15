@@ -376,7 +376,11 @@ pub async fn request_best_room_selection(
 
         let evolution_data = app_state.evolution_data.get_v2_request(&candidate.room_id);
         let (betting_stats, shoe_stats, last_game_cards) = if let Some(ref evo) = evolution_data {
-            (evo.betting_stats.clone(), evo.shoe_stats.clone(), evo.last_game_cards.clone())
+            (
+                evo.betting_stats.clone(),
+                evo.shoe_stats.clone(),
+                evo.last_game_cards.clone(),
+            )
         } else {
             (None, None, None)
         };
@@ -431,11 +435,14 @@ pub async fn request_best_room_selection(
         .results
         .into_iter()
         .map(|r| {
-            let prediction = r.prediction.as_ref().and_then(|p| match p.to_lowercase().as_str() {
-                "banker" => Some("Banker".to_string()),
-                "player" => Some("Player".to_string()),
-                _ => None,
-            });
+            let prediction = r
+                .prediction
+                .as_ref()
+                .and_then(|p| match p.to_lowercase().as_str() {
+                    "banker" => Some("Banker".to_string()),
+                    "player" => Some("Player".to_string()),
+                    _ => None,
+                });
             let is_skip = r.is_skip.unwrap_or(false) || prediction.is_none();
 
             RoomSelectionResultInfo {
@@ -490,10 +497,10 @@ pub async fn request_prediction_with_history(
     room_name: String,
     history: Vec<String>, // ["Banker", "Player", "Tie", ...]
     _remaining_seconds: u32,
-    bet_type: Option<String>, // 🆕 베팅 전략 타입
-    martin_level: Option<i32>, // 🆕 마틴 레벨
+    bet_type: Option<String>,    // 🆕 베팅 전략 타입
+    martin_level: Option<i32>,   // 🆕 마틴 레벨
     min_confidence: Option<i32>, // 🆕 최소 신뢰도
-    auto_mode: Option<bool>, // 🆕 오토모드 여부
+    auto_mode: Option<bool>,     // 🆕 오토모드 여부
     // 🆕 v3.7.0: 사용자/잔액 추적
     user_id: Option<String>,
     username: Option<String>,
@@ -546,7 +553,11 @@ pub async fn request_prediction_with_history(
             evo.shoe_stats.is_some(),
             evo.last_game_cards.is_some()
         );
-        (evo.betting_stats.clone(), evo.shoe_stats.clone(), evo.last_game_cards.clone())
+        (
+            evo.betting_stats.clone(),
+            evo.shoe_stats.clone(),
+            evo.last_game_cards.clone(),
+        )
     } else {
         info!("📊 EvolutionData 없음 - 히스토리만 사용");
         (None, None, None)
@@ -554,19 +565,24 @@ pub async fn request_prediction_with_history(
 
     // 🆕 v3.7.0: 현재 로그인 사용자 정보 자동 포함
     let current_user = app_state.user_authentication.get_current_user();
-    let (resolved_user_id, resolved_username, resolved_session_id) = if let Some(ref user) = current_user {
-        (
-            user_id.or_else(|| Some(user.id.clone())),
-            username.or_else(|| Some(user.username.clone())),
-            // session_id가 없으면 auth_token 앞 16자 + 타임스탬프로 생성
-            session_id.or_else(|| {
-                let token_prefix = user.auth_token.chars().take(16).collect::<String>();
-                Some(format!("{}_{}", token_prefix, chrono::Utc::now().format("%Y%m%d%H%M")))
-            }),
-        )
-    } else {
-        (user_id, username, session_id)
-    };
+    let (resolved_user_id, resolved_username, resolved_session_id) =
+        if let Some(ref user) = current_user {
+            (
+                user_id.or_else(|| Some(user.id.clone())),
+                username.or_else(|| Some(user.username.clone())),
+                // session_id가 없으면 auth_token 앞 16자 + 타임스탬프로 생성
+                session_id.or_else(|| {
+                    let token_prefix = user.auth_token.chars().take(16).collect::<String>();
+                    Some(format!(
+                        "{}_{}",
+                        token_prefix,
+                        chrono::Utc::now().format("%Y%m%d%H%M")
+                    ))
+                }),
+            )
+        } else {
+            (user_id, username, session_id)
+        };
 
     info!(
         "📊 v3.7.0 User tracking: user_id={:?}, username={:?}, session_id={:?}",
@@ -584,9 +600,9 @@ pub async fn request_prediction_with_history(
         betting_stats,
         shoe_stats,
         bet_type: bet_type.clone(), // 🆕 베팅 전략 타입 전달
-        martin_level, // 🆕 마틴 레벨 전달 (SKIP 임계값 조정용)
-        min_confidence, // 🆕 최소 신뢰도 전달 (프론트 설정 우선)
-        auto_mode, // 🆕 오토모드 여부 전달
+        martin_level,               // 🆕 마틴 레벨 전달 (SKIP 임계값 조정용)
+        min_confidence,             // 🆕 최소 신뢰도 전달 (프론트 설정 우선)
+        auto_mode,                  // 🆕 오토모드 여부 전달
         // 🆕 v3.7.0: 사용자/잔액 추적 필드 (자동 포함)
         user_id: resolved_user_id,
         username: resolved_username,
@@ -635,31 +651,39 @@ pub async fn request_prediction_with_history(
             current_streak: p.current_streak.unwrap_or(0),
             streak_type: p.streak_type.clone(),
         }),
-        streak_tracking: response.streak_tracking.as_ref().map(|s| StreakTrackingInfo {
-            consecutive_losses: s.consecutive_losses.unwrap_or(0),
-            consecutive_wins: s.consecutive_wins.unwrap_or(0),
-            total_predictions: s.total_predictions.unwrap_or(0),
-            total_wins: s.total_wins.unwrap_or(0),
-            win_rate: s.win_rate.unwrap_or(0.0),
-            in_skip_mode: s.in_skip_mode.unwrap_or(false),
-            martin_level: s.martin_level.unwrap_or(0),
-            recommended_multiplier: s.recommended_multiplier.unwrap_or(1),
-        }),
+        streak_tracking: response
+            .streak_tracking
+            .as_ref()
+            .map(|s| StreakTrackingInfo {
+                consecutive_losses: s.consecutive_losses.unwrap_or(0),
+                consecutive_wins: s.consecutive_wins.unwrap_or(0),
+                total_predictions: s.total_predictions.unwrap_or(0),
+                total_wins: s.total_wins.unwrap_or(0),
+                win_rate: s.win_rate.unwrap_or(0.0),
+                in_skip_mode: s.in_skip_mode.unwrap_or(false),
+                martin_level: s.martin_level.unwrap_or(0),
+                recommended_multiplier: s.recommended_multiplier.unwrap_or(1),
+            }),
         // 🆕 베팅 타입별 최적화 설정 (100K 시뮬레이션 검증)
-        bet_type_optimization: response.bet_type_optimization.as_ref().map(|o| BetTypeOptimizationInfo {
-            bet_type: o.bet_type.clone().unwrap_or_else(|| "flat".to_string()),
-            recommended_skip_after_losses: o.recommended_skip_after_losses.unwrap_or(4),
-            recommended_min_confidence: o.recommended_min_confidence.unwrap_or(0),
-            recommended_max_level: o.recommended_max_level.unwrap_or(3),
-            recommended_max_rooms: o.recommended_max_rooms.unwrap_or(5),
-            recommended_base_bet: o.recommended_base_bet.unwrap_or(10000),
-            safe_capital_ratio: o.safe_capital_ratio.unwrap_or(100),
-            expected_profit_rate: o.expected_profit_rate.unwrap_or(645.0),
-            expected_win_rate: o.expected_win_rate.unwrap_or(49.59),
-            expected_max_loss_streak: o.expected_max_loss_streak.unwrap_or(4),
-            expected_bust_rate: o.expected_bust_rate.unwrap_or(0.0),
-            skip_rate: o.skip_rate.unwrap_or(0.9),
-            rationale: o.rationale.clone().unwrap_or_else(|| "4연패SKIP=SKIP0.9%,수익+645%".to_string()),
+        bet_type_optimization: response.bet_type_optimization.as_ref().map(|o| {
+            BetTypeOptimizationInfo {
+                bet_type: o.bet_type.clone().unwrap_or_else(|| "flat".to_string()),
+                recommended_skip_after_losses: o.recommended_skip_after_losses.unwrap_or(4),
+                recommended_min_confidence: o.recommended_min_confidence.unwrap_or(0),
+                recommended_max_level: o.recommended_max_level.unwrap_or(3),
+                recommended_max_rooms: o.recommended_max_rooms.unwrap_or(5),
+                recommended_base_bet: o.recommended_base_bet.unwrap_or(10000),
+                safe_capital_ratio: o.safe_capital_ratio.unwrap_or(100),
+                expected_profit_rate: o.expected_profit_rate.unwrap_or(645.0),
+                expected_win_rate: o.expected_win_rate.unwrap_or(49.59),
+                expected_max_loss_streak: o.expected_max_loss_streak.unwrap_or(4),
+                expected_bust_rate: o.expected_bust_rate.unwrap_or(0.0),
+                skip_rate: o.skip_rate.unwrap_or(0.9),
+                rationale: o
+                    .rationale
+                    .clone()
+                    .unwrap_or_else(|| "4연패SKIP=SKIP0.9%,수익+645%".to_string()),
+            }
         }),
     }))
 }
@@ -737,31 +761,39 @@ pub async fn request_prediction_v2(
             current_streak: p.current_streak.unwrap_or(0),
             streak_type: p.streak_type.clone(),
         }),
-        streak_tracking: response.streak_tracking.as_ref().map(|s| StreakTrackingInfo {
-            consecutive_losses: s.consecutive_losses.unwrap_or(0),
-            consecutive_wins: s.consecutive_wins.unwrap_or(0),
-            total_predictions: s.total_predictions.unwrap_or(0),
-            total_wins: s.total_wins.unwrap_or(0),
-            win_rate: s.win_rate.unwrap_or(0.0),
-            in_skip_mode: s.in_skip_mode.unwrap_or(false),
-            martin_level: s.martin_level.unwrap_or(0),
-            recommended_multiplier: s.recommended_multiplier.unwrap_or(1),
-        }),
+        streak_tracking: response
+            .streak_tracking
+            .as_ref()
+            .map(|s| StreakTrackingInfo {
+                consecutive_losses: s.consecutive_losses.unwrap_or(0),
+                consecutive_wins: s.consecutive_wins.unwrap_or(0),
+                total_predictions: s.total_predictions.unwrap_or(0),
+                total_wins: s.total_wins.unwrap_or(0),
+                win_rate: s.win_rate.unwrap_or(0.0),
+                in_skip_mode: s.in_skip_mode.unwrap_or(false),
+                martin_level: s.martin_level.unwrap_or(0),
+                recommended_multiplier: s.recommended_multiplier.unwrap_or(1),
+            }),
         // 🆕 베팅 타입별 최적화 설정
-        bet_type_optimization: response.bet_type_optimization.as_ref().map(|o| BetTypeOptimizationInfo {
-            bet_type: o.bet_type.clone().unwrap_or_else(|| "flat".to_string()),
-            recommended_skip_after_losses: o.recommended_skip_after_losses.unwrap_or(4),
-            recommended_min_confidence: o.recommended_min_confidence.unwrap_or(0),
-            recommended_max_level: o.recommended_max_level.unwrap_or(3),
-            recommended_max_rooms: o.recommended_max_rooms.unwrap_or(5),
-            recommended_base_bet: o.recommended_base_bet.unwrap_or(10000),
-            safe_capital_ratio: o.safe_capital_ratio.unwrap_or(100),
-            expected_profit_rate: o.expected_profit_rate.unwrap_or(0.0),
-            expected_win_rate: o.expected_win_rate.unwrap_or(50.0),
-            expected_max_loss_streak: o.expected_max_loss_streak.unwrap_or(5),
-            expected_bust_rate: o.expected_bust_rate.unwrap_or(0.0),
-            skip_rate: o.skip_rate.unwrap_or(0.55),
-            rationale: o.rationale.clone().unwrap_or_else(|| "4연패SKIP=SKIP0.9%,수익+645%".to_string()),
+        bet_type_optimization: response.bet_type_optimization.as_ref().map(|o| {
+            BetTypeOptimizationInfo {
+                bet_type: o.bet_type.clone().unwrap_or_else(|| "flat".to_string()),
+                recommended_skip_after_losses: o.recommended_skip_after_losses.unwrap_or(4),
+                recommended_min_confidence: o.recommended_min_confidence.unwrap_or(0),
+                recommended_max_level: o.recommended_max_level.unwrap_or(3),
+                recommended_max_rooms: o.recommended_max_rooms.unwrap_or(5),
+                recommended_base_bet: o.recommended_base_bet.unwrap_or(10000),
+                safe_capital_ratio: o.safe_capital_ratio.unwrap_or(100),
+                expected_profit_rate: o.expected_profit_rate.unwrap_or(0.0),
+                expected_win_rate: o.expected_win_rate.unwrap_or(50.0),
+                expected_max_loss_streak: o.expected_max_loss_streak.unwrap_or(5),
+                expected_bust_rate: o.expected_bust_rate.unwrap_or(0.0),
+                skip_rate: o.skip_rate.unwrap_or(0.55),
+                rationale: o
+                    .rationale
+                    .clone()
+                    .unwrap_or_else(|| "4연패SKIP=SKIP0.9%,수익+645%".to_string()),
+            }
         }),
     };
 

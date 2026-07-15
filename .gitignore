@@ -24,7 +24,9 @@ Thumbs.db
 
 # Logs
 *.log
+*.jsonl
 npm-debug.log*
+.bet-capture/
 
 # Tauri
 src-tauri/WixTools/

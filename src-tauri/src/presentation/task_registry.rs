@@ -234,7 +234,11 @@ mod tests {
         for h in [h1, h2, h3] {
             match h.await {
                 Ok(()) => panic!("task should have been cancelled, not finished"),
-                Err(e) => assert!(e.is_cancelled(), "expected cancelled JoinError, got {:?}", e),
+                Err(e) => assert!(
+                    e.is_cancelled(),
+                    "expected cancelled JoinError, got {:?}",
+                    e
+                ),
             }
         }
     }

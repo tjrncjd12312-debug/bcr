@@ -55,6 +55,9 @@ class MultiRoomPredictionServiceImpl {
   // Full history tracking for predict mode (fixed-length history 보완)
   private fullHistories: Map<string, RoadResult[]> = new Map()
 
+  // Explicit adapter shoe-change signals. Short history alone is not proof of a new shoe.
+  private shoeChangeDetectedAtByRoom: Map<string, number> = new Map()
+
   // Timer management for cleanup
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set()
 
@@ -229,6 +232,9 @@ class MultiRoomPredictionServiceImpl {
    * Handle shoe change - clear predictions and reset room state
    */
   private onShoeChange(roomId: string): void {
+    const detectedAt = Date.now()
+    this.shoeChangeDetectedAtByRoom.set(roomId, detectedAt)
+
     // Clear pending prediction for this room
     this.pendingPredictions.delete(roomId)
     this.fullHistories.delete(roomId)
@@ -245,6 +251,7 @@ class MultiRoomPredictionServiceImpl {
       roomState.history = []
       // 🔥 슈 초기화 상태 설정 - UI가 즉시 오버레이 표시
       roomState.isShoeReset = true
+      roomState.shoeChangeDetectedAt = detectedAt
     }
 
     // Also reset virtual betting state for this room
@@ -350,6 +357,7 @@ class MultiRoomPredictionServiceImpl {
         isFiltered: false, // ✅ Fixed duplicate property
         predictionCount: 0,
         history: [], // ✅ Initialize empty history
+        shoeChangeDetectedAt: this.shoeChangeDetectedAtByRoom.get(room.id),
       })
     } else {
       // Update pattern
@@ -951,6 +959,7 @@ class MultiRoomPredictionServiceImpl {
     this.pendingPredictions.clear()
     this.state.roomStates.clear()
     this.fullHistories.clear()
+    this.shoeChangeDetectedAtByRoom.clear()
     this.dirtyRooms.clear()
     this._topLevelDirty = false
     this._lastEmittedState = null

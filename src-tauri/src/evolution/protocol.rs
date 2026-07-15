@@ -122,6 +122,17 @@ impl ProtocolSequence {
         })
     }
 
+    /// lobby v2 `lobby.subscribe` — 구독한 테이블만 서버가 per-table 결과/히스토리/gameId를 push한다
+    /// (initLobby features의 subscriptionModel). 브라우저 송신 캡처(2026-06-10)로 형식 확인:
+    /// `{id, type:"lobby.subscribe", args:{tables:["onokyd4wn7uekbjx", ...]}}` — 평문 ID 배열.
+    pub fn lobby_subscribe(table_ids: &[String]) -> Value {
+        serde_json::json!({
+            "id": Self::generate_random_id(),
+            "type": "lobby.subscribe",
+            "args": { "tables": table_ids }
+        })
+    }
+
     /// CONNECTION_ESTABLISHED 메시지 생성
     pub fn connection_established(
         reconnection_count: u32,
@@ -184,6 +195,26 @@ impl ProtocolSequence {
             "args": {
                 "t": timestamp
             }
+        })
+    }
+
+    /// lobby v2 앱-레벨 keepalive PING.
+    /// 브라우저가 lobby 소켓으로 1.5~2초마다 보내는 `{"eventType":"PING","requestId":N,"requestTimestamp":ms}`.
+    /// 서버는 이걸 "세션 활성" 신호로 쓴다. metrics.ping/게임데이터가 계속 흘러도 이 PING이 없으면
+    /// 서버가 ~10분 뒤 세션을 inactivity로 만료(server_closed→재연결 시 KICKOUT:inactivity)한다.
+    /// 따라서 Rust도 주기적으로 보내야 세션이 유지된다(inactivity 킥 방지).
+    pub fn lobby_ping() -> Value {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        // 브라우저 requestId는 16자리 내외의 큰 정수 — 동일 형태로 랜덤 생성.
+        let request_id: u64 =
+            rand::thread_rng().gen_range(1_000_000_000_000_000u64..9_999_999_999_999_999u64);
+        serde_json::json!({
+            "eventType": "PING",
+            "requestId": request_id,
+            "requestTimestamp": timestamp
         })
     }
 

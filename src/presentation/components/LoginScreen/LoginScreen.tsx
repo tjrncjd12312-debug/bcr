@@ -173,54 +173,7 @@ export default function LoginScreen({ onLogin, isLoading: propIsLoading }: Login
           <p className="login__subtitle">INTELLIGENT BETTING ASSISTANT</p>
         </div>
 
-        {/* Mode Selection */}
-        <div className="login__mode-section">
-          <div className="login__mode-header">
-            <span className="login__mode-title">모드 선택</span>
-          </div>
-          <div className="login__mode-cards">
-            {/* 🔥 예측 분석이 왼쪽 */}
-            <button
-              type="button"
-              className={`login__mode-card ${appMode === 'predict' ? 'active' : ''}`}
-              onClick={() => setAppMode('predict')}
-              disabled={currentLoadingState}
-            >
-              <div className="login__mode-card-icon login__mode-card-icon--predict">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 3v18h18" />
-                  <path d="M18 9l-5 5-4-4-3 3" />
-                </svg>
-              </div>
-              <div className="login__mode-card-content">
-                <span className="login__mode-card-title">예측 분석</span>
-                <span className="login__mode-card-desc">패턴 분석 · 예측 확인</span>
-              </div>
-              {appMode === 'predict' && <div className="login__mode-card-check">✓</div>}
-            </button>
-
-            {/* 🔥 오토 배팅이 오른쪽 */}
-            <button
-              type="button"
-              className={`login__mode-card ${appMode === 'auto' ? 'active' : ''}`}
-              onClick={() => setAppMode('auto')}
-              disabled={currentLoadingState}
-            >
-              <div className="login__mode-card-icon login__mode-card-icon--auto">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
-                </svg>
-              </div>
-              <div className="login__mode-card-content">
-                <span className="login__mode-card-title">오토 배팅</span>
-                <span className="login__mode-card-desc">자동 분석 · 자동 실행</span>
-              </div>
-              {appMode === 'auto' && <div className="login__mode-card-check">✓</div>}
-            </button>
-          </div>
-        </div>
+        {/* 모드 선택 제거(리디자인 통합 홈): 로그인 후 단일 홈에서 작업을 고른다. appMode는 작업에서 파생됨. */}
 
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="login__form">

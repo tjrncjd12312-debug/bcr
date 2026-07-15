@@ -11,7 +11,9 @@ pub async fn connect_pragmatic_room(
 ) -> Result<(), String> {
     let manager_arc = state.manager.clone();
     let mut manager = state.manager.lock().await;
-    manager.connect_room(app, room_id, ws_url, manager_arc).await
+    manager
+        .connect_room(app, room_id, ws_url, manager_arc)
+        .await
 }
 
 // Disconnect a specific room
@@ -57,7 +59,9 @@ pub async fn connect_pragmatic(
     let manager_arc = state.manager.clone();
     let mut manager = state.manager.lock().await;
     // Use the smart connection handler that parses URL and session
-    manager.handle_new_connection(app, ws_url, manager_arc).await
+    manager
+        .handle_new_connection(app, ws_url, manager_arc)
+        .await
 }
 
 #[command]

@@ -114,6 +114,19 @@ describe('FreshShoeTieMartingalePreset', () => {
     expect(filterService2.has('fresh_shoe')).toBe(true)
   })
 
+  it('keeps the shared filter active until both modes release it', () => {
+    const filterService = createFakeRoomFilterService()
+    const p = createPreset({ filterService })
+
+    p.enable('auto')
+    p.enable('semiauto')
+    p.disable('auto')
+    expect(filterService.has('fresh_shoe')).toBe(true)
+
+    p.disable('semiauto')
+    expect(filterService.has('fresh_shoe')).toBe(false)
+  })
+
   it('isRoomStopped is false initially even with preset enabled', () => {
     const p = createPreset()
     p.enable('auto')

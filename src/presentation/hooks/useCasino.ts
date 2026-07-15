@@ -10,6 +10,7 @@ import { wsToHttpBaseUrl } from '../../domain/utils/converters'
 import { useService } from '../context'
 import { useError } from '../context'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
+import { AutoBettingService } from '../../application/services/AutoBettingService'
 import MultiRoomPredictionService from '../../application/services/MultiRoomPredictionService'
 
 // ==================== Pragmatic Types ====================
@@ -86,6 +87,102 @@ function normalizeWinner(value: string): Winner {
 export type ConnectionStatus = 'idle' | 'launching' | 'monitoring' | 'captured' | 'connected' | 'reconnecting' | 'error'
 export type CasinoProvider = 'evolution' | 'pragmatic' | null
 
+export type EvolutionDisconnectKind =
+  | 'upgrade_forbidden'
+  | 'session_expired'
+  | 'intentional'
+  | 'reconnect_exhausted'
+  | 'network'
+
+export function classifyEvolutionDisconnect(payload?: { reason?: string; type?: string }): EvolutionDisconnectKind {
+  const reason = payload?.reason || ''
+  const messageType = payload?.type || ''
+  const combined = `${reason} ${messageType}`.toLowerCase()
+
+  if (combined.includes('upgrade_forbidden_401') || combined.includes('upgrade_forbidden_403')) {
+    return 'upgrade_forbidden'
+  }
+  if (combined.includes('user_requested')) {
+    return 'intentional'
+  }
+  if (
+    combined.includes('kickout') ||
+    combined.includes('newconnection') ||
+    combined.includes('connectionalreadyexists')
+  ) {
+    return 'session_expired'
+  }
+  if (combined.includes('max reconnect attempts')) {
+    return 'reconnect_exhausted'
+  }
+  return 'network'
+}
+
+export interface SessionRotationScheduler {
+  start: () => void
+  stop: () => void
+  isRunning: () => boolean
+}
+
+export function createSessionRotationScheduler(
+  rotate: () => Promise<unknown>,
+  options: {
+    firstDelayMs?: number
+    nextDelayMs?: number
+    shouldDefer?: () => boolean
+    deferDelayMs?: number
+    onError?: (error: unknown) => void
+  } = {},
+): SessionRotationScheduler {
+  const firstDelayMs = options.firstDelayMs ?? 300_000
+  const nextDelayMs = options.nextDelayMs ?? 420_000
+  const deferDelayMs = options.deferDelayMs ?? 12_000
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let stopped = true
+  let inFlight = false
+
+  const schedule = (delayMs: number) => {
+    if (stopped || timer !== null) return
+    timer = setTimeout(() => {
+      timer = null
+      void run()
+    }, delayMs)
+  }
+
+  const run = async () => {
+    if (stopped || inFlight) return
+    if (options.shouldDefer?.()) {
+      schedule(deferDelayMs)
+      return
+    }
+    inFlight = true
+    try {
+      await rotate()
+    } catch (error) {
+      options.onError?.(error)
+    } finally {
+      inFlight = false
+      schedule(nextDelayMs)
+    }
+  }
+
+  return {
+    start: () => {
+      if (!stopped) return
+      stopped = false
+      schedule(firstDelayMs)
+    },
+    stop: () => {
+      stopped = true
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+    },
+    isRunning: () => !stopped,
+  }
+}
+
 interface MultiSocketConfig {
   wsUrl: string
   origin?: string
@@ -159,6 +256,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   const evolutionBaseUrlRef = useRef<string | null>(null)
   // 🔒 중계사이트 URL이 캡처되면 잠금 - 이후 덮어쓰기 방지
   const evolutionBaseUrlLockedRef = useRef<boolean>(false)
+  const sessionRotationSchedulerRef = useRef<SessionRotationScheduler | null>(null)
 
   const pendingRoomUpdatesRef = useRef<Set<string>>(new Set())
   const roomUpdateRafIdRef = useRef<number | null>(null)
@@ -239,9 +337,9 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   const flushRoomUpdates = useCallback(() => {
     if (pendingRoomUpdatesRef.current.size === 0) return
 
-    // 이번 배치에서 실제로 변경된 방 ID만 새 객체로 복제하고, 나머지는 기존 참조를 유지한다.
+    // 이번 배치에서 실제로 변경된 방만 복제하고 나머지는 기존 참조를 유지한다.
     // 매 이벤트마다 최대 60개 방 전체 + history 배열을 통째로 복제하던 비용을 변경된 방으로
-    // 한정한다(perf-1). 실시간성은 그대로 — 변경된 방은 즉시 새 identity를 갖고, 메모이즈된
+    // 변경 범위를 제한해 실시간성은 유지하면서 불필요한 재조정을 줄인다.
     // 소비자가 추후 추가되면 변경 없는 방의 재조정을 건너뛸 수 있다.
     const changedIds = pendingRoomUpdatesRef.current
     pendingRoomUpdatesRef.current = new Set<string>()
@@ -282,7 +380,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         setMessageCount(0)
       }
       // 첫 방 데이터 수신 시 roomsReady = true.
-      // 구버전 multiwidget은 evolution_multi_rooms_ready 이벤트로도 설정되지만, lobby v2는
+      // 구버전 multiwidget은 rooms-ready 이벤트를 보내지만 lobby v2는 그렇지 않을 수 있다.
       // widget.availableTables 파싱이 없어 그 이벤트가 안 뜬다 → 실제 방 데이터 도착으로 판정해
       // auto/predict 모두에서 대기화면이 풀리도록 한다.
       if (updatedRooms.length > 0) {
@@ -408,11 +506,11 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           const wsUrl = event.payload.wsUrl
           if (!wsUrl) return
 
-          // 🆕 lobby v2(/public/lobby/socket/v2/)는 multiwidget이 통합된 멀티테이블 피드.
+          // lobby v2는 multiwidget이 통합된 멀티테이블 피드다.
           // 일반 로비 소켓처럼 무시하면 안 되고 아래 multiwidget 경로로 처리한다(v2-1).
           const isLobbyV2 = wsUrl.includes('/lobby/socket/v2') || wsUrl.includes('/lobby/socket/V2')
 
-          // 🔥 로비 소켓은 무시 - 멀티소켓만 사용 (단, lobby v2는 예외)
+          // 일반 로비 소켓은 무시하되 lobby v2는 예외로 처리한다.
           if (!isLobbyV2 && wsUrl.includes('/public/lobby/socket')) {
             console.log('[useCasino] ⏭️ Skipping lobby socket - using multi-socket only')
             return
@@ -423,7 +521,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           const isMultiwidget = event.payload.isMultiwidget || isLobbyV2 || wsUrl.includes('/multiwidget/') || wsUrl.includes('/multiplay/')
           if (isMultiwidget) {
             console.log('[useCasino] 🎰 Multiwidget detected - letting Rust CDP handle auto-connection')
-            // 🔒 잠금되지 않은 경우에만 baseUrl 설정 (중계사이트 URL 우선)
+            // 아직 잠기지 않은 경우에만 캡처한 base URL을 사용한다.
             if (!evolutionBaseUrlLockedRef.current) {
               const baseUrl = wsToHttpBaseUrl(wsUrl)
               if (baseUrl) {
@@ -465,8 +563,21 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       messageCountRef.current = 0
       setMessageCount(0)
       setProvider('evolution')
-      setRoomsReady(false)  // 연결 시 roomsReady 초기화 (구독 완료 대기)
-      // Keep CDP running so real multiwidget socket can still be captured later
+      // Keep the last room snapshot visible while a replacement session is captured.
+      if (!sessionRotationSchedulerRef.current) {
+        sessionRotationSchedulerRef.current = createSessionRotationScheduler(
+          async () => {
+            console.log('[useCasino] Starting atomic Evolution session rotation')
+            await invoke<boolean>('rotate_evolution_session', { appMode: appModeRef.current })
+          },
+          {
+            shouldDefer: () => AutoBettingService.getPendingBetCount() > 0,
+            deferDelayMs: 12_000,
+            onError: (error) => console.warn('[useCasino] Session rotation failed:', error),
+          },
+        )
+      }
+      sessionRotationSchedulerRef.current.start()
     }, 'evolution')
 
     // 🔒 중계사이트 base URL 캡처 이벤트 - 이 URL은 덮어쓰지 않음
@@ -487,9 +598,24 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
 
     trackedListen<{ reason?: string; type?: string }>('evolution_multi_disconnected', (event) => {
         const reason = event.payload?.reason || ''
-        const msgType = event.payload?.type || ''
+        const disconnectKind = classifyEvolutionDisconnect(event.payload)
 
-        // Rust 측 자동 재연결이 모두 실패한 경우에만 이 이벤트가 도착함
+        if (disconnectKind === 'upgrade_forbidden') {
+          console.warn('[useCasino] Rust direct socket was rejected because the browser owns the Evolution session. Keeping browser/CDP feed active.', reason)
+          setProvider('evolution')
+          setActiveAdapter(evolutionAdapter)
+          setStatus((prev) => (prev === 'connected' ? prev : 'monitoring'))
+          return
+        }
+
+        // An intentional disconnect is part of the atomic rotation handover.
+        // The same command has already restarted CDP to capture the new session.
+        if (disconnectKind === 'intentional') {
+          console.log('[useCasino] Ignoring intentional Evolution disconnect during handover')
+          return
+        }
+
+        // Only mark the UI disconnected for real disconnects. Upgrade-forbidden is expected under the one-session policy while the browser lobby remains active.
         setStatus('idle')
         setProvider(null)
         setEvolutionBaseUrl(null)
@@ -497,21 +623,17 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         evolutionBaseUrlLockedRef.current = false
         setRoomsReady(false)
 
-        const isKickout = reason.includes('kickout') ||
-          reason.includes('newConnection') ||
-          reason.includes('connectionAlreadyExists') ||
-          msgType.includes('kickout') ||
-          msgType.includes('connectionAlreadyExists')
-
-        if (isKickout) {
-          console.warn('[useCasino] ⚠️ Disconnected due to session conflict:', reason)
-          showWarning('세션 충돌로 연결이 종료되었습니다. 브라우저를 새로고침 후 다시 시도하세요.')
+        if (disconnectKind === 'session_expired') {
+          sessionRotationSchedulerRef.current?.stop()
+          console.warn('[useCasino] Session expired. A fresh login or lobby launch is required.', reason)
+          showWarning('카지노 세션이 만료되었습니다. 다시 로그인하거나 로비를 새로 열어주세요.')
           return
         }
 
-        if (reason.includes('Max reconnect attempts')) {
+        if (disconnectKind === 'reconnect_exhausted') {
+          sessionRotationSchedulerRef.current?.stop()
           console.error('[useCasino] ❌ All reconnect attempts exhausted:', reason)
-          showWarning('재연결 실패 (최대 시도 횟수 초과). 브라우저를 새로고침 후 다시 시도하세요.')
+          showWarning('재연결에 실패했습니다. 다시 로그인한 뒤 연결을 시도해주세요.')
           return
         }
 
@@ -519,18 +641,26 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         if (appModeRef.current === 'predict') {
           console.log('[useCasino] 🔄 Rust reconnect exhausted, falling back to CDP restart...')
           setTimeout(() => {
-            invoke('restart_cdp_monitoring').catch((e) => {
-              console.warn('[useCasino] Failed to restart CDP monitoring:', e)
+            // 새 CDP 모니터를 시작해 다음 로비 소켓을 다시 캡처한다.
+            invoke('start_cdp_monitoring', { appMode: appModeRef.current })
+              .catch((e) => {
+                console.warn('[useCasino] Failed to (re)start CDP monitoring:', e)
             })
           }, 3000)
         } else {
           console.log('[useCasino] 📊 Multiwidget disconnected in auto mode:', reason)
-          showWarning('멀티소켓 연결이 끊어졌습니다.')
+          showWarning('멀티테이블 연결이 끊어졌습니다.')
         }
       },
       'evolution')
 
     trackedListen('evolution_multi_error', (event) => {
+      const payload = (event as any)?.payload || {}
+      const message = `${payload.error || ''} ${payload.errorDetail || ''}`
+      if (message.includes('upgrade rejected') || message.includes('fresh EVOSESSIONID')) {
+        console.log('[useCasino] Suppressing expected upgrade-forbidden error toast:', payload)
+        return
+      }
       setStatus('error')
       showError('CONNECTION_FAILED', 'Evolution 소켓 오류', (event as any)?.payload?.error || '연결 오류')
     }, 'evolution')
@@ -540,7 +670,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       (event) => {
         const { attempt, maxAttempts, delayMs } = event.payload
         setStatus('reconnecting')
-        showWarning(`재연결 시도 중 (${attempt}/${maxAttempts})... ${Math.round(delayMs / 1000)}초 후 재시도`)
+        showWarning(`재연결 시도 중 (${attempt}/${maxAttempts})... ${Math.round(delayMs / 1000)}초 후 다시 시도합니다.`)
         console.log('[useCasino] 🔄 Auto-reconnect attempt:', event.payload)
       },
       'evolution'
@@ -551,7 +681,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       EvolutionAdapter.updateTableConfigFromCDP(event.payload)
     }, 'evolution')
 
-    // 🔥 멀티소켓: 모든 게임 데이터의 단일 소스
+    // 멀티소켓을 모든 Evolution 게임 데이터의 단일 소스로 사용한다.
     trackedListen<{ tableId?: string; eventType: string; data: any }>('evolution_multi_event', (event) => {
       const now = Date.now()
       messageCountRef.current += 1
@@ -610,7 +740,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         try {
           switch (pragmaticEvent.type) {
             case 'room_update': {
-              // Pragmatic 룸을 rooms Map에 병합 (prefix로 구분)
+              // Pragmatic 방을 prefix로 구분해 rooms Map에 병합한다.
               const normalizedRooms = pragmaticEvent.data
               normalizedRooms.forEach((nr) => {
                 const roomId = `${PRAGMATIC_ROOM_PREFIX}${nr.id}`
@@ -620,7 +750,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
                   isBankerPair: Boolean(h.is_banker_pair),
                 }))
 
-                // 이름 우선순위: 캐시 → nr.name (단, "Baccarat XXX" 패턴은 fallback으로 간주)
+                // 이름 우선순위: 캐시 -> nr.name. 기본 Baccarat 이름은 fallback으로 본다.
                 const rawName = nr.name?.trim()
                 const isFallbackName = !rawName || rawName === '-' || rawName.toUpperCase() === 'N/A' || /^Baccarat\s+\d+$/i.test(rawName)
 
@@ -706,7 +836,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
                 setSelectedRoom({ ...room })
               }
 
-              // 🎲 Pragmatic: gameResult 콜백 호출 (예측 결과 처리용)
+              // Pragmatic 결과를 등록된 gameResult 콜백에 전달한다.
               const gameResultEvent: GameResultEvent = {
                 roomId,
                 winner,
@@ -724,7 +854,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
                 }
               })
 
-              // 🎲 Pragmatic: 결과 후 베팅 페이즈 시작 (타이머 이벤트가 없으므로)
+              // Pragmatic은 별도 타이머 이벤트가 없어 결과 직후 베팅 페이즈를 합성한다.
               // Pragmatic은 결과 수신 직후 다음 베팅 페이즈가 시작됨
               const PRAGMATIC_BETTING_SECONDS = 15
               const syntheticBettingEvent: BettingPhaseEvent = {
@@ -733,7 +863,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
                 phase: 'start',
               }
 
-              // 등록된 모든 bettingPhase 콜백 호출 (예측 트리거)
+              // 등록된 bettingPhase 콜백을 호출해 예측을 트리거한다.
               bettingPhaseCallbacksRef.current.forEach((callback) => {
                 try {
                   callback(syntheticBettingEvent)
@@ -765,7 +895,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
             }
 
             case 'balance_update': {
-              // Pragmatic 잔액은 별도 관리 (필요시)
+              // Pragmatic 잔액은 별도 경로에서 관리한다.
               break
             }
           }
@@ -784,7 +914,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
     }, 'pragmatic')
 
     trackedListen('pragmatic_disconnected', () => {
-      // Pragmatic만 끊어져도 Evolution이 있으면 connected 유지
+      // Pragmatic만 끊겨도 Evolution 연결이 있으면 상태를 유지한다.
     }, 'pragmatic')
 
     return () => {
@@ -797,6 +927,8 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       snapshot.forEach(({ unlisten }) => {
         try { unlisten() } catch { /* ignore */ }
       })
+      sessionRotationSchedulerRef.current?.stop()
+      sessionRotationSchedulerRef.current = null
     }
   }, [showError])
 
@@ -846,7 +978,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
     const userAgent = (next.userAgent || '').trim()
 
     if (!wsUrl) {
-      showWarning('멀티테이블 WebSocket URL이 없습니다. 브라우저에서 캡처를 기다리세요.')
+      showWarning('멀티테이블 WebSocket URL이 없습니다. 브라우저 캡처를 기다려주세요.')
       return
     }
 
@@ -907,7 +1039,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         setStatus('monitoring')
         // ❌ 여기서는 잠그지 않음! 이건 중계사이트 URL
         // 실제 멀티소켓 연결 URL이 캡처될 때 잠금
-        showInfo('브라우저에서 WebSocket을 감지하면 자동으로 연결됩니다.')
+        showInfo('브라우저에서 WebSocket이 감지되면 자동으로 연결됩니다.')
       } catch (error) {
         setStatus('error')
         showError('CONNECTION_FAILED', '브라우저 실행 실패', error instanceof Error ? error.message : String(error))
@@ -920,11 +1052,16 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   }, [connectMultiSocket, showError, showInfo, casinoUrl, persistCasinoUrl])
 
   // 로비 재연결 (세션 만료 시 사용)
-  // 브라우저 새로고침 후 새 세션을 캡처하여 다시 연결
+  // Rust 멀티클라이언트를 먼저 해제한 뒤 새 세션을 캡처한다.
   const reconnectLobby = useCallback(async () => {
-    console.log('[useCasino] 🔄 Reconnecting via page refresh...')
+    if (AutoBettingService.getPendingBetCount() > 0) {
+      showWarning('진행 중인 베팅이 있어 세션 갱신을 잠시 미룹니다.')
+      return
+    }
+
+    console.log('[useCasino] 🔄 Reconnecting with an atomic session handover...')
     setStatus('launching')
-    showInfo('브라우저 새로고침 중... 새 세션을 캡처합니다.')
+    showInfo('카지노 세션을 안전하게 갱신하는 중입니다.')
 
     // Reset connection state
     evolutionBaseUrlLockedRef.current = false
@@ -932,18 +1069,13 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
     setEvolutionBaseUrl(null)
 
     try {
-      const refreshed = await invoke<boolean>('refresh_lobby_page')
-      if (refreshed) {
-        console.log('[useCasino] 🔄 Page refresh sent - waiting for new session capture')
-        // CDP will capture new WebSocket and emit 'evolution-multiwidget-auto-connected'
-      } else {
-        throw new Error('로비 페이지를 찾을 수 없습니다')
-      }
+      await invoke<boolean>('rotate_evolution_session', { appMode: appModeRef.current })
+      setStatus('monitoring')
     } catch (error: any) {
       console.error('[useCasino] 🔄 Reconnect failed:', error)
       setStatus('idle')
       setProvider(null)
-      showWarning(error?.message || '재연결 실패. 브라우저에서 수동으로 새로고침해주세요.')
+      showWarning(error?.message || '재연결에 실패했습니다. 다시 로그인한 뒤 시도해주세요.')
     }
   }, [showInfo, showWarning])
 
@@ -956,6 +1088,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
 
   const disconnect = useCallback(async () => {
     try {
+      sessionRotationSchedulerRef.current?.stop()
       await invoke('disconnect_evolution_multi_socket')
       setStatus('idle')
       messageCountRef.current = 0
@@ -1027,7 +1160,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       showError(
         'CONNECTION_FAILED',
         '방 이동에 실패했습니다',
-        `${details} / CDP 브라우저 세션이 끊겼습니다. 카지노 창을 다시 열어 새 세션을 캡처하세요.`
+        `${details} / CDP 브라우저 세션이 끊겼습니다. 카지노 창을 다시 열어 새 세션을 캡처해주세요.`
       )
     }
   }, [rooms, provider, showWarning, showInfo, showError])
@@ -1048,7 +1181,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
     // Evolution adapter 콜백 등록
     const unsubAdapter = activeAdapter.onGameResult(callback)
 
-    // Pragmatic 이벤트를 위해 ref에도 등록 (둘 다 동시에 동작)
+    // Pragmatic 이벤트에도 같은 콜백을 등록해 두 공급자를 함께 처리한다.
     gameResultCallbacksRef.current.add(callback)
 
     // 정리 함수: 둘 다 해제

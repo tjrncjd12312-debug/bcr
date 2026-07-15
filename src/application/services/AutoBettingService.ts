@@ -36,6 +36,18 @@ export interface BetResultEvent {
 type BetPlacedCallback = (event: BetPlacedEvent) => void
 type BetResultCallback = (event: BetResultEvent) => void
 
+export type BetExecutionStatus = 'not_sent' | 'sent' | 'confirmed' | 'rejected' | 'unknown'
+
+/**
+ * `success`는 기존 호출부 호환용이다. 실배팅에서는 `placementStatus`를 함께 확인해야 한다.
+ * 특히 `unknown`은 미체결이 아니라 서버 확인 전 상태이므로 동일 라운드 재전송 대상이 아니다.
+ */
+export interface BetExecutionResult {
+  success: boolean
+  placementStatus: BetExecutionStatus
+  error?: string
+}
+
 class AutoBettingServiceImpl {
   /** 진행 중인 배팅 (테이블별 관리 - 멀티룸 동시 배팅 지원) */
   private pendingBets: Map<string, PendingBetInfo> = new Map()
@@ -91,8 +103,9 @@ class AutoBettingServiceImpl {
   /** 배팅 가능 여부 확인 */
   canPlaceBet(tableId: string): { canBet: boolean; reason?: string } {
     const gameId = EvolutionAdapter.getCurrentGameId(tableId) || EvolutionAdapter.ensureGameId(tableId)
+    const pendingBet = this.pendingBets.get(tableId)
 
-    if (EvolutionAdapter.hasAlreadyBetOnGame(tableId, gameId)) {
+    if (pendingBet?.gameId === gameId || EvolutionAdapter.hasAlreadyBetOnGame(tableId, gameId)) {
       console.log(`[AutoBetting] ❌ canPlaceBet: Already bet on game ${gameId} for table ${tableId}`)
       return { canBet: false, reason: '이미 배팅됨' }
     }
@@ -127,16 +140,16 @@ class AutoBettingServiceImpl {
     prediction: Prediction,
     tableId: string,
     betAmount: number
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<BetExecutionResult> {
     // Skip if no prediction
     if (!prediction.prediction) {
-      return { success: false, error: 'No valid prediction' }
+      return { success: false, placementStatus: 'not_sent', error: 'No valid prediction' }
     }
 
     const betType: BetType =
       prediction.prediction === 'B' ? 'Banker' :
       prediction.prediction === 'P' ? 'Player' : 'Tie'
-    return this.placeBet(tableId, betType, betAmount)
+    return this.placeBet(tableId, betType, betAmount, undefined, true)
   }
 
   /**
@@ -149,25 +162,37 @@ class AutoBettingServiceImpl {
     amount: number,
     config?: Partial<TableBettingConfig>,
     isRealBetting: boolean = false
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<BetExecutionResult> {
     // 🛡️ 가상 모드 활성화 시 실제 소켓 전송 완전 차단
     if (this.virtualModeEnabled) {
       console.log(`[AutoBetting] 🛡️ BLOCKED - Virtual mode enabled, no socket message sent`)
-      return { success: false, error: '가상 모드 활성화됨 - 실제 배팅 차단' }
+      return { success: false, placementStatus: 'not_sent', error: '가상 모드 활성화됨 - 실제 배팅 차단' }
     }
 
     // Check if can place bet
     const check = this.canPlaceBet(tableId)
     if (!check.canBet) {
       console.log(`[AutoBetting] ❌ Cannot bet: ${check.reason}`)
-      return { success: false, error: check.reason }
+      return { success: false, placementStatus: 'not_sent', error: check.reason }
+    }
+
+    // 🛡️ [실배팅 안전장치 #1] 실시간 gameId가 없거나 synthetic이면 실배팅을 차단한다.
+    // 가짜(synthetic)·미수신(null) gameId로 실제 돈이 나가면 Evolution이 칩만 받고
+    // 현재 라운드 불일치로 무효 처리해 "돈은 나가는데 잘못됨" 사고가 난다(라이브 확인 2026-06-10).
+    // 가상/로그 배팅(isRealBetting=false)은 실제 돈이 안 나가므로 synthetic 폴백을 그대로 둔다.
+    if (isRealBetting) {
+      const liveGameId = EvolutionAdapter.getCurrentGameId(tableId)
+      if (!liveGameId || liveGameId.startsWith('synthetic-')) {
+        console.warn(`[AutoBetting] 🛡️ 실배팅 차단 — 실시간 gameId 미수신(현재값=${liveGameId ?? 'null'}). 가짜 gameId로 실제 배팅 방지.`)
+        return { success: false, placementStatus: 'not_sent', error: '게임 정보를 받는 중입니다 — 이번 판은 건너뜁니다' }
+      }
     }
 
     // Ensure multi-socket is connected before sending
     const isConnected = await TauriAdapter.getEvolutionMultiStatus().catch(() => false)
     if (!isConnected) {
       console.warn('[AutoBetting] ❌ Cannot bet: Evolution multi-socket not connected')
-      return { success: false, error: 'Evolution 소켓 미연결' }
+      return { success: false, placementStatus: 'not_sent', error: '연결이 끊겼어요 (재연결 대기 중)' }
     }
 
     // Ensure subscription/game state for this table before betting
@@ -185,17 +210,17 @@ class AutoBettingServiceImpl {
     // Amount validation
     if (balance !== null && amount > balance) {
       console.log(`[AutoBetting] ❌ Insufficient balance: ${balance}, required: ${amount}`)
-      return { success: false, error: 'Insufficient balance' }
+      return { success: false, placementStatus: 'not_sent', error: `잔액이 부족해요 (보유 ${balance.toLocaleString()}원 < 배팅 ${amount.toLocaleString()}원)` }
     }
 
     if (balance !== null && tableConfig.tableMinLimit && amount < tableConfig.tableMinLimit && EvolutionAdapter.hasCapturedConfig(tableId)) {
       console.log(`[AutoBetting] ❌ Below min limit: ${amount} < ${tableConfig.tableMinLimit}`)
-      return { success: false, error: 'Below minimum bet limit' }
+      return { success: false, placementStatus: 'not_sent', error: `최소 배팅금액보다 적어요 (배팅 ${amount.toLocaleString()}원 < 최소 ${tableConfig.tableMinLimit.toLocaleString()}원)` }
     }
 
     if (balance !== null && tableConfig.tableMaxLimit && amount > tableConfig.tableMaxLimit && EvolutionAdapter.hasCapturedConfig(tableId)) {
       console.log(`[AutoBetting] ❌ Above max limit: ${amount} > ${tableConfig.tableMaxLimit}`)
-      return { success: false, error: 'Above maximum bet limit' }
+      return { success: false, placementStatus: 'not_sent', error: `최대 배팅금액을 넘었어요 (배팅 ${amount.toLocaleString()}원 > 최대 ${tableConfig.tableMaxLimit.toLocaleString()}원)` }
     }
 
     // 실제 배팅 금액 = 사용자 설정 금액 그대로 사용 (칩 스택 조정 없음)
@@ -221,29 +246,91 @@ class AutoBettingServiceImpl {
 
     if (!message) {
       console.log('[AutoBetting] ❌ Failed to build bet message')
-      return { success: false, error: 'Failed to build message' }
+      return { success: false, placementStatus: 'not_sent', error: '배팅 메시지를 만들지 못했어요 (게임 정보 대기 중)' }
     }
 
+    let realBetAttempted = false
     try {
+      let confirmationPromise: ReturnType<typeof EvolutionAdapter.waitForBetConfirmation> | null = null
+
+      if (isRealBetting) {
+        // A second caller can pass the initial guard while the first caller is
+        // awaiting connection/subscription checks, so claim atomically here.
+        const pendingBet = this.pendingBets.get(tableId)
+        if (pendingBet?.gameId === gameId || EvolutionAdapter.hasAlreadyBetOnGame(tableId, gameId)) {
+          return { success: false, placementStatus: 'not_sent', error: '이미 배팅됨' }
+        }
+
+        // Claim the round before crossing the send boundary. A timeout or disconnect
+        // is an unknown outcome and must not cause another send for the same round.
+        EvolutionAdapter.markGameAsBet(tableId, gameId)
+        this.pendingBets.set(tableId, {
+          tableId,
+          betType,
+          amount: actualAmount,
+          gameId,
+          timestamp: Date.now(),
+          placementStatus: 'attempted',
+        })
+        realBetAttempted = true
+        confirmationPromise = EvolutionAdapter.waitForBetConfirmation({
+          tableId,
+          gameId,
+          betType,
+          amount: actualAmount,
+        })
+      }
+
       // Send message via Tauri
       console.log(`[AutoBetting] 📤 ${isRealBetting ? '실제 배팅 메시지 전송' : '가상 배팅 로그'}...`)
-      console.log(`[AutoBetting] 메시지: ${message.slice(0, 200)}...`)
       await TauriAdapter.sendEvolutionMultiMessage(message)
+
+      if (confirmationPromise) {
+        const confirmation = await confirmationPromise
+        if (confirmation.status === 'rejected') {
+          const reason = confirmation.error || '실제 베팅이 거절되었습니다'
+          this.pendingBets.delete(tableId)
+          console.warn(`[AutoBetting] ❌ Real bet rejected: ${reason}`)
+          return { success: false, placementStatus: 'rejected', error: reason }
+        }
+
+        if (confirmation.status === 'unknown') {
+          const reason = confirmation.error || '실제 베팅 체결 여부를 확인할 수 없습니다'
+          const pendingBet = this.pendingBets.get(tableId)
+          if (pendingBet) {
+            this.pendingBets.set(tableId, {
+              ...pendingBet,
+              placementStatus: 'unknown',
+              placementError: reason,
+            })
+          }
+          console.warn(`[AutoBetting] ⚠️ Real bet outcome unknown: ${reason}`)
+          return { success: false, placementStatus: 'unknown', error: reason }
+        }
+
+        const pendingBet = this.pendingBets.get(tableId)
+        if (pendingBet) {
+          this.pendingBets.set(tableId, {
+            ...pendingBet,
+            placementStatus: 'accepted',
+            placementError: undefined,
+          })
+        }
+        console.log(`[AutoBetting] ✅ Real bet confirmed: ${confirmation.betType ?? betType} ${confirmation.amount ?? actualAmount} on ${tableId}`)
+      } else {
+        EvolutionAdapter.markGameAsBet(tableId, gameId)
+        this.pendingBets.set(tableId, {
+          tableId,
+          betType,
+          amount: actualAmount,
+          gameId,
+          timestamp: Date.now(),
+          placementStatus: 'sent',
+        })
+      }
 
       // 잔액은 Evolution WebSocket에서 자동 업데이트됨
       // 수동으로 setBalance 호출하지 않음 (동기화 문제 방지)
-
-      // Mark as bet for this specific table
-      EvolutionAdapter.markGameAsBet(tableId, gameId)
-
-      // Store pending bet (테이블별 관리)
-      this.pendingBets.set(tableId, {
-        tableId,
-        betType,
-        amount: actualAmount,
-        gameId,
-        timestamp: Date.now(),
-      })
 
       console.log(`[AutoBetting] ✅ ${isRealBetting ? '실제 배팅' : '가상 배팅'} 완료: ${betType} ${actualAmount.toLocaleString()}원 on ${tableId}`)
 
@@ -256,72 +343,26 @@ class AutoBettingServiceImpl {
         timestamp: Date.now(),
       })
 
-      return { success: true }
+      return {
+        success: true,
+        placementStatus: isRealBetting ? 'confirmed' : 'sent',
+      }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       console.error('[AutoBetting] ❌ Failed to send bet:', errorMsg)
-      return { success: false, error: errorMsg }
-    }
-  }
-
-  /**
-   * 배팅 취소
-   */
-  async cancelBet(tableId: string): Promise<{ success: boolean; error?: string }> {
-    const pendingBet = this.pendingBets.get(tableId)
-    if (!pendingBet) {
-      return { success: false, error: 'No pending bet to cancel' }
-    }
-
-    const balance = EvolutionAdapter.getBalance()
-    if (balance === null) {
-      return { success: false, error: 'Balance not available' }
-    }
-
-    const message = EvolutionAdapter.buildUndoBetMessage({
-      tableId,
-      betType: pendingBet.betType,
-      amount: pendingBet.amount,
-      balance,
-    })
-
-    if (!message) {
-      return { success: false, error: 'Failed to build undo message' }
-    }
-
-    try {
-      await TauriAdapter.sendEvolutionMultiMessage(message)
-
-      console.log(`[AutoBetting] ✅ Bet cancelled: ${pendingBet.betType} ${pendingBet.amount}`)
-      this.pendingBets.delete(tableId)
-
-      return { success: true }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error)
-      console.error('[AutoBetting] ❌ Failed to cancel bet:', errorMsg)
-      return { success: false, error: errorMsg }
-    }
-  }
-
-  /**
-   * 모든 진행 중인 배팅 취소 (긴급 정지용)
-   */
-  async cancelAllBets(): Promise<{ success: boolean; cancelled: number; failed: number }> {
-    const tableIds = Array.from(this.pendingBets.keys())
-    let cancelled = 0
-    let failed = 0
-
-    for (const tableId of tableIds) {
-      const result = await this.cancelBet(tableId)
-      if (result.success) {
-        cancelled++
-      } else {
-        failed++
+      if (realBetAttempted) {
+        const pendingBet = this.pendingBets.get(tableId)
+        if (pendingBet) {
+          this.pendingBets.set(tableId, {
+            ...pendingBet,
+            placementStatus: 'unknown',
+            placementError: errorMsg,
+          })
+        }
+        return { success: false, placementStatus: 'unknown', error: errorMsg }
       }
+      return { success: false, placementStatus: 'not_sent', error: errorMsg }
     }
-
-    console.log(`[AutoBetting] ✅ Cancel all bets: ${cancelled} cancelled, ${failed} failed`)
-    return { success: failed === 0, cancelled, failed }
   }
 
   /**

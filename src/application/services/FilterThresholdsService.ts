@@ -7,6 +7,7 @@ import {
   TIE_FREQUENT_START,
   TIE_FREQUENT_MIN_COUNT,
   TIE_FREQUENT_MAX_COUNT,
+  TIE_FREQUENT_REQUIRE_FULL_WINDOW,
   FRESH_ROOM_GAMES,
   FRESH_SHOE_MAX_GAME_NUMBER,
 } from '../../domain/entities'
@@ -19,6 +20,8 @@ export interface FilterThresholds {
   tieFrequentStart: number
   tieFrequentMinCount: number
   tieFrequentMaxCount: number
+  /** tie_frequent: 구간이 다 끝난 뒤에만 매칭(true="20판부터") vs 진행 중 조기 매칭(false=슈 시작부터) */
+  tieFrequentRequireFullWindow: boolean
   freshRoomGames: number
   freshShoeMaxGameNumber: number
 }
@@ -29,6 +32,7 @@ const DEFAULTS: FilterThresholds = {
   tieFrequentStart: TIE_FREQUENT_START,
   tieFrequentMinCount: TIE_FREQUENT_MIN_COUNT,
   tieFrequentMaxCount: TIE_FREQUENT_MAX_COUNT,
+  tieFrequentRequireFullWindow: TIE_FREQUENT_REQUIRE_FULL_WINDOW,
   freshRoomGames: FRESH_ROOM_GAMES,
   freshShoeMaxGameNumber: FRESH_SHOE_MAX_GAME_NUMBER,
 }
@@ -53,6 +57,9 @@ class FilterThresholdsServiceImpl {
         tieFrequentStart: this.coerce(parsed.tieFrequentStart, DEFAULTS.tieFrequentStart, 1, 200),
         tieFrequentMinCount: this.coerce(parsed.tieFrequentMinCount, DEFAULTS.tieFrequentMinCount, 0, 99),
         tieFrequentMaxCount: this.coerce(parsed.tieFrequentMaxCount, DEFAULTS.tieFrequentMaxCount, 0, 99),
+        tieFrequentRequireFullWindow: typeof parsed.tieFrequentRequireFullWindow === 'boolean'
+          ? parsed.tieFrequentRequireFullWindow
+          : DEFAULTS.tieFrequentRequireFullWindow,
         freshRoomGames: this.coerce(parsed.freshRoomGames, DEFAULTS.freshRoomGames, 1, 200),
         freshShoeMaxGameNumber: this.coerce(parsed.freshShoeMaxGameNumber, DEFAULTS.freshShoeMaxGameNumber, 1, 200),
       }
@@ -97,6 +104,9 @@ class FilterThresholdsServiceImpl {
       tieFrequentMaxCount: partial.tieFrequentMaxCount !== undefined
         ? this.coerce(partial.tieFrequentMaxCount, this.values.tieFrequentMaxCount, 0, 99)
         : this.values.tieFrequentMaxCount,
+      tieFrequentRequireFullWindow: partial.tieFrequentRequireFullWindow !== undefined
+        ? partial.tieFrequentRequireFullWindow
+        : this.values.tieFrequentRequireFullWindow,
       freshRoomGames: partial.freshRoomGames !== undefined
         ? this.coerce(partial.freshRoomGames, this.values.freshRoomGames, 1, 200)
         : this.values.freshRoomGames,
@@ -110,6 +120,7 @@ class FilterThresholdsServiceImpl {
       next.tieFrequentStart === this.values.tieFrequentStart &&
       next.tieFrequentMinCount === this.values.tieFrequentMinCount &&
       next.tieFrequentMaxCount === this.values.tieFrequentMaxCount &&
+      next.tieFrequentRequireFullWindow === this.values.tieFrequentRequireFullWindow &&
       next.freshRoomGames === this.values.freshRoomGames &&
       next.freshShoeMaxGameNumber === this.values.freshShoeMaxGameNumber
     ) {

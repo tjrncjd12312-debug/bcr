@@ -136,12 +136,12 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
         // 2. Raw Messages (for debugging or custom parsing if needed)
         const unlistenRaw = await listen<{ roomId?: string, message: string }>('pragmatic_raw_message', (event) => {
             const payload = event.payload as any
-            const roomId = typeof payload === 'object' && payload !== null ? (payload.roomId || payload.url || 'unknown') : 'unknown'
+            const roomId = typeof payload?.roomId === 'string' ? payload.roomId : 'unknown'
             const message = typeof payload === 'string' ? payload : payload?.message
             if (typeof message === 'string') {
-                console.log(`[PragmaticAdapter] Raw [${roomId || 'unknown'}]:`, message.substring(0, 100))
+                console.log(`[PragmaticAdapter] Raw metadata room=${roomId} length=${message.length}`)
             } else {
-                console.log('[PragmaticAdapter] Raw (non-string payload)', payload)
+                console.log(`[PragmaticAdapter] Raw non-string payload type=${typeof payload}`)
             }
         })
         this.unlistenValues.push(unlistenRaw)
@@ -190,7 +190,13 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
         }
 
         try {
-            console.log(`[PragmaticAdapter] Connecting via Rust to ${config.wsUrl}`)
+            let host = 'unparseable'
+            try {
+                host = new URL(config.wsUrl).host || 'unknown'
+            } catch {
+                // Connection validation remains in Rust; logging stays metadata-only.
+            }
+            console.log(`[PragmaticAdapter] Connecting via Rust host=${host} urlLength=${config.wsUrl.length}`)
             await invoke('connect_pragmatic', { wsUrl: config.wsUrl })
             this.connected = true
         } catch (error) {

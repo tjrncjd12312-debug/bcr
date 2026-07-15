@@ -23,10 +23,7 @@ pub fn normalize_table_id(value: &str) -> String {
 }
 
 pub fn parse_bet_type(value: &str) -> Result<BetCode, BetTypeError> {
-    let normalized = value
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['_', '-'], " ");
+    let normalized = value.trim().to_ascii_lowercase().replace(['_', '-'], " ");
 
     match normalized.as_str() {
         "p" | "player" => Ok(BetCode(0)),

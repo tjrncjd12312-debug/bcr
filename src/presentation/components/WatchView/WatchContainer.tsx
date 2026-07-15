@@ -139,7 +139,7 @@ export function WatchContainer({ onHome }: WatchContainerProps) {
     return (
       <FocusedRoomView
         roomName={name}
-        breadcrumb={`살펴보기 › ${name} › 자세히`}
+        breadcrumb={`예측 보기 › ${name} › 자세히`}
         connection={connection}
         prediction={prediction}
         counts={winnerCounts(focusedRoom.history)}
@@ -148,8 +148,8 @@ export function WatchContainer({ onHome }: WatchContainerProps) {
         }
         bigRoadSlot={<BigRoad history={focusedRoom.history} />}
         beadPlateSlot={<BeadPlate history={focusedRoom.history} />}
-        primaryActionLabel="이 방에서 도움받기"
-        onPrimaryAction={() => showInfo('도움받기는 다음 단계에서 연결됩니다.')}
+        primaryActionLabel="이 방에서 추천 받기"
+        onPrimaryAction={() => showInfo('추천 받기는 다음 단계에서 연결됩니다.')}
         onBack={() => setFocusedId(null)}
       />
     )

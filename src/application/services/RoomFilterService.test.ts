@@ -241,7 +241,11 @@ describe('RoomFilterService', () => {
   })
 
   describe('fresh_shoe filter', () => {
-    function createPredictionState(roomId: string, isShoeReset?: boolean): RoomPredictionState {
+    function createPredictionState(
+      roomId: string,
+      isShoeReset?: boolean,
+      shoeChangeDetectedAt?: number,
+    ): RoomPredictionState {
       return {
         roomId,
         roomName: `Room ${roomId}`,
@@ -256,6 +260,7 @@ describe('RoomFilterService', () => {
         predictionCount: 0,
         history: [],
         isShoeReset,
+        shoeChangeDetectedAt,
       }
     }
 
@@ -263,25 +268,25 @@ describe('RoomFilterService', () => {
       FilterThresholdsService.set({ freshShoeMaxGameNumber: 5 })
     })
 
-    it('matches when predictionState.isShoeReset === true regardless of history length', () => {
+    it('does not match a long shoe even after an explicit shoe-change event', () => {
       const room = createRoom('r1', createHistory('BBPBPBBPPBBPBP')) // 14 results > 5
-      const state = createPredictionState('r1', true)
-      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(true)
-    })
-
-    it('matches when history.length <= freshShoeMaxGameNumber and isShoeReset is falsy', () => {
-      const room = createRoom('r2', createHistory('BPB')) // 3 results
-      const state = createPredictionState('r2', false)
-      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(true)
-    })
-
-    it('does NOT match when history is long and isShoeReset is false', () => {
-      const room = createRoom('r3', createHistory('BPBPBPBP')) // 8 > 5
-      const state = createPredictionState('r3', false)
+      const state = createPredictionState('r1', false, Date.now())
       expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(false)
     })
 
-    it('does NOT match when both isShoeReset is undefined and history is long', () => {
+    it('matches short history only after an explicit shoe-change event', () => {
+      const room = createRoom('r2', createHistory('BPB')) // 3 results
+      const state = createPredictionState('r2', false, Date.now())
+      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(true)
+    })
+
+    it('does not treat isShoeReset inferred from short history as a verified shoe change', () => {
+      const room = createRoom('r3', createHistory('BPB'))
+      const state = createPredictionState('r3', true)
+      expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(false)
+    })
+
+    it('does NOT match when the explicit signal is missing and history is long', () => {
       const room = createRoom('r4', createHistory('BPBPBPBP'))
       const state = createPredictionState('r4', undefined)
       expect(RoomFilterService.matchesFilter(room, state, 'fresh_shoe')).toBe(false)
@@ -292,16 +297,19 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(room, null, 'fresh_shoe')).toBe(false)
     })
 
-    it('matches when predictionState is null but history is short (≤ N)', () => {
+    it('does not match short history when predictionState is null', () => {
       const room = createRoom('r6', createHistory('BP'))
-      expect(RoomFilterService.matchesFilter(room, null, 'fresh_shoe')).toBe(true)
+      expect(RoomFilterService.matchesFilter(room, null, 'fresh_shoe')).toBe(false)
     })
   })
 
   describe('tie_frequent filter', () => {
-    // Window slices games [start, start+window-1] from the START of the shoe
-    // (chronological order). Defaults: start=1, window=5, min=0, max=0
-    // → "no tie at all in the first 5 games of the shoe".
+    // 정확 모델(2026-07-07): counts ties from game `start` through the CURRENT
+    // newest (whole shoe so far). `window` is the minimum-games entry gate.
+    // Defaults: start=1, window=5, min=0, max=0 → "no tie anywhere in the shoe
+    // so far, with >= 5 games played". A tie ANYWHERE (even past the window)
+    // drops the room; a new shoe resets history so it re-qualifies.
+    // The window must be FULLY played before a room matches (no early matching).
     // history is newest-first, so createHistory(s) treats s[0] as newest.
 
     beforeEach(() => {
@@ -310,6 +318,7 @@ describe('RoomFilterService', () => {
         tieFrequentWindow: 5,
         tieFrequentMinCount: 0,
         tieFrequentMaxCount: 0,
+        tieFrequentRequireFullWindow: true,
       })
     })
 
@@ -334,21 +343,49 @@ describe('RoomFilterService', () => {
       expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
     })
 
-    it('ignores ties that appear AFTER the window (game 6+)', () => {
-      // chronological: B P B P B T T  (first 5 games tie-free, ties later)
+    it('drops a max=0 room once ANY tie appears, even after the window (정확 모델)', () => {
+      // chronological: B P B P B T T  (first 5 games tie-free, ties at game 6-7)
       // newest-first: T T B P B P B
+      // 정확 모델: 슈에 타이가 한 번이라도 나오면(창 밖이라도) 그 방은 목록에서 빠진다.
+      // (새 슈로 히스토리가 리셋되면 다시 후보가 됨)
       const room = createRoom('r3', createHistory('TTBPBPB'))
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
     })
 
-    it('matches 0-0 while the configured shoe window is still in progress', () => {
-      // Only 3 games, but the first 5-game window has no ties so far.
+    it('does NOT match until the configured shoe window is fully played', () => {
+      // Only 3 games, window=5 → wait for the full 5-game window before
+      // deciding ("20개부터 찾기" intent — no early matching).
       const room = createRoom('r4', createHistory('BPB'))
-      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
     })
 
-    it('matches 0-0 before the first completed result when the window starts at game 1', () => {
+    it('does NOT match an empty shoe before the window has any results', () => {
       const room = createRoom('rFirst', createHistory(''))
+      expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(false)
+    })
+
+    // 사용자 전략: "1~20번째 게임 안에 타이가 한 번도 안 뜬 방을 찾아서 배팅"
+    // = start=1, window=20, 타이 0~0, 구간 완료 후 진입.
+    it('finds "no tie in games 1-20" rooms (start=1, window=20, max=0)', () => {
+      FilterThresholdsService.set({
+        tieFrequentStart: 1,
+        tieFrequentWindow: 20,
+        tieFrequentMinCount: 0,
+        tieFrequentMaxCount: 0,
+        tieFrequentRequireFullWindow: true,
+      })
+      // 20판 모두 무타이 → 매칭
+      expect(RoomFilterService.matchesFilter(createRoom('r20', createHistory('B'.repeat(20))), null, 'tie_frequent')).toBe(true)
+      // 1~20 안에 타이가 하나라도 있으면 → 제외
+      expect(RoomFilterService.matchesFilter(createRoom('rTie', createHistory('B'.repeat(19) + 'T')), null, 'tie_frequent')).toBe(false)
+      // 아직 20판이 안 참 → 제외 (구간 완료 후 진입)
+      expect(RoomFilterService.matchesFilter(createRoom('r19', createHistory('B'.repeat(19))), null, 'tie_frequent')).toBe(false)
+    })
+
+    it('matches early (window still in progress) when full-window wait is OFF', () => {
+      // 조기진입 모드(슈 시작부터): 구간(5판)이 안 차도 지금까지 타이가 없으면 매칭.
+      FilterThresholdsService.set({ tieFrequentRequireFullWindow: false })
+      const room = createRoom('rEarly', createHistory('BPB')) // 3 games, no tie yet
       expect(RoomFilterService.matchesFilter(room, null, 'tie_frequent')).toBe(true)
     })
 

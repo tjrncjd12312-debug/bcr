@@ -97,13 +97,18 @@ impl PragmaticConnectionManager {
         ws_url: String,
         manager_arc: Arc<Mutex<PragmaticConnectionManager>>,
     ) -> Result<(), String> {
-        info!("🔎 Analyzing new connection URL: {}", ws_url);
+        info!(
+            "🔎 Analyzing new connection URL: present={}, length={}",
+            !ws_url.is_empty(),
+            ws_url.len()
+        );
 
         // 1. Parse URL to get context
         if let Some((room_id, session, _)) = self.parse_url(&ws_url) {
             info!(
-                "✅ Valid Pragmatic URL detected. Session: {}, Room: {}",
-                session.jsession_id, room_id
+                "✅ Valid Pragmatic URL detected. Session present=true, session_length={}, Room: {}",
+                session.jsession_id.len(),
+                room_id
             );
 
             // 2. Store Session if not exists (or update)
@@ -182,7 +187,12 @@ impl PragmaticConnectionManager {
             .table_game_ids
             .get(&normalized_table_id)
             .cloned()
-            .ok_or_else(|| format!("No active gameId for Pragmatic table {}", normalized_table_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "No active gameId for Pragmatic table {}",
+                    normalized_table_id
+                )
+            })?;
         let user_id = self
             .active_user_id
             .clone()
@@ -264,7 +274,12 @@ impl PragmaticConnectionManager {
         ws_url: String,
         manager_arc: Arc<Mutex<PragmaticConnectionManager>>,
     ) -> Result<(), String> {
-        info!("🔌 Connecting to room: {} ({})", room_id, ws_url);
+        info!(
+            "🔌 Connecting to room: {}, url_present={}, url_length={}",
+            room_id,
+            !ws_url.is_empty(),
+            ws_url.len()
+        );
 
         if self.clients.contains_key(&room_id) {
             // Allow reconnecting if strictly requested? For now, skip.

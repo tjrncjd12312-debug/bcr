@@ -6,7 +6,6 @@ import type { Room, Prediction, BettingPhaseEvent } from '../../domain/entities'
 import type { ISoundPort } from '../../domain/interfaces'
 import SemiAutoService, { type SemiAutoState, type SemiAutoSettings, type BetLogEvent } from '../../application/services/SemiAutoService'
 import { container } from '../../application/di'
-import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
 
 export interface UseSemiAutoResult {
   // State
@@ -88,17 +87,6 @@ export function useSemiAuto(): UseSemiAutoResult {
   useEffect(() => {
     const unsubscribe = SemiAutoService.onStateChange((newState) => {
       setState(newState)
-    })
-    return unsubscribe
-  }, [])
-
-  // ✅ 게임 결과 이벤트 구독 - SemiAutoService.onGameResult() 자동 호출
-  useEffect(() => {
-    const unsubscribe = EvolutionAdapter.onGameResult((event) => {
-      // 결과 이벤트 수신 시 SemiAutoService에 전달
-      const history = event.history?.map(h => h.winner) || []
-      console.log(`[useSemiAuto] 📥 Game result: room=${event.roomId}, winner=${event.winner}`)
-      SemiAutoService.onGameResult(event.roomId, event.winner, history)
     })
     return unsubscribe
   }, [])

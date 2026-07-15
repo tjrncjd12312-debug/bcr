@@ -21,36 +21,46 @@ export interface MoveOnTieListenerDeps {
 }
 
 type TriggerCallback = (roomId: string, reason: TriggerReason) => void
+interface ScopedTriggerCallback {
+  callback: TriggerCallback
+  scope: Scope | null
+}
 
 export class MoveOnTieListener {
-  private callbacks: TriggerCallback[] = []
+  private callbacks: ScopedTriggerCallback[] = []
   private pendingBets: Map<string, { roundId: string; betType: BetType }> = new Map()
   private firedKeys: Set<string> = new Set()  // (roomId, roundId, reason) dedup keys
-  private scope: Scope | null = null
+  private enabledScopes: Set<Scope> = new Set()
   private unsubscribeAdapter: (() => void) | null = null
 
   constructor(private readonly deps: MoveOnTieListenerDeps) {}
 
   enable(scope: Scope): () => void {
-    this.scope = scope
-    this.unsubscribeAdapter = this.deps.casinoAdapter.onGameResult((event) => {
-      this.handleResult(event)
-    })
-    return () => this.disable()
+    this.enabledScopes.add(scope)
+    if (!this.unsubscribeAdapter) {
+      this.unsubscribeAdapter = this.deps.casinoAdapter.onGameResult((event) => {
+        this.handleResult(event)
+      })
+    }
+    return () => this.disable(scope)
   }
 
-  disable(): void {
+  disable(scope?: Scope): void {
+    if (scope) this.enabledScopes.delete(scope)
+    else this.enabledScopes.clear()
+    if (this.enabledScopes.size > 0) return
+
     this.unsubscribeAdapter?.()
     this.unsubscribeAdapter = null
-    this.scope = null
     this.pendingBets.clear()
     this.firedKeys.clear()
   }
 
-  onTrigger(cb: TriggerCallback): () => void {
-    this.callbacks.push(cb)
+  onTrigger(cb: TriggerCallback, scope?: Scope): () => void {
+    const entry: ScopedTriggerCallback = { callback: cb, scope: scope ?? null }
+    this.callbacks.push(entry)
     return () => {
-      const i = this.callbacks.indexOf(cb)
+      const i = this.callbacks.indexOf(entry)
       if (i >= 0) this.callbacks.splice(i, 1)
     }
   }
@@ -73,15 +83,19 @@ export class MoveOnTieListener {
 
   // BettingDecisionService가 martin cap 도달을 알릴 때 호출
   signalMartinCap(roomId: string): void {
-    if (!this.passesScope(roomId)) return
+    const scopes = this.getMatchingScopes(roomId)
+    if (scopes.length === 0) return
     this.deps.onMartinReset(roomId)
-    this.emit(roomId, 'martin_cap', `cap:${roomId}:${Date.now()}`)
+    for (const scope of scopes) {
+      this.emit(roomId, 'martin_cap', `cap:${roomId}:${Date.now()}:${scope}`, scope)
+    }
   }
 
   // === 내부 ===
 
   private handleResult(event: { roomId: string; winner: 'B' | 'P' | 'T'; roundId?: string }): void {
-    if (!this.passesScope(event.roomId)) return
+    const scopes = this.getMatchingScopes(event.roomId)
+    if (scopes.length === 0) return
     if (event.winner !== 'T') {
       return
     }
@@ -93,19 +107,24 @@ export class MoveOnTieListener {
         : 'organic_tie'
 
     this.deps.onMartinReset(event.roomId)
-    const dedupKey = `${event.roomId}:${event.roundId ?? 'noround'}:${reason}`
-    this.emit(event.roomId, reason, dedupKey)
+    for (const scope of scopes) {
+      const dedupKey = `${event.roomId}:${event.roundId ?? 'noround'}:${reason}:${scope}`
+      this.emit(event.roomId, reason, dedupKey, scope)
+    }
 
     this.pendingBets.delete(event.roomId)
   }
 
-  private passesScope(roomId: string): boolean {
-    if (this.scope === null) return false
-    if (this.scope === 'auto') return true
-    return this.deps.getCurrentFocusedRoomId() === roomId
+  private getMatchingScopes(roomId: string): Scope[] {
+    const scopes: Scope[] = []
+    if (this.enabledScopes.has('auto')) scopes.push('auto')
+    if (this.enabledScopes.has('semiauto') && this.deps.getCurrentFocusedRoomId() === roomId) {
+      scopes.push('semiauto')
+    }
+    return scopes
   }
 
-  private emit(roomId: string, reason: TriggerReason, dedupKey: string): void {
+  private emit(roomId: string, reason: TriggerReason, dedupKey: string, scope: Scope): void {
     if (this.firedKeys.has(dedupKey)) return
     this.firedKeys.add(dedupKey)
     // 메모리 안정성: 너무 커지면 오래된 것 정리
@@ -113,6 +132,8 @@ export class MoveOnTieListener {
       const arr = Array.from(this.firedKeys)
       for (let i = 0; i < 100; i++) this.firedKeys.delete(arr[i])
     }
-    this.callbacks.slice().forEach(cb => cb(roomId, reason))
+    this.callbacks.slice().forEach(({ callback, scope: callbackScope }) => {
+      if (callbackScope === null || callbackScope === scope) callback(roomId, reason)
+    })
   }
 }

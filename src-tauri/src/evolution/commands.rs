@@ -33,9 +33,13 @@ pub async fn connect_evolution_multi_socket(
     mwg_params: Option<String>,
 ) -> Result<(), String> {
     info!("📡 connect_evolution_multi_socket called");
-    info!("📡 URL: {}", &ws_url[..ws_url.len().min(120)]);
+    info!(
+        "📡 WebSocket URL received: present={}, length={}",
+        !ws_url.is_empty(),
+        ws_url.len()
+    );
     if let Some(ref mwg) = mwg_params {
-        info!("📡 mwg_params: {}", &mwg[..mwg.len().min(80)]);
+        info!("📡 mwg_params received: present=true, length={}", mwg.len());
     }
 
     let mut client = GLOBAL_MULTI_CLIENT.lock().await;

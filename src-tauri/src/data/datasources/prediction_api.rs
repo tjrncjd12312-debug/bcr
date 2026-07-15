@@ -131,8 +131,7 @@ impl V2PredictionRequest {
         // refcount > 1 이면 Vec을 1회 복제한다. R3의 목적은
         // "핫패스에서의 메시지당 복제 제거" 이며, 이 지점은 HTTP 직렬화 직전의
         // 1회성 경계 복제이므로 허용된다(plan.md §3 Lane R3 참고).
-        let history: Vec<GameRound> =
-            Arc::try_unwrap(history).unwrap_or_else(|arc| (*arc).clone());
+        let history: Vec<GameRound> = Arc::try_unwrap(history).unwrap_or_else(|arc| (*arc).clone());
 
         Self {
             room_id,
@@ -650,10 +649,7 @@ impl PredictionApi {
         let url = format!("{}/api/v2/predict/best-room", self.config.base_url);
         let token = self.get_token()?;
 
-        info!(
-            "📡 방 선택 요청: 후보 {}개",
-            request.candidates.len()
-        );
+        info!("📡 방 선택 요청: 후보 {}개", request.candidates.len());
 
         let response = self
             .client
@@ -820,16 +816,16 @@ impl PredictionApi {
             last_game_cards: None,
             betting_stats: None,
             shoe_stats: None,
-            bet_type: None, // 레거시 API는 기본값 사용
-            martin_level: None, // 레거시 API는 기본값 사용
-            min_confidence: None, // 레거시 API는 기본값 사용
-            auto_mode: None, // 레거시 API는 기본값 사용
-            user_id: None, // 🆕 v3.7.0
-            username: None, // 🆕 v3.7.0
-            session_id: None, // 🆕 v3.7.0
+            bet_type: None,        // 레거시 API는 기본값 사용
+            martin_level: None,    // 레거시 API는 기본값 사용
+            min_confidence: None,  // 레거시 API는 기본값 사용
+            auto_mode: None,       // 레거시 API는 기본값 사용
+            user_id: None,         // 🆕 v3.7.0
+            username: None,        // 🆕 v3.7.0
+            session_id: None,      // 🆕 v3.7.0
             current_balance: None, // 🆕 v3.7.0
-            bet_amount: None, // 🆕 v3.7.0
-            client_type: None, // 🆕 v3.7.0
+            bet_amount: None,      // 🆕 v3.7.0
+            client_type: None,     // 🆕 v3.7.0
         };
 
         // V2 API 호출
@@ -913,7 +909,11 @@ impl PredictionApi {
     pub async fn check_version(&self) -> Result<VersionCheckResponse, String> {
         let url = format!("{}/api/version/check", self.config.base_url);
 
-        info!("🔍 버전 체크: {} (클라이언트 버전: {})", url, Self::CLIENT_VERSION);
+        info!(
+            "🔍 버전 체크: {} (클라이언트 버전: {})",
+            url,
+            Self::CLIENT_VERSION
+        );
 
         let payload = serde_json::json!({
             "clientVersion": Self::CLIENT_VERSION,
@@ -977,7 +977,7 @@ impl PredictionApi {
                             version_check.required_version
                         )
                     });
-                    
+
                     // 버전 불일치 정보를 JSON 형태로 에러 메시지에 담아 전달
                     // auth_commands에서 이를 파싱하여 업데이트 UI를 띄울 수 있음
                     let err_data = serde_json::json!({
@@ -996,7 +996,7 @@ impl PredictionApi {
         }
 
         let url = format!("{}/api/login", self.config.base_url);
-        
+
         // ... (rest of the login logic)
 
         // ✅ Security: URL은 내부 로그에만 기록, 에러 메시지에는 노출하지 않음
@@ -1020,13 +1020,10 @@ impl PredictionApi {
             })?;
 
         let status = response.status();
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| {
-                error!("❌ 응답 읽기 실패 (내부): {}", e);
-                "서버 응답을 읽는데 실패했습니다.".to_string()
-            })?;
+        let response_text = response.text().await.map_err(|e| {
+            error!("❌ 응답 읽기 실패 (내부): {}", e);
+            "서버 응답을 읽는데 실패했습니다.".to_string()
+        })?;
 
         // ✅ Security: 응답 내용은 내부 로그에만 기록
         info!("📥 로그인 응답 (HTTP {}): {}", status, response_text);
@@ -1041,10 +1038,13 @@ impl PredictionApi {
             return Err("로그인에 실패했습니다. 잠시 후 다시 시도해주세요.".to_string());
         }
 
-        let mut login_response: LoginApiResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
+        let mut login_response: LoginApiResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
                 // ✅ Security: 파싱 오류 상세 내용은 내부 로그에만 기록
-                error!("❌ 로그인 응답 파싱 실패 (내부): {} - Body: {}", e, response_text);
+                error!(
+                    "❌ 로그인 응답 파싱 실패 (내부): {} - Body: {}",
+                    e, response_text
+                );
                 "서버 응답 처리 중 오류가 발생했습니다.".to_string()
             })?;
 

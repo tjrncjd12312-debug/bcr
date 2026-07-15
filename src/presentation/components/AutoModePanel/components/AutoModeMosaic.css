@@ -9,8 +9,8 @@
   overflow-y: auto;
   padding: 12px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(174px, 1fr));
+  gap: 10px;
   align-content: start;
   /* Custom Scrollbar */
   scrollbar-width: thin;
@@ -39,15 +39,15 @@
    ═══════════════════════════════════════════════════════════════ */
 
 .mosaic-tile {
-  height: 108px;
+  height: 128px;
   background: linear-gradient(180deg,
       var(--bg-surface) 0%,
       var(--bg-card) 100%);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   display: grid;
-  grid-template-rows: 18px 1fr 22px 14px;
-  overflow: hidden;
+  grid-template-rows: 22px 18px minmax(42px, 1fr) 24px 16px;
+  overflow: visible;
   cursor: pointer;
   position: relative;
   transition: var(--transition-smooth);
@@ -174,8 +174,8 @@
 
 .mosaic-name {
   flex: 1;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   color: var(--accent-gold);
   white-space: nowrap;
   overflow: hidden;
@@ -183,7 +183,7 @@
 }
 
 .mosaic-timer-badge {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   padding: 1px 5px;
   border-radius: var(--radius-sm);
@@ -317,7 +317,7 @@
 }
 
 .mosaic-bet-amount {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--accent-gold);
   font-weight: 700;
   white-space: nowrap;
@@ -325,7 +325,7 @@
 }
 
 .mosaic-result-profit {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -338,7 +338,7 @@
 }
 
 .mosaic-martin-badge {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   padding: 3px 6px;
   border-radius: var(--radius-xs);
@@ -373,7 +373,7 @@
 }
 
 .mosaic-session-profit {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-muted);
 }
@@ -477,12 +477,12 @@
 
 .mosaic-martin-fill.level-0,
 .mosaic-martin-fill.level-1 {
-  background: linear-gradient(90deg, var(--accent-gold), #8b5cf6);
+  background: var(--accent-primary);
 }
 
 .mosaic-martin-fill.level-2,
 .mosaic-martin-fill.level-3 {
-  background: linear-gradient(90deg, var(--status-warning), #3182f6);
+  background: var(--status-warning);
 }
 
 .mosaic-martin-fill.level-4,
@@ -503,7 +503,7 @@
 }
 
 .mosaic-win-rate {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-muted);
 }
@@ -517,7 +517,7 @@
 }
 
 .mosaic-game-count {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--text-muted);
   opacity: 0.7;
 }
@@ -535,7 +535,7 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  min-width: 140px;
+  min-width: 220px;
   opacity: 0;
   visibility: hidden;
   transition: var(--transition-fast);
@@ -564,7 +564,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 2px 0;
-  font-size: 10px;
+  gap: 14px;
+  font-size: 11px;
 }
 
 .mosaic-tooltip-row+.mosaic-tooltip-row {
@@ -578,6 +579,11 @@
 .mosaic-tooltip-value {
   color: var(--text-primary);
   font-weight: 600;
+  max-width: 140px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mosaic-tooltip-value.positive {
@@ -594,12 +600,12 @@
 
 @media (min-width: 1400px) {
   .auto-mode__mosaic-container {
-    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
     gap: 10px;
   }
 
   .mosaic-tile {
-    height: 116px;
+    height: 132px;
   }
 
   .mosaic-prediction-badge {
@@ -611,13 +617,13 @@
 
 @media (max-width: 800px) {
   .auto-mode__mosaic-container {
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 6px;
     padding: 8px;
   }
 
   .mosaic-tile {
-    height: 100px;
+    height: 118px;
   }
 
   .mosaic-prediction-badge {
@@ -627,7 +633,7 @@
   }
 
   .mosaic-name {
-    font-size: 9px;
+    font-size: 11px;
   }
 }
 

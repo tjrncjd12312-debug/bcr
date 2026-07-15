@@ -152,4 +152,31 @@ describe('MoveOnTieListener', () => {
       expect(got).toEqual([{ roomId: 'r1', reason: 'martin_cap' }])
     })
   })
+
+  it('keeps auto and semiauto subscriptions isolated when both scopes are enabled', () => {
+    let focusedRoomId: string | null = 'r-focus'
+    const l = new MoveOnTieListener({
+      casinoAdapter: adapter,
+      getCurrentFocusedRoomId: () => focusedRoomId,
+      onMartinReset: vi.fn(),
+    })
+    const autoEvents: string[] = []
+    const semiAutoEvents: string[] = []
+    l.onTrigger(roomId => autoEvents.push(roomId), 'auto')
+    l.onTrigger(roomId => semiAutoEvents.push(roomId), 'semiauto')
+
+    const disableAuto = l.enable('auto')
+    l.enable('semiauto')
+    adapter.fireResult({ roomId: 'r-other', winner: 'T', roundId: 'a' })
+    adapter.fireResult({ roomId: 'r-focus', winner: 'T', roundId: 'b' })
+
+    expect(autoEvents).toEqual(['r-other', 'r-focus'])
+    expect(semiAutoEvents).toEqual(['r-focus'])
+
+    disableAuto()
+    focusedRoomId = 'r-next'
+    adapter.fireResult({ roomId: 'r-next', winner: 'T', roundId: 'c' })
+    expect(autoEvents).toEqual(['r-other', 'r-focus'])
+    expect(semiAutoEvents).toEqual(['r-focus', 'r-next'])
+  })
 })

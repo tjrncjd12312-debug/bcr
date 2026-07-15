@@ -10,6 +10,7 @@ import PatternBetStrategySelect from '../AutoModePanel/components/PatternBetStra
 import PatternBettingService from '../../../application/services/PatternBettingService'
 import FilterThresholdsService from '../../../application/services/FilterThresholdsService'
 import AutoModeService from '../../../application/services/AutoModeService'
+import CustomStrategyService from '../../../application/services/CustomStrategyService'
 import type { RoomFilter, RoomFilterType } from '../../../domain/entities'
 import './FilterSettingsDialog.css'
 
@@ -22,6 +23,7 @@ interface FilterSettingsDialogProps {
   clearFilters: () => void
   filterCounts?: Record<string, number>
   onOpenPatternManager: () => void
+  onOpenStrategyManager?: () => void
   freshShoeScope: FreshShoeScope
 }
 
@@ -58,6 +60,7 @@ function useTieFrequentControls() {
       window: v.tieFrequentWindow,
       min: v.tieFrequentMinCount,
       max: v.tieFrequentMaxCount,
+      requireFullWindow: v.tieFrequentRequireFullWindow,
     }
   })
   useEffect(() => {
@@ -68,6 +71,7 @@ function useTieFrequentControls() {
         window: v.tieFrequentWindow,
         min: v.tieFrequentMinCount,
         max: v.tieFrequentMaxCount,
+        requireFullWindow: v.tieFrequentRequireFullWindow,
       })
     }
     sync()
@@ -99,12 +103,13 @@ export function FilterSettingsDialog({
   clearFilters,
   filterCounts = {},
   onOpenPatternManager,
+  onOpenStrategyManager,
   freshShoeScope,
 }: FilterSettingsDialogProps) {
   const tieAutoOn = useTieAutoState(activeFilters)
   // 타이 자동이 켜져 있으면 "전체"는 강제 OFF — 다른 필터로 빠지지 않도록.
   const isAllActive = !tieAutoOn && activeFilters.length === 0
-  const { start: tieStart, window: tieWindow, min: tieMin, max: tieMax } = useTieFrequentControls()
+  const { start: tieStart, window: tieWindow, min: tieMin, max: tieMax, requireFullWindow: tieRequireFullWindow } = useTieFrequentControls()
   const { baseBetAmount, maxMartin, maxConcurrentBets } = useAutoBetSettings()
   const tieMatchCount = filterCounts.tie_frequent ?? 0
   const tieConcurrentLimit = maxConcurrentBets > 0
@@ -114,23 +119,46 @@ export function FilterSettingsDialog({
     ? `동시 최대 ${maxConcurrentBets}개`
     : '동시 제한 없음'
   const isTieConcurrentLimited = tieAutoOn && maxConcurrentBets > 0 && maxConcurrentBets < tieMatchCount
+  const [customStrategies, setCustomStrategies] = useState(() => CustomStrategyService.getEnabledStrategies())
+  const activeStrategyId = activeFilters.find(filter => typeof filter === 'string' && filter.startsWith('strategy:'))
+    ?.slice('strategy:'.length)
+  const [selectedStrategyId, setSelectedStrategyId] = useState(() => activeStrategyId || customStrategies[0]?.id || '')
+  const selectedStrategy = customStrategies.find(strategy => strategy.id === (activeStrategyId || selectedStrategyId))
+    ?? customStrategies[0]
+  const strategyAutoOn = Boolean(activeStrategyId && selectedStrategy?.id === activeStrategyId)
+  const strategyMatchCount = selectedStrategy ? (filterCounts[`strategy:${selectedStrategy.id}`] ?? 0) : 0
+  const visibleFilters = onOpenStrategyManager
+    ? availableFilters
+    : availableFilters.filter(filter => !filter.isStrategy)
+
+  useEffect(() => CustomStrategyService.onChange(strategies => {
+    const enabled = strategies.filter(strategy => strategy.enabled)
+    setCustomStrategies(enabled)
+    setSelectedStrategyId(current => enabled.some(strategy => strategy.id === current) ? current : (enabled[0]?.id || ''))
+  }), [])
 
   const handleTieAutoToggle = () => {
     if (tieAutoOn) {
       if (activeFilters.includes('tie_frequent')) toggleFilter('tie_frequent')
-      // OFF 시 per-filter 전략 override를 비워 글로벌 전략이 다시 적용되도록 한다.
-      // (이전에 ON에서 'martingale'을 박아두면 OFF 후에도 sticky하게 남아
-      //  글로벌 커스텀 시퀀스를 계속 덮어쓰는 문제가 있었다.)
-      PatternBettingService.setBetStrategy('tie_frequent', undefined)
+      // Preserve the user's per-filter strategy; toggling tie-auto only changes
+      // the active filter/direction.
     } else {
       clearFilters()
       toggleFilter('tie_frequent')
       PatternBettingService.setBetDirection('tie_frequent', 'T')
-      // 전략은 글로벌(또는 사용자가 per-filter 드롭다운에서 정한 값)을 따른다.
-      // 'martingale'을 강제하면 글로벌에 설정한 커스텀/피보나치/파롤리 시퀀스가
-      // 무시되어 사용자가 설정한 패턴대로 배팅되지 않는다(커밋 44dfd72 회귀 방지).
-      PatternBettingService.setBetStrategy('tie_frequent', undefined)
+      // Strategy follows the global setting or the user's per-filter override.
     }
+  }
+
+  const handleStrategyToggle = () => {
+    if (!selectedStrategy) return
+    const filter = `strategy:${selectedStrategy.id}` as RoomFilterType
+    if (strategyAutoOn) {
+      if (activeFilters.includes(filter)) toggleFilter(filter)
+      return
+    }
+    clearFilters()
+    toggleFilter(filter)
   }
 
   const setIntThreshold = (key: 'tieFrequentWindow' | 'tieFrequentStart' | 'tieFrequentMinCount' | 'tieFrequentMaxCount') =>
@@ -218,6 +246,17 @@ export function FilterSettingsDialog({
           />
           <span className="filter-settings__quick-row-label">번 나온 방만 배팅</span>
         </div>
+        <label className="filter-settings__quick-row" style={{ cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={tieRequireFullWindow}
+            onChange={(e) => FilterThresholdsService.set({ tieFrequentRequireFullWindow: e.target.checked })}
+            aria-label="구간이 다 찬 뒤에 진입"
+          />
+          <span className="filter-settings__quick-row-label">
+            {tieWindow}판 다 채운 뒤에 들어가기 <strong>(끄면 슈 시작부터 바로)</strong>
+          </span>
+        </label>
         <div className="filter-settings__quick-row">
           <span className="filter-settings__quick-row-label">배팅 금액</span>
           <input
@@ -264,6 +303,46 @@ export function FilterSettingsDialog({
         )}
       </section>
 
+      {onOpenStrategyManager && <section className={`filter-settings__quick filter-settings__strategy-quick ${strategyAutoOn ? 'is-on' : ''}`}>
+        <div className="filter-settings__quick-head">
+          <div>
+            <h3 className="filter-settings__quick-title">커스텀 전략 자동 배팅</h3>
+            <p className="filter-settings__quick-desc">
+              관찰 조건·진입 방향·단계별 금액과 승패 전이를 직접 조합합니다. 실행 중인 전략은 완료 또는 슈 변경까지 방별 상태를 유지합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            className={`filter-settings__quick-btn ${strategyAutoOn ? 'is-on' : ''}`}
+            onClick={handleStrategyToggle}
+            disabled={!selectedStrategy}
+            aria-pressed={strategyAutoOn}
+          >
+            {strategyAutoOn ? '끄기' : '켜기'}
+          </button>
+        </div>
+        <div className="filter-settings__quick-row">
+          <span className="filter-settings__quick-row-label">전략</span>
+          <select
+            className="filter-settings__strategy-select"
+            value={selectedStrategy?.id || ''}
+            disabled={strategyAutoOn || customStrategies.length === 0}
+            onChange={event => setSelectedStrategyId(event.target.value)}
+            aria-label="커스텀 전략 선택"
+          >
+            {customStrategies.map(strategy => <option key={strategy.id} value={strategy.id}>{strategy.name}</option>)}
+          </select>
+          <button type="button" className="filter-settings__patterns-btn" onClick={() => onOpenStrategyManager?.()}>전략 만들기·편집</button>
+        </div>
+        <div className="filter-settings__quick-status">
+          {selectedStrategy
+            ? strategyAutoOn
+              ? `✓ 작동 중 · 관찰 조건을 통과한 방 ${strategyMatchCount}개`
+              : `${selectedStrategy.name} · 조건 방 ${strategyMatchCount}개 · 켜면 다른 필터는 모두 꺼집니다.`
+            : '활성화된 전략이 없습니다. 전략 만들기·편집에서 새 전략을 만드세요.'}
+        </div>
+      </section>}
+
       <section className="filter-settings__section">
         <h3 className="settings-section-title">활성 필터</h3>
         <p className="filter-settings__hint">
@@ -284,7 +363,7 @@ export function FilterSettingsDialog({
             <span className="filter-settings__filter-label">전체 (AI 자동)</span>
             <span className="filter-settings__filter-count">{filterCounts.all ?? 0}</span>
           </label>
-          {availableFilters.map(filter => {
+          {visibleFilters.map(filter => {
             const isActive = activeFilters.includes(filter.type)
             const lockedByTieAuto = tieAutoOn && filter.type !== 'tie_frequent'
             return (
@@ -309,13 +388,19 @@ export function FilterSettingsDialog({
         <h3 className="settings-section-title">필터별 세부 설정</h3>
         <p className="filter-settings__hint">필터마다 기준값·배팅 방향·전략을 직접 정합니다 (고급)</p>
         <div className="filter-settings__detail-list">
-          {availableFilters.map(filter => (
+          {visibleFilters.map(filter => (
             <div key={filter.type} className="filter-settings__detail-row">
               <div className="filter-settings__detail-name">{filter.label}</div>
               <div className="filter-settings__detail-controls">
-                <FilterThresholdInline filterType={filter.type} />
-                <PatternBetDirectionSelect patternType={filter.type} size="sm" />
-                <PatternBetStrategySelect patternType={filter.type} />
+                {filter.isStrategy ? (
+                  <button type="button" className="filter-settings__patterns-btn" onClick={() => onOpenStrategyManager?.()}>전략 빌더에서 편집</button>
+                ) : (
+                  <>
+                    <FilterThresholdInline filterType={filter.type} />
+                    <PatternBetDirectionSelect patternType={filter.type} size="sm" />
+                    <PatternBetStrategySelect patternType={filter.type} />
+                  </>
+                )}
               </div>
             </div>
           ))}

@@ -24,9 +24,9 @@ interface HomeHubProps {
 }
 
 const TASKS: { key: HubTask; title: string; desc: string; tag: string }[] = [
-  { key: 'watch', title: '살펴보기', desc: '어느 방이 흐름이 좋은지 한눈에 살펴봐요.', tag: '보기' },
-  { key: 'assist', title: '도움받기', desc: '방 하나를 골라, 다음 패를 제가 알려드려요.', tag: '옆에서' },
-  { key: 'auto', title: '자동맡기기', desc: '여러 방을 제가 알아서 보고 자동으로 배팅해요.', tag: '맡김' },
+  { key: 'watch', title: '예측 보기', desc: '방들의 다음 결과를 예측만 봐요. 배팅은 안 해요.', tag: '보기' },
+  { key: 'assist', title: '추천 받기', desc: '방 하나를 골라서, 다음에 뭘 걸지 추천해드려요.', tag: '추천' },
+  { key: 'auto', title: '자동 배팅', desc: '여러 방을 알아서 분석하고 자동으로 배팅해요.', tag: '자동' },
 ]
 
 export function HomeHub({
@@ -62,7 +62,7 @@ export function HomeHub({
     >
       <div className="home-hub">
         <h1 className="home-hub__heading">무엇을 도와드릴까요?</h1>
-        <p className="home-hub__sub">보기만 할까요, 옆에서 도와드릴까요, 아니면 제가 맡을까요?</p>
+        <p className="home-hub__sub">예측만 볼지, 추천을 받을지, 자동으로 할지 골라주세요.</p>
 
         <div className="home-hub__cards">
           {TASKS.map((t) => (

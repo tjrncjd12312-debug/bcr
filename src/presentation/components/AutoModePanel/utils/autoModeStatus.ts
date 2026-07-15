@@ -4,6 +4,8 @@
 import type { AutoModeSettings, RoomBettingState } from '../../../../application/services/AutoModeService'
 import type { RoomFilterType } from '../../../../domain/entities'
 import FilterThresholdsService from '../../../../application/services/FilterThresholdsService'
+import CustomStrategyService from '../../../../application/services/CustomStrategyService'
+import CustomStrategyRuntime from '../../../../application/services/customstrategy/CustomStrategyRuntime'
 
 export type ChipTone = 'idle' | 'observing' | 'betting' | 'pending' | 'martin' | 'disabled'
 
@@ -34,6 +36,33 @@ export function getRoomStatusChip(
 
   const martinLevel = autoState?.martinLevel ?? 0
   const waitingForResult = autoState?.waitingForResult ?? false
+
+  if (autoState?.customStrategyId && autoState.customStrategyStatus) {
+    const stage = autoState.customStrategyStage ?? 1
+    const attempt = autoState.customStrategyAttempt ?? 1
+    const step = `${stage}-${attempt}`
+
+    switch (autoState.customStrategyStatus) {
+      case 'pending':
+        return brief
+          ? { text: `S${step}*`, tone: 'pending' }
+          : { text: `조건전략 ${stage}단계 ${attempt}차 · 결과대기`, tone: 'pending' }
+      case 'ready':
+        return brief
+          ? { text: `S${step}`, tone: 'betting' }
+          : { text: `조건전략 ${stage}단계 ${attempt}차 · 배팅준비`, tone: 'betting' }
+      case 'waiting_trigger':
+        return { text: brief ? '트리거' : '진입 트리거 대기', tone: 'observing' }
+      case 'observing':
+        return { text: brief ? '관찰' : '진입 조건 관찰', tone: 'observing' }
+      case 'cleared':
+        return { text: '클리어', tone: 'observing' }
+      case 'failed':
+        return { text: brief ? '종료' : '전략 단계 종료', tone: 'disabled' }
+      case 'blocked_until_shoe':
+        return { text: brief ? '슈 대기' : '다음 슈까지 정지', tone: 'disabled' }
+    }
+  }
 
   if (waitingForResult) {
     if (martinLevel > 0) {
@@ -69,6 +98,10 @@ export function getFilterShortLabel(
 
   if (typeof filter === 'string' && filter.startsWith('custom:')) {
     return '커스텀 패턴'
+  }
+
+  if (typeof filter === 'string' && filter.startsWith('strategy:')) {
+    return CustomStrategyService.getByFilterType(filter)?.name ?? '조건·단계 전략'
   }
 
   const thresholds = FilterThresholdsService.get()
@@ -177,6 +210,87 @@ export function getNextBetAmount(
   }
   if (effectiveCap > 0 && raw > effectiveCap) return effectiveCap
   return raw
+}
+
+export type ProgressionKind = 'structured' | 'global'
+
+export interface RoomProgressionDisplay {
+  kind: ProgressionKind
+  strategyLabel: string
+  stepLabel: string
+  compactStepLabel: string
+  amount: number
+  stage: number
+  attempt?: number
+  maxStage: number
+  progressPercent: number
+}
+
+/**
+ * 세 화면에서 같은 기준으로 보여 줄 전략 진행 상태.
+ * 조건·단계 전략이 실행 중이면 해당 전략의 단계/차수/금액이 전역 마틴 설정보다 우선한다.
+ */
+export function getRoomProgressionDisplay(
+  settings: AutoModeSettings,
+  autoState: RoomBettingState | null,
+  options?: NextBetAmountOptions,
+): RoomProgressionDisplay {
+  const customStrategy = autoState?.customStrategyId
+    ? CustomStrategyRuntime.getStrategySnapshot(autoState.customStrategyId, autoState.roomId)
+      ?? CustomStrategyService.getById(autoState.customStrategyId)
+    : null
+
+  if (customStrategy) {
+    const maxStage = Math.max(1, customStrategy.progression.stages.length)
+    const stage = Math.min(Math.max(1, autoState?.customStrategyStage ?? 1), maxStage)
+    const maxAttempt = Math.max(1, customStrategy.progression.requiredConsecutiveWins)
+    const attempt = Math.min(Math.max(1, autoState?.customStrategyAttempt ?? 1), maxAttempt)
+    const stageConfig = customStrategy.progression.stages[stage - 1]
+    const configuredAmount = stageConfig?.amounts[attempt - 1]
+    const amount = typeof configuredAmount === 'number' && configuredAmount > 0
+      ? configuredAmount
+      : autoState?.lastBetAmount ?? 0
+    const completedUnits = (stage - 1) + (attempt / maxAttempt)
+
+    return {
+      kind: 'structured',
+      strategyLabel: customStrategy.name,
+      stepLabel: `${stage}단계 ${attempt}차`,
+      compactStepLabel: `S${stage}-${attempt}`,
+      amount,
+      stage,
+      attempt,
+      maxStage,
+      progressPercent: Math.min(100, Math.max(0, (completedUnits / maxStage) * 100)),
+    }
+  }
+
+  const maxStage = Math.max(1, settings.maxMartin || 1)
+  const stage = Math.min(Math.max(1, (autoState?.martinLevel ?? 0) + 1), maxStage)
+  const strategyLabel = settings.betStrategy === 'martingale'
+    ? '마틴게일'
+    : settings.betStrategy === 'flat'
+      ? '플랫'
+      : settings.betStrategy === 'fibonacci'
+        ? '피보나치'
+        : settings.betStrategy === 'paroli'
+          ? '파롤리'
+          : '단계별 금액'
+
+  return {
+    kind: 'global',
+    strategyLabel,
+    stepLabel: settings.betStrategy === 'flat' ? '고정 금액' : `${stage}단계`,
+    compactStepLabel: settings.betStrategy === 'flat' ? '고정' : `${stage}단`,
+    amount: getNextBetAmount(settings, autoState?.martinLevel ?? 0, options),
+    stage,
+    maxStage,
+    progressPercent: Math.min(100, Math.max(0, (stage / maxStage) * 100)),
+  }
+}
+
+export function isTieFilterLabel(label: string | null | undefined): boolean {
+  return Boolean(label && (label.startsWith('타이') || /^tie\b/i.test(label)))
 }
 
 /**

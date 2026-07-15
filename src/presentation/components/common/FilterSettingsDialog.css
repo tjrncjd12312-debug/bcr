@@ -119,6 +119,26 @@
 .filter-settings__quick-count { width: 56px; }
 .filter-settings__quick-amount { width: 100px; }
 
+.filter-settings__strategy-select {
+  min-width: 220px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-sm);
+  background: var(--modal-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.filter-settings__strategy-select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.filter-settings__strategy-quick {
+  margin-top: 12px;
+}
+
 .filter-settings__quick-count::-webkit-outer-spin-button,
 .filter-settings__quick-count::-webkit-inner-spin-button,
 .filter-settings__quick-amount::-webkit-outer-spin-button,

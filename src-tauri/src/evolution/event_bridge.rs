@@ -3,7 +3,7 @@
 //! 도메인 이벤트를 Tauri 프론트엔드 이벤트로 변환하는 브릿지.
 //! Presentation Layer에 위치하며, 네트워크 계층과 UI 계층을 분리합니다.
 
-use super::events::{DisconnectReason, EvolutionEvent, EventReceiver};
+use super::events::{DisconnectReason, EventReceiver, EvolutionEvent};
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{debug, error, info, warn};
 
@@ -47,7 +47,10 @@ impl TauriEventBridge {
     /// 단일 이벤트 처리
     fn handle_event(&self, event: EvolutionEvent) {
         match event {
-            EvolutionEvent::Connected { url, is_multiwidget } => {
+            EvolutionEvent::Connected {
+                url,
+                is_multiwidget,
+            } => {
                 self.emit_connected(&url, is_multiwidget);
             }
             EvolutionEvent::Disconnected { url, reason } => {
@@ -61,10 +64,7 @@ impl TauriEventBridge {
                 self.emit_error(&url, &error, error_detail.as_deref());
             }
             EvolutionEvent::TablesAvailable { tables } => {
-                debug!(
-                    "[EventBridge] Tables available: {} tables",
-                    tables.len()
-                );
+                debug!("[EventBridge] Tables available: {} tables", tables.len());
                 // 테이블 목록은 RoomsReady에서 처리
             }
             EvolutionEvent::RoomsReady {

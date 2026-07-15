@@ -22,8 +22,8 @@ mod platform {
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
         MoveWindow, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_STYLE, HWND_TOP,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOW, WS_CAPTION, WS_CHILD,
-        WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
-        WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+        WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+        WS_THICKFRAME, WS_VISIBLE,
     };
 
     static EMBEDDED_CHROME_HWND: Mutex<Option<isize>> = Mutex::new(None);
@@ -177,7 +177,9 @@ mod platform {
             existing
                 .or_else(|| find_chrome_window((chrome_pid > 0).then_some(chrome_pid), None))
                 .or_else(|| find_chrome_window(None, None))
-                .ok_or_else(|| "Chrome window not found. Open the casino window first.".to_string())?
+                .ok_or_else(|| {
+                    "Chrome window not found. Open the casino window first.".to_string()
+                })?
         };
 
         unsafe {
@@ -209,7 +211,14 @@ mod platform {
             let embed_width = width + LEFT_OVERSCAN + RIGHT_OVERSCAN;
             let embed_height = height + TOP_CROP + BOTTOM_OVERSCAN;
 
-            let _ = MoveWindow(child, embed_x, embed_y, embed_width.max(1), embed_height.max(1), true);
+            let _ = MoveWindow(
+                child,
+                embed_x,
+                embed_y,
+                embed_width.max(1),
+                embed_height.max(1),
+                true,
+            );
             let _ = SetWindowPos(
                 child,
                 Some(HWND_TOP),
@@ -249,7 +258,14 @@ mod platform {
             let embed_width = width + LEFT_OVERSCAN + RIGHT_OVERSCAN;
             let embed_height = height + TOP_CROP + BOTTOM_OVERSCAN;
 
-            let _ = MoveWindow(child, embed_x, embed_y, embed_width.max(1), embed_height.max(1), true);
+            let _ = MoveWindow(
+                child,
+                embed_x,
+                embed_y,
+                embed_width.max(1),
+                embed_height.max(1),
+                true,
+            );
             let _ = SetWindowPos(
                 child,
                 None,

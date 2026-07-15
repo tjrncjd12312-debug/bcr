@@ -1,139 +1,136 @@
-/* BCR Predictor - Toss-style Minimal Design System */
-/* Aesthetic: Clean Korean fintech — neutral dark, single blue accent */
-/* Version: 5.0 - Toss palette */
+/* BCR Predictor - High-contrast operations design system */
+/* Aesthetic: graphite workspace, warm yellow action, locked baccarat colors */
+/* Version: 6.0 - accessibility refresh */
 
 /* Pretendard: 한글·라틴 가독성 우선 (오토배팅 사용자층은 한국 고령층). Inter는 라틴 보조용 폴백. */
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  /* ===== Background Hierarchy — Clean Neutral Dark ===== */
-  --bg-base: #17171c;
-  --bg-elevated: #1d1d23;
-  --bg-surface: #22222a;
-  --bg-card: #26262f;
-  --bg-panel: #26262f;
-  --bg-tertiary: #2e2e38;
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-active: rgba(49, 130, 246, 0.12);
+  /* ===== Background Hierarchy — Graphite, visibly separated ===== */
+  --bg-base: #0e1117;
+  --bg-elevated: #141a22;
+  --bg-surface: #171e28;
+  --bg-card: #1c2531;
+  --bg-panel: #1c2531;
+  --bg-tertiary: #222d3a;
+  --bg-hover: rgba(255, 255, 255, 0.075);
+  --bg-active: rgba(255, 216, 77, 0.13);
 
   /* ===== Baccarat Game Colors — Toss palette =====
    * 🔒 게임색 잠금 규칙 (리디자인 0단계): 아래 뱅커=빨강 / 플레이어=파랑 / 타이=초록 세 색은
    *    오직 '게임 결과·로드맵 표시'에만 사용한다. 선택/활성/알림/장식에 재사용 금지
    *    (파란 선택 테두리가 '플레이어'로 오독됨). 선택/활성은 --selection-outline,
    *    경고/알림은 --status-warning(앰버)을 사용. */
-  --banker-color: #f04452;
-  --banker-bg: rgba(240, 68, 82, 0.14);
-  --banker-glow: rgba(240, 68, 82, 0.45);
-  --banker-light: #ff7785;
-  --player-color: #3182f6;
-  --player-bg: rgba(49, 130, 246, 0.14);
-  --player-glow: rgba(49, 130, 246, 0.45);
-  --player-light: #4593fc;
-  --tie-color: #22c55e;
-  --tie-bg: rgba(34, 197, 94, 0.14);
+  --banker-color: #ff5c6c;
+  --banker-bg: rgba(255, 92, 108, 0.15);
+  --banker-glow: rgba(255, 92, 108, 0.26);
+  --banker-light: #ff8490;
+  --player-color: #4c8dff;
+  --player-bg: rgba(76, 141, 255, 0.15);
+  --player-glow: rgba(76, 141, 255, 0.26);
+  --player-light: #79aaff;
+  --tie-color: #2ccb7f;
+  --tie-bg: rgba(44, 203, 127, 0.15);
 
-  /* ===== Brand Accent — Toss Blue ===== */
-  --accent-primary: #3182f6;
-  --accent-secondary: #4593fc;
-  --accent-muted: rgba(49, 130, 246, 0.15);
-  --accent-text: #ffffff;
+  /* ===== Action Accent — never reused for baccarat results ===== */
+  --accent-primary: #ffd84d;
+  --accent-secondary: #ffe57a;
+  --accent-muted: rgba(255, 216, 77, 0.17);
+  --accent-text: #17120a;
 
-  /* Legacy aliases — consolidated on Toss blue.
-   * ⚠️ --gold/--accent-gold/--neon-gold 는 현재 전부 파랑(#3182f6) 별칭이라
-   *    선택/활성 표시에 쓰면 '플레이어'로 오독됨. 신규 코드는 --selection-outline 사용.
-   *    (기존 --gold 사용처는 리디자인 2~4단계에서 점진적 마이그레이션) */
-  --accent-color: #3182f6;
-  --accent-hover: #4593fc;
-  --accent-gold: #3182f6;
-  --accent-gold-bright: #4593fc;
-  --accent-gold-muted: rgba(49, 130, 246, 0.15);
-  --accent-gold-dim: #1b64da;
+  /* Legacy aliases — mapped to the non-game action accent. */
+  --accent-color: #ffd84d;
+  --accent-hover: #ffe57a;
+  --accent-gold: #ffd84d;
+  --accent-gold-bright: #ffe57a;
+  --accent-gold-muted: rgba(255, 216, 77, 0.17);
+  --accent-gold-dim: #caa52f;
 
-  /* Deprecated aliases — remapped to Toss blue */
-  --neon-blue: #3182f6;
-  --neon-gold: #4593fc;
+  /* Deprecated aliases — kept for older component styles */
+  --neon-blue: #4c8dff;
+  --neon-gold: #ffd84d;
 
   /* Short-name aliases used across component CSS */
-  --border: rgba(176, 184, 193, 0.14);
-  --gold: #3182f6;
-  --gold-bright: #4593fc;
-  --gold-dim: #1b64da;
-  --gold-muted: rgba(49, 130, 246, 0.15);
-  --brand-red: #f04452;
-  --brand-blue: #3182f6;
+  --border: rgba(215, 226, 238, 0.2);
+  --gold: #ffd84d;
+  --gold-bright: #ffe57a;
+  --gold-dim: #caa52f;
+  --gold-muted: rgba(255, 216, 77, 0.17);
+  --brand-red: #ff5c6c;
+  --brand-blue: #4c8dff;
 
-  /* ===== Variant Accent — Purple (No Commission) ===== */
-  --accent-purple: #8b5cf6;
-  --accent-purple-muted: rgba(139, 92, 246, 0.15);
+  /* ===== Legacy variant accent — purple removed in v6 ===== */
+  --accent-purple: #ffd84d;
+  --accent-purple-muted: rgba(255, 216, 77, 0.17);
 
   /* ===== Flash accent (renamed from lightning, kept for compat) ===== */
-  --lightning: #4593fc;
-  --shadow-lightning: 0 0 24px rgba(49, 130, 246, 0.35);
+  --lightning: #ffd84d;
+  --shadow-lightning: 0 0 24px rgba(255, 216, 77, 0.18);
 
   /* ===== Status Colors ===== */
-  --status-success: #22c55e;
-  --status-danger: #f04452;
-  --status-warning: #ffb020;
-  --status-info: #3182f6;
-  --status-ready: #3182f6;
-  --status-idle: #6b7684;
-  --status-betting: #22c55e;
-  --status-error: #f04452;
+  --status-success: #3bd58a;
+  --status-danger: #ff6575;
+  --status-warning: #ff9f43;
+  --status-info: #56c7ff;
+  --status-ready: #ffd84d;
+  --status-idle: #95a2b2;
+  --status-betting: #3bd58a;
+  --status-error: #ff6575;
 
   /* Tinted backgrounds — 14% alpha, 일관성을 위해 game color *-bg와 동일 강도 */
-  --status-success-bg: rgba(34, 197, 94, 0.14);
-  --status-danger-bg: rgba(240, 68, 82, 0.14);
-  --status-warning-bg: rgba(255, 176, 32, 0.14);
-  --status-info-bg: rgba(49, 130, 246, 0.14);
+  --status-success-bg: rgba(59, 213, 138, 0.15);
+  --status-danger-bg: rgba(255, 101, 117, 0.15);
+  --status-warning-bg: rgba(255, 159, 67, 0.16);
+  --status-info-bg: rgba(86, 199, 255, 0.15);
 
   /* Accent tinted bg — --accent-muted의 의미상 별칭 */
-  --accent-primary-bg: rgba(49, 130, 246, 0.15);
+  --accent-primary-bg: rgba(255, 216, 77, 0.17);
 
   /* ===== Text Hierarchy — Toss greys ===== */
-  --text-primary: #f2f4f6;
-  --text-secondary: #b0b8c1;
-  --text-muted: #8b95a1;
-  --text-tertiary: #6b7684;
-  --text-on-accent: #ffffff;
+  --text-primary: #f7f9fc;
+  --text-secondary: #c8d0da;
+  --text-muted: #9ca7b6;
+  --text-tertiary: #7f8b9b;
+  --text-on-accent: #17120a;
 
   /* ===== Borders — subtle neutral ===== */
-  --border-color: rgba(176, 184, 193, 0.14);
-  --border-subtle: rgba(176, 184, 193, 0.08);
-  --border-accent: rgba(49, 130, 246, 0.5);
-  --border-banker: rgba(240, 68, 82, 0.35);
-  --border-player: rgba(49, 130, 246, 0.35);
+  --border-color: rgba(215, 226, 238, 0.2);
+  --border-subtle: rgba(215, 226, 238, 0.11);
+  --border-accent: rgba(255, 216, 77, 0.72);
+  --border-banker: rgba(255, 92, 108, 0.45);
+  --border-player: rgba(76, 141, 255, 0.45);
 
   /* 선택/활성 상태용 중립 고대비 외곽선 (리디자인 0단계).
    * 게임색(빨/파)을 선택 표시에 쓰지 않기 위함 — 'B/P 오독' 차단. */
-  --selection-outline: rgba(242, 244, 246, 0.9);  /* = --text-primary 계열 고대비 중립 */
+  --selection-outline: #ffd84d;
 
   /* ===== Shadows — soft Toss elevation ===== */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.45);
-  --shadow-glow: 0 0 18px rgba(49, 130, 246, 0.18);
-  --shadow-glow-banker: 0 0 18px rgba(240, 68, 82, 0.22);
-  --shadow-glow-player: 0 0 18px rgba(49, 130, 246, 0.22);
-  --shadow-glow-accent: 0 0 22px rgba(49, 130, 246, 0.2);
+  --shadow-glow: 0 0 18px rgba(255, 216, 77, 0.1);
+  --shadow-glow-banker: 0 0 18px rgba(255, 92, 108, 0.16);
+  --shadow-glow-player: 0 0 18px rgba(76, 141, 255, 0.16);
+  --shadow-glow-accent: 0 0 22px rgba(255, 216, 77, 0.14);
   --shadow-modal: 0 25px 70px rgba(0, 0, 0, 0.65), 0 10px 26px rgba(0, 0, 0, 0.45);
 
   /* ===== Modal/Dialog ===== */
-  --modal-backdrop: rgba(0, 0, 0, 0.75);
-  --modal-bg: #1d1d23;
-  --modal-surface: #22222a;
-  --modal-elevated: #2e2e38;
-  --modal-border: rgba(176, 184, 193, 0.12);
-  --modal-border-accent: rgba(49, 130, 246, 0.5);
+  --modal-backdrop: rgba(3, 6, 10, 0.84);
+  --modal-bg: #121821;
+  --modal-surface: #18212c;
+  --modal-elevated: #222d3a;
+  --modal-border: rgba(215, 226, 238, 0.2);
+  --modal-border-accent: rgba(255, 216, 77, 0.72);
 
   /* Dialog chrome — shared between Modal.css (PatternManagerModal) and
    * SettingsDialogFrame.css. Z-index, backdrop blur, default width, and
    * animation method are deliberately NOT tokenized — each dialog owns those. */
-  --dialog-chrome-padding: 18px 24px;
-  --dialog-content-padding: 20px 24px;
-  --dialog-title-size: 17px;
+  --dialog-chrome-padding: 20px 24px;
+  --dialog-content-padding: 22px 24px;
+  --dialog-title-size: 20px;
   --dialog-title-weight: 700;
-  --dialog-close-size: 32px;
+  --dialog-close-size: 44px;
   --dialog-close-radius: 8px;
   --dialog-max-height: 88vh;
 
@@ -163,12 +160,12 @@
   --font-display: 'Pretendard Variable', Pretendard, 'Inter', sans-serif;
 
   /* ⚠️ DEPRECATED — 사용자 대면 화면에서 사용 금지 (고령층 비가독). 신규 코드는 아래 고령자 스케일 사용. */
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-md: 14px;
-  --fs-lg: 16px;
-  --fs-xl: 20px;
-  --fs-2xl: 24px;
+  --fs-xs: 14px;
+  --fs-sm: 15px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+  --fs-2xl: 28px;
 
   /* ===== 고령자 우선 타입 스케일 (리디자인 0단계) =====
    * 한국 고령층 대상. 사용자 대면 텍스트는 이 6단계만 사용.
@@ -198,13 +195,10 @@ body,
 body {
   font-family: var(--font-sans);
   background: var(--bg-base);
-  /* Subtle dot pattern instead of grid */
-  background-image:
-    radial-gradient(circle at 1px 1px, rgba(176, 184, 193, 0.04) 1px, transparent 0);
-  background-size: 24px 24px;
+  background-image: none;
   color: var(--text-primary);
   font-size: var(--fs-md);
-  line-height: 1.6;
+  line-height: 1.55;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -257,7 +251,7 @@ select,
 .loading-spinner {
   width: 28px;
   height: 28px;
-  border: 2px solid rgba(49, 130, 246, 0.15);
+  border: 2px solid var(--accent-muted);
   border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -266,15 +260,15 @@ select,
 /* @keyframes spin — 단일 정의는 아래 "Unified Animation Keyframes" 섹션에 있음 (중복 제거, 리디자인 0단계) */
 
 .loading-screen p {
-  font-size: 13px;
+  font-size: var(--fs-caption);
   color: var(--text-muted);
   font-weight: 500;
 }
 
 /* Scrollbar - Ultra Minimal */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -282,19 +276,22 @@ select,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(49, 130, 246, 0.15);
-  border-radius: 3px;
+  background: rgba(200, 208, 218, 0.28);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
   transition: background var(--transition-fast);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(49, 130, 246, 0.25);
+  background: rgba(255, 216, 77, 0.5);
+  background-clip: padding-box;
 }
 
 /* Selection */
 ::selection {
-  background: rgba(49, 130, 246, 0.3);
-  color: var(--text-primary);
+  background: var(--accent-primary);
+  color: var(--accent-text);
 }
 
 /* Focus States */
@@ -303,8 +300,8 @@ select,
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 2px;
+  outline: 3px solid var(--accent-primary);
+  outline-offset: 3px;
 }
 
 /* Common Buttons */
@@ -313,13 +310,14 @@ select,
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 20px;
+  min-height: 48px;
+  padding: 11px 22px;
   background: var(--accent-primary);
   color: var(--accent-text);
   border: none;
   border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 750;
   letter-spacing: 0.2px;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -329,7 +327,7 @@ select,
 .btn-primary:hover {
   background: var(--accent-secondary);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(49, 130, 246, 0.3);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
 }
 
 .btn-primary:active {
@@ -341,13 +339,14 @@ select,
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 12px;
-  background: transparent;
+  min-height: 44px;
+  padding: 9px 16px;
+  background: var(--bg-surface);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 650;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -355,7 +354,7 @@ select,
 .btn-secondary:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: rgba(240, 246, 252, 0.15);
+  border-color: var(--selection-outline);
 }
 
 .btn-danger {
@@ -363,20 +362,21 @@ select,
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 16px;
-  background: rgba(244, 67, 54, 0.1);
+  min-height: 44px;
+  padding: 9px 16px;
+  background: rgba(226, 92, 103, 0.1);
   color: var(--status-danger);
-  border: 1px solid rgba(244, 67, 54, 0.2);
+  border: 1px solid rgba(226, 92, 103, 0.2);
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
 .btn-danger:hover {
-  background: rgba(244, 67, 54, 0.15);
-  border-color: rgba(244, 67, 54, 0.3);
+  background: rgba(226, 92, 103, 0.15);
+  border-color: rgba(226, 92, 103, 0.3);
 }
 
 /* New Baccarat-themed Buttons */
@@ -385,12 +385,13 @@ select,
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 20px;
+  min-height: 48px;
+  padding: 11px 20px;
   background: var(--banker-color);
   color: #ffffff;
   border: none;
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -412,12 +413,13 @@ select,
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 20px;
+  min-height: 48px;
+  padding: 11px 20px;
   background: var(--player-color);
   color: #ffffff;
   border: none;
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -443,23 +445,23 @@ select,
 }
 
 .setting-group label {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: -0.01em;
 }
 
 .setting-group input[type="text"],
 .setting-group input[type="number"],
 .setting-group select {
   width: 100%;
+  min-height: 46px;
   padding: 10px 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   font-family: var(--font-mono);
   transition: all var(--transition-fast);
 }
@@ -483,7 +485,7 @@ select,
   cursor: pointer;
   color: var(--text-primary);
   text-transform: none;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .setting-group.checkbox input[type="checkbox"] {

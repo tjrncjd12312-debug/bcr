@@ -114,6 +114,28 @@ describe('FilterSettingsDialog', () => {
     expect(props.onOpenPatternManager).toHaveBeenCalledTimes(1)
   })
 
+  it('opens the structured strategy builder from auto-mode settings', () => {
+    const onOpenStrategyManager = vi.fn()
+    renderDialog({ onOpenStrategyManager })
+
+    expect(screen.getByText('커스텀 전략 자동 배팅')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '전략 만들기·편집' }))
+    expect(onOpenStrategyManager).toHaveBeenCalledTimes(1)
+  })
+
+  it('activates a structured strategy exclusively like tie auto', () => {
+    const { props } = renderDialog({
+      activeFilters: ['banker_dominant'],
+      onOpenStrategyManager: vi.fn(),
+    })
+
+    const section = screen.getByText('커스텀 전략 자동 배팅').closest('section')!
+    fireEvent.click(section.querySelector('button[aria-pressed="false"]')!)
+
+    expect(props.clearFilters).toHaveBeenCalledTimes(1)
+    expect(props.toggleFilter).toHaveBeenCalledWith('strategy:no-streak-15-two-hit')
+  })
+
   it('closes via the footer 확인 button', () => {
     const { props } = renderDialog()
     fireEvent.click(screen.getByRole('button', { name: '확인' }))
@@ -181,6 +203,15 @@ describe('FilterSettingsDialog', () => {
       const { props } = renderDialog({ activeFilters: [] })
       fireEvent.click(screen.getByRole('button', { name: '켜기' }))
       expect(props.toggleFilter).toHaveBeenCalledWith('tie_frequent')
+    })
+
+    it('does not clear the user-selected tie_frequent strategy when toggling tie auto', () => {
+      PatternBettingService.setBetStrategy('tie_frequent', 'custom')
+      renderDialog({ activeFilters: [] })
+
+      fireEvent.click(screen.getByRole('button', { name: '켜기' }))
+
+      expect(PatternBettingService.getBetStrategy('tie_frequent')).toBe('custom')
     })
 
     it('shows match count when 켜진 상태', () => {

@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
 import type { RoomBetLog } from './AutoModeRoomGrid'
-import { getRoomStatusChip, getFilterShortLabel, getNextBetAmount } from '../utils/autoModeStatus'
+import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel } from '../utils/autoModeStatus'
 import '../AutoModePanel.css'
 import './AutoModeList.css'
 
@@ -47,8 +47,14 @@ export function AutoModeRoomList({
 }: AutoModeRoomListProps) {
     // Filter and sort logic (Duplicated from RoomGrid to ensure isolation)
     const filteredRooms = useMemo(() => {
+        const isLockedAutoModeRoom = (roomId: string) => {
+            const state = autoModeRoomStates.get(roomId)
+            return !!state && (state.waitingForResult || state.martinLevel > 0)
+        }
+
         let roomList = Array.from(rooms.values())
             .filter(room => {
+                if (isLockedAutoModeRoom(room.id)) return true
                 const name = (room.koreanName || room.name || '').toLowerCase()
                 if (name.includes('salon') || name.includes('lightning')) return false
                 if (!name.includes('baccarat') && !name.includes('바카라')) return false
@@ -56,12 +62,13 @@ export function AutoModeRoomList({
             })
 
         if (enabledRoomIds.size > 0) {
-            roomList = roomList.filter(room => enabledRoomIds.has(room.id))
+            roomList = roomList.filter(room => enabledRoomIds.has(room.id) || isLockedAutoModeRoom(room.id))
         }
 
         const effectiveFilters = activeFilters ?? (selectedPattern === 'all' ? [] : [selectedPattern])
         if (effectiveFilters.length > 0) {
             roomList = roomList.filter(room => {
+                if (isLockedAutoModeRoom(room.id)) return true
                 const state = roomStates.get(room.id) || null
                 return effectiveFilters.some(filterType => matchesFilter(room, state, filterType))
             })
@@ -183,15 +190,13 @@ export function AutoModeRoomList({
                 <div className="col-room sortable" onClick={() => setSortType('name')}>방 이름</div>
                 <div className="col-status">상태</div>
                 <div className="col-timer sortable" onClick={() => setSortType('recent')}>타이머</div>
-                <div className="col-game">게임</div>
                 <div className="col-stats sortable" onClick={() => setSortType('winRate')}>승률</div>
-                <div className="col-score">스코어 (P-B)</div>
                 <div className="col-trend">최근 기록</div>
-                <div className="col-filter">필터</div>
+                <div className="col-filter">진입 근거</div>
                 <div className="col-strategy sortable" onClick={() => setSortType('martin')}>
-                    전략 단계
+                    진행
                 </div>
-                <div className="col-predict">다음 배팅</div>
+                <div className="col-predict">현재 / 다음 배팅</div>
                 <div className="col-profit">손익</div>
             </div>
 
@@ -245,31 +250,21 @@ function AutoModeListRow({
     settings,
     filterLabel,
 }: AutoModeListRowProps) {
-    const maxMartin = settings.maxMartin || 5
     const prediction = isAutoEnabled ? autoState?.lastPrediction?.prediction : null
-    const martinLevel = autoState?.martinLevel || 0
     const isBetting = autoState?.waitingForResult || false
     const activePrediction = prediction || autoState?.lastPrediction?.prediction
     const lastPrediction = autoState?.lastPrediction
     const patternName = lastPrediction?.reasoning || ''
     const betAmount = autoState?.lastBetAmount || 0
-    const displayMartinStep = (isBetting || betAmount > 0 || martinLevel > 0) ? martinLevel + 1 : null
-    const martinProgress = displayMartinStep
-        ? Math.min(100, (displayMartinStep / Math.max(1, maxMartin)) * 100)
-        : 0
     const winRate = predictionState?.stats?.winRate || 0
     const statusChip = getRoomStatusChip(autoState, settings, isEnabled, isAutoEnabled)
-    const nextBetAmount = getNextBetAmount(settings, martinLevel, { isTieBet: filterLabel?.startsWith('Tie') ?? false })
+    const isTieFilter = isTieFilterLabel(filterLabel)
+    const progression = getRoomProgressionDisplay(settings, autoState, { isTieBet: isTieFilter })
+    const progressionRisk = progression.stage >= Math.max(3, progression.maxStage - 1)
     // 필터 매칭 시 강제되는 방향: Tie 계열 필터면 'T', 아니면 lastPrediction 또는 미정
     const nextDirection: 'B' | 'P' | 'T' | null =
         activePrediction ??
-        (filterLabel?.startsWith('Tie') ? 'T' : null)
-    const isTieFilter = filterLabel?.startsWith('Tie') ?? false
-
-    // Score
-    const playerScore = room.gameState?.playerHand?.score
-    const bankerScore = room.gameState?.bankerHand?.score
-    const hasScore = typeof playerScore === 'number' && typeof bankerScore === 'number'
+        (isTieFilter ? 'T' : null)
 
     // Timer Color
     const timerClass = timer <= 5 ? 'urgent' : timer <= 10 ? 'warning' : 'normal';
@@ -287,7 +282,7 @@ function AutoModeListRow({
             {/* 1. Room Name */}
             <div className="col-room">
                 <span className="room-name">{room.koreanName || room.name}</span>
-                <span className="room-id">#{room.id.slice(-4)}</span>
+                <span className="room-id">{room.history.length || 0}게임 · #{room.id.slice(-4)}</span>
             </div>
 
             {/* 2. Status */}
@@ -300,30 +295,12 @@ function AutoModeListRow({
                 {timer > 0 && <span className={`timer-value ${timerClass}`}>{timer}s</span>}
             </div>
 
-            {/* 4. Game Count */}
-            <div className="col-game">
-                <span className="game-count">{room.history.length || 0}G</span>
-            </div>
-
-            {/* 5. Win Rate */}
+            {/* 4. Win Rate */}
             <div className="col-stats">
                 <span className="win-rate">{winRate.toFixed(1)}%</span>
             </div>
 
-            {/* 6. Score */}
-            <div className="col-score">
-                {hasScore ? (
-                    <div className="score-box">
-                        <span className={`score p ${playerScore > bankerScore ? 'win' : ''}`}>{playerScore}</span>
-                        <span className="divider">-</span>
-                        <span className={`score b ${bankerScore > playerScore ? 'win' : ''}`}>{bankerScore}</span>
-                    </div>
-                ) : (
-                    <span className="no-score">-</span>
-                )}
-            </div>
-
-            {/* 6. Trend (Bead Plate Mini) */}
+            {/* 5. Trend (Bead Plate Mini) */}
             <div className="col-trend">
                 <div className="mini-bead-plate">
                     {recentHistory.map((h, i) => (
@@ -332,7 +309,7 @@ function AutoModeListRow({
                 </div>
             </div>
 
-            {/* 7. Filter Match — 왜 풀에 들어왔는지 */}
+            {/* 6. Filter Match — 왜 풀에 들어왔는지 */}
             <div className="col-filter">
                 {filterLabel ? (
                     <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`}>{filterLabel}</span>
@@ -341,18 +318,20 @@ function AutoModeListRow({
                 )}
             </div>
 
-            {/* 8. Strategy (Martin Progress) */}
+            {/* 7. Active progression */}
             <div className="col-strategy">
                 <div className="martin-bar-container">
                     <div
-                        className={`martin-bar ${martinLevel > 2 ? 'danger' : ''}`}
-                        style={{ width: `${martinProgress}%` }}
+                        className={`martin-bar ${progressionRisk ? 'danger' : ''}`}
+                        style={{ width: `${progression.progressPercent}%` }}
                     ></div>
                 </div>
-                <span className="martin-text">{displayMartinStep ? `${displayMartinStep}/${maxMartin}단계` : `1/${maxMartin}단계`}</span>
+                <span className="martin-text" title={progression.strategyLabel}>
+                    {progression.stepLabel} / 총 {progression.maxStage}단계
+                </span>
             </div>
 
-            {/* 9. Next Bet — 항상 표시: 배팅 중이면 실제 금액·예측, 아이들이면 다음 배팅금액·방향 */}
+            {/* 8. Next Bet — 항상 표시: 배팅 중이면 실제 금액·예측, 아이들이면 다음 배팅금액·방향 */}
             <div className="col-predict">
                 {isBetting && activePrediction ? (
                     <div className="predict-group">
@@ -370,7 +349,7 @@ function AutoModeListRow({
                         {nextDirection && (
                             <span className={`auto-next-bet__dir ${nextDirection.toLowerCase()}`}>{nextDirection}</span>
                         )}
-                        <span>{nextBetAmount.toLocaleString()}</span>
+                        <span>{progression.amount.toLocaleString()}</span>
                     </span>
                 ) : (
                     <span className="predict-none">-</span>

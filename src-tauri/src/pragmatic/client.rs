@@ -8,10 +8,10 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
 use url::Url;
 
+use super::manager::PragmaticConnectionManager;
 use super::normalizer;
 use super::parser;
 use super::parser::PragmaticMessage;
-use super::manager::PragmaticConnectionManager;
 
 // PragmaticClientState moved to manager.rs (PragmaticManagerState)
 
@@ -51,8 +51,10 @@ impl PragmaticClient {
         }
 
         info!(
-            "[{}] Connecting to Pragmatic WebSocket: {}",
-            self.room_id, ws_url
+            "[{}] Connecting to Pragmatic WebSocket: url_present={}, url_length={}",
+            self.room_id,
+            !ws_url.is_empty(),
+            ws_url.len()
         );
 
         let url = Url::parse(&ws_url).map_err(|e| e.to_string())?;
@@ -118,7 +120,11 @@ impl PragmaticClient {
                             }
                             // 2. Outgoing Messages
                             Some(msg_to_send) = msg_rx.recv() => {
-                                info!("[{}] Sending message: {}", room_id_clone, msg_to_send);
+                                info!(
+                                    "[{}] Sending message: length={}",
+                                    room_id_clone,
+                                    msg_to_send.len()
+                                );
                                 if let Err(e) = write.send(Message::Text(msg_to_send)).await {
                                     error!("[{}] Failed to send message: {}", room_id_clone, e);
                                     break;

@@ -89,6 +89,35 @@ describe('MartingaleManager.calculateBetAmount — strategy correctness at exten
     })
   })
 
+  describe('recordLoss — level progression is opt-out (flat keeps level 0)', () => {
+    // 🆕 2026-06-23: flat 전략은 패배해도 마틴 레벨이 오르면 안 된다(phantom 락 방지).
+    let m: MartingaleManager
+    beforeEach(() => { m = new MartingaleManager(5) })
+
+    it('advances the level by default (progressive strategies climb on loss)', () => {
+      m.recordLoss('r')
+      expect(m.getLevel('r')).toBe(1)
+      m.recordLoss('r')
+      expect(m.getLevel('r')).toBe(2)
+      expect(m.getState('r')?.consecutiveLosses).toBe(2)
+    })
+
+    it('keeps level 0 when advanceLevel=false (flat) but still counts consecutive losses', () => {
+      m.recordLoss('r', false)
+      m.recordLoss('r', false)
+      m.recordLoss('r', false)
+      expect(m.getLevel('r')).toBe(0)                       // phantom 마틴 레벨 없음 → 슬롯 락 안 됨
+      expect(m.getState('r')?.consecutiveLosses).toBe(3)    // 연패 카운트는 유지(연패중지/통계용)
+    })
+
+    it('a win resets level and losses regardless of how the loss was recorded', () => {
+      m.recordLoss('r', false)
+      m.recordWin('r')
+      expect(m.getLevel('r')).toBe(0)
+      expect(m.getState('r')?.consecutiveLosses).toBe(0)
+    })
+  })
+
   describe('cumulative loss matches sum of per-level bets', () => {
     it('martingale cumulative at level 13 equals base × (2^13 − 1)', () => {
       // The "13단" boundary the user is likely interested in given a 100M seed.

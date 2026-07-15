@@ -10,14 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // vi.mock factories are hoisted; use vi.hoisted to make listenMock available
 // to the factory.
-const { listenMock } = vi.hoisted(() => ({ listenMock: vi.fn() }))
+const { invokeMock, listenMock, showWarningMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(async (..._args: unknown[]) => undefined),
+  listenMock: vi.fn(),
+  showWarningMock: vi.fn(),
+}))
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: unknown[]) => listenMock(...args),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async () => undefined),
+  invoke: (...args: unknown[]) => invokeMock(...args),
 }))
 
 // Minimal DI / Error contexts so the hook renders without the full provider stack.
@@ -52,7 +56,7 @@ vi.mock('../../context', () => {
       showToast: vi.fn(),
       hideToast: vi.fn(),
       showError: vi.fn(),
-      showWarning: vi.fn(),
+      showWarning: showWarningMock,
       showInfo: vi.fn(),
       showSuccess: vi.fn(),
       showDanger: vi.fn(),
@@ -61,7 +65,13 @@ vi.mock('../../context', () => {
 })
 
 // eslint-disable-next-line import/first
-import { useCasino } from '../useCasino'
+import {
+  classifyEvolutionDisconnect,
+  createSessionRotationScheduler,
+  useCasino,
+} from '../useCasino'
+// eslint-disable-next-line import/first
+import { AutoBettingService } from '../../../application/services/AutoBettingService'
 
 type Unlisten = () => void
 type Deferred = { promise: Promise<Unlisten>; resolve: (u: Unlisten) => void }
@@ -84,7 +94,9 @@ function installImmediateListenMock() {
 }
 
 beforeEach(() => {
+  invokeMock.mockClear()
   listenMock.mockReset()
+  showWarningMock.mockClear()
   // Ensure localStorage is a working object (some vitest/jsdom combos leave
   // it as undefined after test globals reset). Provide a simple in-memory
   // polyfill if the environment lacks it.
@@ -106,7 +118,82 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
   listenMock.mockReset()
+})
+
+describe('Evolution session lifecycle helpers', () => {
+  it('classifies kickout, intentional handover, and upgrade rejection separately', () => {
+    expect(classifyEvolutionDisconnect({ reason: 'kickout:inactivity' })).toBe('session_expired')
+    expect(classifyEvolutionDisconnect({ type: 'connectionAlreadyExists' })).toBe('session_expired')
+    expect(classifyEvolutionDisconnect({ reason: 'user_requested' })).toBe('intentional')
+    expect(classifyEvolutionDisconnect({ reason: 'upgrade_forbidden_403' })).toBe('upgrade_forbidden')
+    expect(classifyEvolutionDisconnect({ reason: 'Max reconnect attempts exceeded' })).toBe('reconnect_exhausted')
+  })
+
+  it('runs one rotation at a time, reschedules after completion, and stops cleanly', async () => {
+    vi.useFakeTimers()
+    const rotate = vi.fn(async () => undefined)
+    const scheduler = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 10,
+      nextDelayMs: 20,
+    })
+
+    scheduler.start()
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(rotate).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(20)
+    expect(rotate).toHaveBeenCalledTimes(2)
+
+    scheduler.stop()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(rotate).toHaveBeenCalledTimes(2)
+    expect(scheduler.isRunning()).toBe(false)
+  })
+
+  it('defers rotation while a real bet is pending and retries on the short interval', async () => {
+    vi.useFakeTimers()
+    let hasPendingBet = true
+    const rotate = vi.fn(async () => undefined)
+    const scheduler = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 10,
+      nextDelayMs: 20,
+      shouldDefer: () => hasPendingBet,
+      deferDelayMs: 5,
+    })
+
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(rotate).not.toHaveBeenCalled()
+
+    hasPendingBet = false
+    await vi.advanceTimersByTimeAsync(5)
+    expect(rotate).toHaveBeenCalledTimes(1)
+
+    scheduler.stop()
+  })
+
+  it('does not manually rotate while a real bet is pending', async () => {
+    installImmediateListenMock()
+    vi.spyOn(AutoBettingService, 'getPendingBetCount').mockReturnValue(1)
+    const { result, unmount } = renderHook(() => useCasino('https://example.com'))
+
+    await act(async () => {
+      await result.current.reconnectLobby()
+    })
+
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'rotate_evolution_session',
+      expect.anything(),
+    )
+    expect(showWarningMock).toHaveBeenCalledWith(
+      '진행 중인 베팅이 있어 세션 갱신을 잠시 미룹니다.',
+    )
+    unmount()
+  })
 })
 
 describe('useCasino — F2 listener lifecycle', () => {

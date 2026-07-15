@@ -12,7 +12,7 @@ use crate::pragmatic::{normalizer as pragmatic_normalizer, parser as pragmatic_p
 use crate::presentation::task_registry::TaskRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as TokioMutex;
@@ -50,6 +50,26 @@ static CDP_TASK_REGISTRY: Lazy<TaskRegistry> = Lazy::new(TaskRegistry::new);
 /// Stable key under which the CDP polling task is registered.
 const CDP_MONITOR_KEY: &str = "cdp:monitor";
 
+/// Serializes proactive session rotations. A second request must not tear down
+/// a connection while the first request is capturing its replacement.
+static SESSION_ROTATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+struct AtomicFlagGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl Drop for AtomicFlagGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+fn try_acquire_atomic_flag(flag: &AtomicBool) -> Option<AtomicFlagGuard<'_>> {
+    flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .ok()
+        .map(|_| AtomicFlagGuard { flag })
+}
+
 /// Multiwidget connection status - prevents duplicate connection attempts
 static MULTIWIDGET_CONNECTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -66,6 +86,11 @@ static PROCESSED_MULTIWIDGET_URLS: Lazy<
 /// App mode for CDP monitoring - "auto" or "predict"
 /// 🔥 UNIFIED: All modes now use multiwidget socket for consistent subscription behavior
 static CDP_APP_MODE: Mutex<String> = Mutex::new(String::new());
+
+/// URL that must be opened only after the CDP WebSocket blocker is installed
+/// with Page.addScriptToEvaluateOnNewDocument. Loading Evolution directly in
+/// Chrome races the page's own WebSocket creation and loses the single session.
+static PENDING_CHROME_URL: Mutex<Option<String>> = Mutex::new(None);
 
 /// Evolution base URL - captured from multiwidget WebSocket URL
 /// Format: wss://babylontggasia.evo-games.com/... -> https://babylontggasia.evo-games.com
@@ -313,9 +338,10 @@ async fn try_capture_pragmatic_launcher_url_from_open_pages(
 
         if let Some(url) = result {
             info!(
-                "🎲 Captured Pragmatic launcher URL from page {}: {}...",
-                page_url,
-                &url[..url.len().min(100)]
+                "🎲 Captured Pragmatic launcher URL (page_url_len={}, launcher_url_len={}, has_jsession={})",
+                page_url.len(),
+                url.len(),
+                url.to_ascii_lowercase().contains("jsessionid=")
             );
             return Some(url);
         }
@@ -386,7 +412,7 @@ async fn capture_pragmatic_table_mappings_from_dom() -> Vec<(String, String)> {
         }
 
         let page_url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         // Only check Pragmatic lobby pages
         if !page_url.contains("pragmaticplaylive.net") {
             continue;
@@ -474,9 +500,11 @@ async fn capture_pragmatic_table_mappings_from_dom() -> Vec<(String, String)> {
                 // 2. Check for JSESSIONID and potentially update PRAGMATIC_LAUNCHER_URL
                 // This is a bit advanced: if we found a JSESSIONID, we can store it or construct a base launcher URL
                 if let Some(session_info) = res_obj.get("sessionInfo").and_then(|v| v.as_object()) {
-                    let jsessionid = session_info.get("JSESSIONID").and_then(|v| v.as_str())
+                    let jsessionid = session_info
+                        .get("JSESSIONID")
+                        .and_then(|v| v.as_str())
                         .or_else(|| session_info.values().find_map(|v| v.as_str()));
-                    
+
                     if let Some(sid) = jsessionid {
                         info!("🎲 Found Pragmatic session key from DOM/storage: {}", sid);
                         // If we don't have a launcher URL yet, we could construct a basic one
@@ -487,7 +515,7 @@ async fn capture_pragmatic_table_mappings_from_dom() -> Vec<(String, String)> {
                     }
                 }
             }
-            
+
             if !all_mappings.is_empty() {
                 info!(
                     "🎲 Captured {} tableId-operatorGameId mappings from Pragmatic lobby DOM",
@@ -521,9 +549,9 @@ async fn is_cdp_alive() -> bool {
     let json_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
     if let Ok(resp) = client.get(&json_url).send().await {
         if let Ok(pages) = resp.json::<Vec<serde_json::Value>>().await {
-            return pages.iter().any(|p| {
-                p.get("type").and_then(|v| v.as_str()) == Some("page")
-            });
+            return pages
+                .iter()
+                .any(|p| p.get("type").and_then(|v| v.as_str()) == Some("page"));
         }
     }
 
@@ -533,7 +561,14 @@ async fn is_cdp_alive() -> bool {
 /// Open Chrome with debugging enabled and auto-capture WebSocket
 #[tauri::command]
 pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
-    info!("🌐 Opening Chrome with CDP debugging: {}", url);
+    info!(
+        "🌐 Opening Chrome with CDP debugging (url_len={})",
+        url.len()
+    );
+
+    if let Ok(mut pending_url) = PENDING_CHROME_URL.lock() {
+        *pending_url = Some(url.clone());
+    }
 
     // If Chrome with remote debugging is already running AND has pages, reuse it
     if is_cdp_alive().await {
@@ -587,7 +622,7 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
             "--disable-background-timer-throttling",
             "--disable-backgrounding-occluded-windows",
             "--disable-renderer-backgrounding",
-            &url,
+            "about:blank",
         ])
         .spawn()
         .map_err(|e| format!("Failed to open Chrome: {}. Is Chrome installed?", e))?;
@@ -641,7 +676,7 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
                 "--disable-ipc-flooding-protection",
                 "--disable-background-networking=false",
                 "--enable-features=NetworkService,NetworkServiceInProcess",
-                &url,
+                "about:blank",
             ])
             .spawn()
             .map_err(|e| format!("Failed to open Chrome: {}. Path: {}", e, chrome_path))?;
@@ -669,7 +704,7 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
                 "--disable-ipc-flooding-protection",
                 "--disable-background-networking=false",
                 "--enable-features=NetworkService,NetworkServiceInProcess",
-                &url,
+                "about:blank",
             ])
             .spawn()
             .or_else(|_| {
@@ -685,7 +720,7 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
                         "--disable-features=IntensiveWakeUpThrottling,OptOutOfBackForwardCache",
                         "--disable-hang-monitor",
                         "--disable-ipc-flooding-protection",
-                        &url,
+                        "about:blank",
                     ])
                     .spawn()
             })
@@ -712,7 +747,7 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
 /// Open Chrome normally (without CDP)
 #[tauri::command]
 pub async fn open_in_chrome_normal(url: String) -> Result<(), String> {
-    info!("🌐 Opening Chrome (normal mode): {}", url);
+    info!("🌐 Opening Chrome (normal mode, url_len={})", url.len());
 
     #[cfg(target_os = "macos")]
     {
@@ -880,7 +915,18 @@ pub async fn connect_evolution_manual(
     request: ManualConnectRequest,
 ) -> Result<bool, String> {
     info!("🔌 Manual Evolution WebSocket connection requested");
-    info!("   URL: {}", request.ws_url);
+    info!(
+        "   WebSocket metadata: url_len={}, has_session_query={}, has_cookie={}",
+        request.ws_url.len(),
+        request
+            .ws_url
+            .to_ascii_lowercase()
+            .contains("evosessionid="),
+        request
+            .cookies
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+    );
 
     // Validate URL
     if !request.ws_url.starts_with("wss://") && !request.ws_url.starts_with("ws://") {
@@ -908,6 +954,10 @@ pub async fn start_cdp_monitoring(
         "🔍 Starting CDP WebSocket monitoring on port {} (mode: {})",
         CDP_PORT, mode
     );
+
+    CDP_SHOULD_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+    CDP_TASK_REGISTRY.abort(CDP_MONITOR_KEY);
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
     // Store app mode for use in monitoring loop
     if let Ok(mut stored_mode) = CDP_APP_MODE.lock() {
@@ -978,8 +1028,9 @@ pub async fn start_cdp_monitoring(
                             // launcher URL에는 JSESSIONID, casino_id 등 모든 세션 정보가 포함됨
                             if page_url.contains("pragmaticplaylive.net/desktop/launcher") {
                                 info!(
-                                    "🎲 Pragmatic launcher URL detected: {}...",
-                                    &page_url[..page_url.len().min(100)]
+                                    "🎲 Pragmatic launcher URL detected (url_len={}, has_jsession={})",
+                                    page_url.len(),
+                                    page_url.to_ascii_lowercase().contains("jsessionid=")
                                 );
                                 if let Ok(mut guard) = PRAGMATIC_LAUNCHER_URL.lock() {
                                     *guard = Some(page_url.to_string());
@@ -1050,8 +1101,9 @@ pub async fn start_cdp_monitoring(
                                     // For non-room pages, try CDP monitoring to find Evolution lobby
                                     if let Some(ws_debugger_url) = ws_url {
                                         info!(
-                                            "🔍 New page detected: {} URL: {}",
-                                            page_id, page_url
+                                            "🔍 New page detected: {} url_len={}",
+                                            page_id,
+                                            page_url.len()
                                         );
                                         monitored.insert(page_id.to_string());
 
@@ -1077,7 +1129,10 @@ pub async fn start_cdp_monitoring(
                                                 // ❌ 여기서는 base URL 캡처 안함!
                                                 // 이건 중계사이트 URL (sloten.io)
                                                 // 실제 멀티소켓 연결 URL (babylon)이 캡처될 때 저장
-                                                info!("📍 Lobby page detected (relay site): {}", page_url);
+                                                info!(
+                                                    "📍 Lobby page detected (relay site): {}",
+                                                    page_url
+                                                );
                                             }
                                             *LOBBY_PAGE_ID.lock().unwrap() =
                                                 Some(page_id.to_string());
@@ -1087,6 +1142,7 @@ pub async fn start_cdp_monitoring(
                                         let app_clone = app_handle.clone();
                                         let ws_url_owned = ws_debugger_url.to_string();
                                         let page_id_owned = page_id.to_string();
+                                        let page_url_owned = page_url.to_string();
                                         let evolution_count_clone = evolution_count.clone();
                                         let monitored_pages_clone = monitored_pages.clone();
 
@@ -1095,6 +1151,7 @@ pub async fn start_cdp_monitoring(
                                                 &app_clone,
                                                 &ws_url_owned,
                                                 &page_id_owned,
+                                                &page_url_owned,
                                                 None,
                                                 should_be_lobby,
                                             )
@@ -1228,8 +1285,8 @@ async fn monitor_room_page_for_session(
                         // Check if this is an Evolution room WebSocket
                         if url.contains("/game/") && url.contains("EVOSESSIONID") {
                             info!(
-                                "🎯 [Room Session Capture] Evolution room WebSocket captured: {}",
-                                &url[..url.len().min(100)]
+                                "🎯 [Room Session Capture] Evolution room WebSocket captured (url_len={}, has_session_query=true)",
+                                url.len()
                             );
 
                             // Emit event for frontend to capture session
@@ -1299,8 +1356,14 @@ fn is_evolution_lobby_url(url: &str) -> bool {
         || lower.contains("baccarat");
 
     let result = is_evo && !has_table_id && has_lobby_indicator;
-    debug!("🔍 is_evolution_lobby_url({}) -> is_evo={}, has_table_id={}, has_lobby_indicator={}, result={}",
-           &url[..url.len().min(80)], is_evo, has_table_id, has_lobby_indicator, result);
+    debug!(
+        "🔍 is_evolution_lobby_url(url_len={}) -> is_evo={}, has_table_id={}, has_lobby_indicator={}, result={}",
+        url.len(),
+        is_evo,
+        has_table_id,
+        has_lobby_indicator,
+        result
+    );
     result
 }
 
@@ -1315,7 +1378,7 @@ fn find_lobby_tab_ws_url(pages: &[serde_json::Value]) -> Option<String> {
 
         if page_type == "page" && is_evolution_lobby_url(page_url) {
             if let Some(ws_url) = ws_debugger_url {
-                info!("🏠 Found Evolution lobby tab: {}", &page_url[..page_url.len().min(80)]);
+                info!("🏠 Found Evolution lobby tab (url_len={})", page_url.len());
                 return Some(ws_url.to_string());
             }
         }
@@ -1333,6 +1396,7 @@ async fn monitor_page_continuously(
     app: &AppHandle,
     ws_debugger_url: &str,
     page_id: &str,
+    page_url: &str,
     table_id: Option<&str>,
     is_lobby_candidate: bool,
 ) -> Result<bool, String> {
@@ -1362,6 +1426,7 @@ async fn monitor_page_continuously(
     let app_handle = app.clone();
     let is_lobby_page = is_lobby;
     let page_id_owned = page_id.to_string();
+    let page_url_owned = page_url.to_string();
     let table_id_owned = table_id.map(|s| s.to_string());
     let ws_url_owned = ws_debugger_url.to_string();
 
@@ -1495,10 +1560,7 @@ async fn monitor_page_continuously(
         // Rust will connect with the same session info, and the server will close the browser's connection
         // This is simpler and more reliable than trying to block browser WebSockets
         {
-            let current_mode = CDP_APP_MODE
-                .lock()
-                .map(|m| m.clone())
-                .unwrap_or_default();
+            let current_mode = CDP_APP_MODE.lock().map(|m| m.clone()).unwrap_or_default();
             if current_mode == "predict" {
                 info!("📊 [PREDICT MODE] CDP monitoring started - will capture lobby WebSocket URL for Rust connection");
             }
@@ -1629,6 +1691,63 @@ async fn monitor_page_continuously(
             .await
         {
             debug!("Failed to enable Runtime domain: {}", e);
+        }
+
+        let add_ws_blocker = serde_json::json!({
+            "id": 77,
+            "method": "Page.addScriptToEvaluateOnNewDocument",
+            "params": {
+                "source": WS_BLOCKER_SCRIPT
+            }
+        });
+        if let Err(e) = write
+            .lock()
+            .await
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                add_ws_blocker.to_string(),
+            ))
+            .await
+        {
+            debug!("Failed to register WS blocker for new documents: {}", e);
+        } else {
+            info!(
+                "[WS-BLOCKER] Registered new-document blocker for page {}",
+                page_id_owned
+            );
+        }
+
+        let can_consume_pending_url =
+            page_url_owned.is_empty() || page_url_owned.starts_with("about:blank");
+        let pending_url = if can_consume_pending_url {
+            PENDING_CHROME_URL
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.take())
+        } else {
+            None
+        };
+        if let Some(pending_url) = pending_url {
+            info!(
+                "[WS-BLOCKER] Navigating protected page to pending URL (url_len={})",
+                pending_url.len()
+            );
+            let navigate = serde_json::json!({
+                "id": 78,
+                "method": "Page.navigate",
+                "params": {
+                    "url": pending_url
+                }
+            });
+            if let Err(e) = write
+                .lock()
+                .await
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    navigate.to_string(),
+                ))
+                .await
+            {
+                warn!("[WS-BLOCKER] Failed to navigate protected page: {}", e);
+            }
         }
 
         // Best-effort auto-click multi-table triggers on lobby-like pages
@@ -1795,11 +1914,118 @@ async fn monitor_page_continuously(
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                         let method = json.get("method").and_then(|v| v.as_str()).unwrap_or("");
 
+                        if method == "Runtime.consoleAPICalled" {
+                            let args = json
+                                .get("params")
+                                .and_then(|p| p.get("args"))
+                                .and_then(|a| a.as_array());
+                            let mut captured_url: Option<String> = None;
+                            if let Some(args) = args {
+                                let first = args
+                                    .get(0)
+                                    .and_then(|v| v.get("value"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let second = args
+                                    .get(1)
+                                    .and_then(|v| v.get("value"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if first.starts_with("[BCR]") {
+                                    info!("[BCR-CONSOLE] {} {}", first, second);
+                                }
+                                if first == "[BCR_WS_CAPTURE]" {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(second)
+                                    {
+                                        captured_url = v
+                                            .get("url")
+                                            .and_then(|u| u.as_str())
+                                            .map(|s| s.to_string());
+                                    }
+                                }
+                            }
+
+                            if let Some(ws_url_for_connect) = captured_url {
+                                let is_multiwidget_ws = ws_url_for_connect
+                                    .contains("/multiwidget/")
+                                    || ws_url_for_connect.contains("/multiplay/")
+                                    || ws_url_for_connect.contains("multiwidget")
+                                    || ws_url_for_connect.contains("multiplay")
+                                    || ws_url_for_connect.contains("mwLayout");
+
+                                if is_bet_capture_mode() {
+                                    // 🧪 캡처 모드: Rust는 멀티위젯에 연결하지 않는다(브라우저가 유일 세션 → 베팅 UI 작동).
+                                    info!("[WS-BLOCKER] 🧪 BET-CAPTURE 모드 — Rust 멀티위젯 연결 스킵(브라우저가 세션 보유)");
+                                } else if is_multiwidget_ws
+                                    && !MULTIWIDGET_CONNECTED
+                                        .load(std::sync::atomic::Ordering::SeqCst)
+                                {
+                                    info!(
+                                        "[WS-BLOCKER] Captured blocked Evolution socket for Rust (url_len={}, has_session_query={})",
+                                        ws_url_for_connect.len(),
+                                        ws_url_for_connect
+                                            .to_ascii_lowercase()
+                                            .contains("evosessionid=")
+                                    );
+                                    MULTIWIDGET_CONNECTED
+                                        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+                                    let get_cookies_cmd = serde_json::json!({
+                                        "id": 88888,
+                                        "method": "Network.getAllCookies"
+                                    });
+                                    let _ = write
+                                        .lock()
+                                        .await
+                                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                                            get_cookies_cmd.to_string(),
+                                        ))
+                                        .await;
+
+                                    let app_handle_for_connect = app_handle.clone();
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(500))
+                                            .await;
+
+                                        let mut options = MultiSocketOptions::default();
+                                        if let Some(all_cookies) =
+                                            BROWSER_ALL_COOKIES.lock().unwrap().clone()
+                                        {
+                                            options.cookie = Some(all_cookies);
+                                        }
+
+                                        let mut client = MULTIWIDGET_CLIENT.lock().await;
+                                        if client.is_connected() {
+                                            return;
+                                        }
+
+                                        let event_rx = client.create_event_channel();
+                                        crate::evolution::event_bridge::spawn_event_bridge(
+                                            app_handle_for_connect.clone(),
+                                            event_rx,
+                                        );
+
+                                        match client.connect(ws_url_for_connect.clone(), options).await {
+                                            Ok(_) => info!("[WS-BLOCKER] Rust multi-socket connection initiated from blocked browser URL"),
+                                            Err(e) => {
+                                                error!("[WS-BLOCKER] Rust multi-socket connection failed: {}", e);
+                                                MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
                         // ✅ Handle CDP response (for WebSocket URL queries and cookie requests)
                         if let Some(response_id) = json.get("id").and_then(|v| v.as_u64()) {
                             // 🍪 Handle Network.getAllCookies response (id=88888)
                             if response_id == 88888 {
-                                if let Some(cookies) = json.get("result").and_then(|r| r.get("cookies")).and_then(|c| c.as_array()) {
+                                if let Some(cookies) = json
+                                    .get("result")
+                                    .and_then(|r| r.get("cookies"))
+                                    .and_then(|c| c.as_array())
+                                {
                                     // Log all cookies for debugging
                                     info!("🍪 [CDP] Total cookies in browser: {}", cookies.len());
 
@@ -1817,16 +2043,24 @@ async fn monitor_page_continuously(
                                     });
 
                                     // Build cookie string - include ALL cookies from evo-games domains + _abck
-                                    let cookie_parts: Vec<String> = cookies.iter()
+                                    let cookie_parts: Vec<String> = cookies
+                                        .iter()
                                         .filter_map(|c| {
                                             let name = c.get("name")?.as_str()?;
                                             let value = c.get("value")?.as_str()?;
-                                            let domain = c.get("domain").and_then(|d| d.as_str()).unwrap_or("");
+                                            let domain = c
+                                                .get("domain")
+                                                .and_then(|d| d.as_str())
+                                                .unwrap_or("");
 
                                             // Include evo-games cookies OR important Akamai cookies
-                                            if domain.contains("evo-games") || domain.contains("evo-")
-                                               || name == "_abck" || name == "ak_bmsc" || name == "bm_sz"
-                                               || name.starts_with("bm_") {
+                                            if domain.contains("evo-games")
+                                                || domain.contains("evo-")
+                                                || name == "_abck"
+                                                || name == "ak_bmsc"
+                                                || name == "bm_sz"
+                                                || name.starts_with("bm_")
+                                            {
                                                 Some(format!("{}={}", name, value))
                                             } else {
                                                 None
@@ -1835,18 +2069,25 @@ async fn monitor_page_continuously(
                                         .collect();
 
                                     // Log what we found
-                                    let has_abck = cookie_parts.iter().any(|c| c.starts_with("_abck="));
-                                    let has_ak_bmsc = cookie_parts.iter().any(|c| c.starts_with("ak_bmsc="));
-                                    let has_bm_sz = cookie_parts.iter().any(|c| c.starts_with("bm_sz="));
-                                    info!("🍪 [CDP] Akamai cookies: _abck={}, ak_bmsc={}, bm_sz={}",
-                                        has_abck, has_ak_bmsc, has_bm_sz);
+                                    let has_abck =
+                                        cookie_parts.iter().any(|c| c.starts_with("_abck="));
+                                    let has_ak_bmsc =
+                                        cookie_parts.iter().any(|c| c.starts_with("ak_bmsc="));
+                                    let has_bm_sz =
+                                        cookie_parts.iter().any(|c| c.starts_with("bm_sz="));
+                                    info!(
+                                        "🍪 [CDP] Akamai cookies: _abck={}, ak_bmsc={}, bm_sz={}",
+                                        has_abck, has_ak_bmsc, has_bm_sz
+                                    );
 
                                     let cookie_str = cookie_parts.join("; ");
 
                                     if !cookie_str.is_empty() {
-                                        info!("🍪 [CDP] Captured {} relevant cookies: {}...",
+                                        info!(
+                                            "🍪 [CDP] Captured {} relevant cookies (header_len={})",
                                             cookie_parts.len(),
-                                            &cookie_str[..cookie_str.len().min(150)]);
+                                            cookie_str.len()
+                                        );
 
                                         // Store in global variable
                                         *BROWSER_ALL_COOKIES.lock().unwrap() = Some(cookie_str);
@@ -1871,9 +2112,14 @@ async fn monitor_page_continuously(
                                 // Check if this is a WebSocket URL query response
                                 if request_type == "__QUERY_WS_URLS__" {
                                     if let Some(urls_str) = result_value {
+                                        let url_count = urls_str
+                                            .split("|||")
+                                            .filter(|url| !url.trim().is_empty())
+                                            .count();
                                         info!(
-                                            "📡 WebSocket URLs query result: {}",
-                                            &urls_str[..urls_str.len().min(200)]
+                                            "📡 WebSocket URLs query result: count={}, payload_len={}",
+                                            url_count,
+                                            urls_str.len()
                                         );
 
                                         // Parse the URLs (separated by |||)
@@ -1916,8 +2162,8 @@ async fn monitor_page_continuously(
                                     // Legacy cookie capture response
                                     if let Some(ref cookie_str) = result_value {
                                         info!(
-                                            "🍪 Evolution cookies captured: {}...",
-                                            &cookie_str[..cookie_str.len().min(50)]
+                                            "🍪 Evolution cookies captured (header_len={})",
+                                            cookie_str.len()
                                         );
                                     }
 
@@ -1980,11 +2226,12 @@ async fn monitor_page_continuously(
                                                 context_sessions.insert(context_id, sid.clone());
                                             }
 
-                                            // 🔥 CRITICAL: Inject WS_BLOCKER_SCRIPT ONLY AFTER multiwidget is connected
-                                            // Before connection: Need browser to attempt WebSocket so CDP can capture URL
-                                            // After connection: Block all browser WebSockets to prevent session conflicts
-                                            let is_multiwidget_connected = MULTIWIDGET_CONNECTED.load(std::sync::atomic::Ordering::SeqCst);
-                                            if is_multiwidget_connected && (origin.contains("evo-games.com") || origin.contains("evolution")) {
+                                            // Install the WebSocket blocker as soon as an Evolution context exists.
+                                            // The blocker captures the WS URL via console and prevents the browser
+                                            // from opening the real socket, so Rust can become the only session owner.
+                                            if origin.contains("evo-games")
+                                                || origin.contains("evolution")
+                                            {
                                                 let ws_blocker_inject = serde_json::json!({
                                                     "id": 888000 + context_id,
                                                     "method": "Runtime.evaluate",
@@ -1995,10 +2242,10 @@ async fn monitor_page_continuously(
                                                     }
                                                 });
 
-                                                // Add sessionId if this is an iframe context
                                                 let mut ws_blocker_msg = ws_blocker_inject.clone();
                                                 if let Some(ref sid) = context_session_id {
-                                                    ws_blocker_msg["sessionId"] = serde_json::json!(sid);
+                                                    ws_blocker_msg["sessionId"] =
+                                                        serde_json::json!(sid);
                                                 }
 
                                                 let _ = write.lock().await
@@ -2006,11 +2253,8 @@ async fn monitor_page_continuously(
                                                         ws_blocker_msg.to_string(),
                                                     ))
                                                     .await;
-                                                info!("🛡️ [WS-BLOCKER] Injected to context {} (origin: {}, session: {:?})",
+                                                info!("[WS-BLOCKER] Injected to context {} (origin: {}, session: {:?})",
                                                       context_id, origin, context_session_id);
-                                            } else if !is_multiwidget_connected && (origin.contains("evo-games.com") || origin.contains("evolution")) {
-                                                info!("⏳ [WS-BLOCKER] Skipped - multiwidget not yet connected (context: {}, origin: {})",
-                                                      context_id, origin);
                                             }
 
                                             // Evo 로비 페이지: 멀티플레이 버튼 자동 클릭 (hash 조작 없음!)
@@ -2491,10 +2735,10 @@ async fn monitor_page_continuously(
                                 let is_evo_iframe = target_url.contains("evo-games.com")
                                     || target_url.contains("evolution");
                                 info!(
-                                    "🎯 Target attached: session={}, type={}, url={}, isEvo={}",
+                                    "🎯 Target attached: session={}, type={}, url_len={}, isEvo={}",
                                     session_id,
                                     target_type,
-                                    &target_url[..target_url.len().min(80)],
+                                    target_url.len(),
                                     is_evo_iframe
                                 );
 
@@ -2571,17 +2815,18 @@ async fn monitor_page_continuously(
                                     || target_url.contains("evolution");
 
                                 info!(
-                                    "🆕 [Target.targetCreated] type={}, id={}, opener={}, url={}, isEvo={}",
+                                    "🆕 [Target.targetCreated] type={}, id={}, opener={}, url_len={}, isEvo={}",
                                     target_type,
                                     target_id,
                                     opener_id,
-                                    &target_url[..target_url.len().min(100)],
+                                    target_url.len(),
                                     is_evo_popup
                                 );
 
                                 // For page targets (popups), emit event for frontend to track
                                 if target_type == "page" && !target_url.is_empty() {
-                                    if let Some(main_window) = app_handle.get_webview_window("main") {
+                                    if let Some(main_window) = app_handle.get_webview_window("main")
+                                    {
                                         let _ = main_window.emit(
                                             "cdp-new-target-created",
                                             serde_json::json!({
@@ -2596,7 +2841,10 @@ async fn monitor_page_continuously(
 
                                     // 🎯 Auto-attach to new Evolution popups to capture their WebSocket traffic
                                     if is_evo_popup && !target_id.is_empty() {
-                                        info!("🎯 Auto-attaching to Evolution popup: {}", target_id);
+                                        info!(
+                                            "🎯 Auto-attaching to Evolution popup: {}",
+                                            target_id
+                                        );
                                         let attach_msg = serde_json::json!({
                                             "id": 200,
                                             "method": "Target.attachToTarget",
@@ -2684,12 +2932,13 @@ async fn monitor_page_continuously(
                                                     })
                                                     .unwrap_or(false);
                                                 info!(
-	                                                    "🍪 [WS-HANDSHAKE] requestId={} multiwidget=true hasCookie={} hasSession={} url={}",
-	                                                    request_id,
-	                                                    cookie.is_some(),
-	                                                    has_session,
-	                                                    &url[..url.len().min(120)]
-	                                                );
+                                                    "🍪 [WS-HANDSHAKE] requestId={} multiwidget=true hasCookie={} hasSessionCookie={} hasSessionQuery={} urlLen={}",
+                                                    request_id,
+                                                    cookie.is_some(),
+                                                    has_session,
+                                                    url.to_ascii_lowercase().contains("evosessionid="),
+                                                    url.len()
+                                                );
                                             }
                                         }
                                     }
@@ -2715,21 +2964,19 @@ async fn monitor_page_continuously(
                                         .insert(request_id.to_string(), url.to_string());
                                 }
 
-                                // 🔍 DEBUG: Log ALL WebSocket URLs to find multiwidget pattern
-                                info!("🔌 [ALL-WS] WebSocket created: {}", url);
+                                // Log only non-sensitive socket metadata. Evolution URLs may
+                                // carry EVOSESSIONID in the query string.
+                                info!(
+                                    "🔌 [ALL-WS] WebSocket created: url_len={}, is_evolution={}, has_session_query={}",
+                                    url.len(),
+                                    is_evolution_url(url),
+                                    url.to_ascii_lowercase().contains("evosessionid=")
+                                );
 
                                 if let Some(ref sid) = source_session_id {
-                                    info!(
-                                        "🔌 [IFRAME] session={} url={}",
-                                        sid,
-                                        &url[..url.len().min(200)]
-                                    );
+                                    info!("🔌 [IFRAME] session={} url_len={}", sid, url.len());
                                 } else {
-                                    info!(
-                                        "🔌 [MAIN] page={} url={}",
-                                        page_id_owned,
-                                        &url[..url.len().min(200)]
-                                    );
+                                    info!("🔌 [MAIN] page={} url_len={}", page_id_owned, url.len());
                                 }
 
                                 // Check Evolution FIRST (more specific patterns)
@@ -3021,17 +3268,14 @@ async fn monitor_page_continuously(
                                     // multi-table data, so it MUST be treated as the multiwidget socket and
                                     // connected directly from Rust — otherwise it is misclassified as a plain
                                     // lobby socket and silently skipped, and the multi-socket never connects (v2-1).
-                                    let is_lobby_v2 = url.contains("/lobby/socket/v2")
-                                        || url.contains("/lobby/socket/V2");
-
                                     // ✅ MULTIWIDGET SOCKET: Extended patterns for multiwidget detection
                                     let is_multiwidget_ws = url.contains("/multiwidget/socket")
                                         || url.contains("/game/multiwidget/")
                                         || url.contains("/multiwidget/")
                                         || url.contains("/multiplay/")
                                         || url.contains("multiwidget")
-                                        || url.contains("mwLayout")
-                                        || is_lobby_v2;
+                                        || url.contains("multiplay")
+                                        || url.contains("mwLayout");
 
                                     // Check if this is a lobby WebSocket (not room, not multiwidget).
                                     // NOTE: lobby v2 is now classified as multiwidget above, so it never
@@ -3053,8 +3297,8 @@ async fn monitor_page_continuously(
                                     // 이미 CDP 정지 플래그가 올라가면 추가 처리를 건너뛴다 (중복 오토 연결 방지)
                                     if CDP_SHOULD_STOP.load(std::sync::atomic::Ordering::SeqCst) {
                                         debug!(
-                                            "🛑 CDP stop flag set, skip WebSocket handling for {}",
-                                            &url[..url.len().min(80)]
+                                            "🛑 CDP stop flag set, skip WebSocket handling (url_len={})",
+                                            url.len()
                                         );
                                         continue;
                                     }
@@ -3071,7 +3315,10 @@ async fn monitor_page_continuously(
                                         if MULTIWIDGET_CONNECTED
                                             .load(std::sync::atomic::Ordering::SeqCst)
                                         {
-                                            debug!("🎰 [SKIP] Multiwidget already connected, ignoring duplicate WebSocket: {}", &url[..url.len().min(100)]);
+                                            debug!(
+                                                "🎰 [SKIP] Multiwidget already connected, ignoring duplicate WebSocket (url_len={})",
+                                                url.len()
+                                            );
                                             continue;
                                         }
 
@@ -3095,7 +3342,10 @@ async fn monitor_page_continuously(
                                             // Check if this session was processed in the last 30 seconds
                                             if let Some(last_time) = processed.get(&session_key) {
                                                 if now.duration_since(*last_time).as_secs() < 30 {
-                                                    debug!("🎰 [SKIP] Session {} recently processed, debouncing", &session_key[..session_key.len().min(20)]);
+                                                    debug!(
+                                                        "🎰 [SKIP] Session recently processed, debouncing (session_id_len={})",
+                                                        session_key.len()
+                                                    );
                                                     continue;
                                                 }
                                             }
@@ -3109,7 +3359,11 @@ async fn monitor_page_continuously(
                                             });
                                         }
 
-                                        info!("🎰 MULTIWIDGET WebSocket detected! URL: {}", url);
+                                        info!(
+                                            "🎰 MULTIWIDGET WebSocket detected (url_len={}, has_session_query={})",
+                                            url.len(),
+                                            !session_key.is_empty()
+                                        );
                                         info!(
                                             "🎰 AUTO-CONNECTING to multiwidget socket from CDP..."
                                         );
@@ -3117,16 +3371,24 @@ async fn monitor_page_continuously(
                                         // 🔥 CRITICAL: Capture multiwidget WebSocket domain for room navigation
                                         // wss://babylontggasia.evo-games.com/... -> https://babylontggasia.evo-games.com
                                         // This is the REAL Evolution domain to use
-                                        if let Some(domain) = url.strip_prefix("wss://").or_else(|| url.strip_prefix("ws://")) {
+                                        if let Some(domain) = url
+                                            .strip_prefix("wss://")
+                                            .or_else(|| url.strip_prefix("ws://"))
+                                        {
                                             if let Some(slash_pos) = domain.find('/') {
                                                 let domain_only = &domain[..slash_pos];
                                                 let base_url = format!("https://{}", domain_only);
-                                                info!("🔒 Evolution base URL captured from multiwidget: {}", base_url);
+                                                info!(
+                                                    "🔒 Evolution base URL captured from multiwidget (url_len={})",
+                                                    base_url.len()
+                                                );
                                                 if let Ok(mut guard) = EVOLUTION_BASE_URL.lock() {
                                                     *guard = Some(base_url.clone());
                                                 }
                                                 // Emit to frontend for room navigation
-                                                if let Some(main_window) = app_handle.get_webview_window("main") {
+                                                if let Some(main_window) =
+                                                    app_handle.get_webview_window("main")
+                                                {
                                                     let _ = main_window.emit(
                                                         "evolution-base-url-captured",
                                                         serde_json::json!({
@@ -3149,12 +3411,17 @@ async fn monitor_page_continuously(
                                             "id": 88888,
                                             "method": "Network.getAllCookies"
                                         });
-                                        let _ = write.lock().await.send(
-                                            tokio_tungstenite::tungstenite::Message::Text(get_cookies_cmd.to_string())
-                                        ).await;
+                                        let _ = write
+                                            .lock()
+                                            .await
+                                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                                get_cookies_cmd.to_string(),
+                                            ))
+                                            .await;
 
                                         // Wait briefly for cookie response to be processed
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(300))
+                                            .await;
 
                                         // ✅ CRITICAL: Close multiwidget by clicking multiplay toggle button in lobby
                                         // Evolution properly cleans up session when UI is closed (generates new instance ID)
@@ -3317,8 +3584,19 @@ async fn monitor_page_continuously(
                                             let mut options = MultiSocketOptions::default();
 
                                             // First, try to get cookies from Network.getAllCookies
-                                            if let Some(all_cookies) = BROWSER_ALL_COOKIES.lock().unwrap().clone() {
-                                                info!("🍪 Using full browser cookies (includes _abck): {}...", &all_cookies[..all_cookies.len().min(80)]);
+                                            if let Some(all_cookies) =
+                                                BROWSER_ALL_COOKIES.lock().unwrap().clone()
+                                            {
+                                                let cookie_count = all_cookies
+                                                    .split(';')
+                                                    .filter(|cookie| !cookie.trim().is_empty())
+                                                    .count();
+                                                info!(
+                                                    "🍪 Using full browser cookies: count={}, header_len={}, has_abck={}",
+                                                    cookie_count,
+                                                    all_cookies.len(),
+                                                    all_cookies.contains("_abck=")
+                                                );
                                                 options.cookie = Some(all_cookies);
                                             }
 
@@ -3403,19 +3681,13 @@ async fn monitor_page_continuously(
                                             );
 
                                             match client
-                                                .connect(
-                                                    ws_url_for_connect.clone(),
-                                                    options,
-                                                )
+                                                .connect(ws_url_for_connect.clone(), options)
                                                 .await
                                             {
                                                 Ok(_) => {
                                                     info!("🎰 ✅ Multiwidget auto-connection initiated!");
                                                     // 🔥 IMPORTANT: Do NOT stop CDP!
-                                                    // CDP must continue running to inject WS_BLOCKER into new contexts
-                                                    // (e.g., when user enters a room, new iframe/page loads)
-                                                    // This prevents session conflicts (connection.kickout)
-                                                    info!("🛡️ CDP continues running to inject WS_BLOCKER on room entry");
+                                                    info!("🛡️ CDP continues running");
                                                 }
                                                 Err(e) => {
                                                     error!("🎰 ❌ Multiwidget auto-connection failed: {}", e);
@@ -3532,8 +3804,11 @@ async fn monitor_page_continuously(
 
                                             if should_update {
                                                 info!(
-                                                    "🎲 Cached Pragmatic launcher URL from WS: {}...",
-                                                    &launcher_url[..launcher_url.len().min(100)]
+                                                    "🎲 Cached Pragmatic launcher URL from WS (url_len={}, has_jsession={})",
+                                                    launcher_url.len(),
+                                                    launcher_url
+                                                        .to_ascii_lowercase()
+                                                        .contains("jsessionid=")
                                                 );
                                                 *guard = Some(launcher_url);
                                             }
@@ -3568,11 +3843,9 @@ async fn monitor_page_continuously(
                                     if let Some(payload) =
                                         response.get("payloadData").and_then(|v| v.as_str())
                                     {
-                                        // Log ALL messages sent by browser (important for debugging)
-                                        debug!(
-                                            "📤 [BROWSER-SENT] {}",
-                                            &payload[..payload.len().min(300)]
-                                        );
+                                        // Browser frames can contain session and betting data.
+                                        // Keep only the size for diagnostics.
+                                        debug!("📤 [BROWSER-SENT] payload_len={}", payload.len());
 
                                         // Parse CLIENT_* messages for auto-betting config capture
                                         if let Ok(json_msg) =
@@ -3624,6 +3897,32 @@ async fn monitor_page_continuously(
                                                             }
                                                         }
                                                     }
+                                                    // CLIENT_BET_ACCEPTED / CLIENT_BALANCE_UPDATED — 실시간 '게임 잔액'(value.balance).
+                                                    // 라이브 캡처(2026-06-02)로 확인: 게임 잔액은 이 두 메시지로 흐른다(예 balance:41580).
+                                                    // 앱은 CLIENT_BET_CHIP(수동 칩)만 잡아서 자동 실배팅 땐 잔액이 안 갱신됐다(근본원인).
+                                                    // → 여기서 balance를 evolution_multi_event(type:balance)로 forward하면 프론트
+                                                    //   parseMessage가 game/total을 동적 추출해 실시간 반영한다(테이블/경로 하드코딩 없음).
+                                                    else if msg_type == "CLIENT_BET_ACCEPTED"
+                                                        || msg_type == "CLIENT_BALANCE_UPDATED"
+                                                    {
+                                                        if let Some(bal) = log
+                                                            .get("value")
+                                                            .and_then(|v| v.get("balance"))
+                                                            .and_then(|v| v.as_f64())
+                                                        {
+                                                            if let Some(main_window) = app_handle
+                                                                .get_webview_window("main")
+                                                            {
+                                                                let _ = main_window.emit(
+                                                                    "evolution_multi_event",
+                                                                    serde_json::json!({
+                                                                        "eventType": "balance",
+                                                                        "data": {"type": "balance", "game": bal, "total": bal}
+                                                                    }),
+                                                                );
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -3672,6 +3971,32 @@ async fn monitor_page_continuously(
                                             }
                                         }
 
+                                        // 💰 실시간 잔액 forward (2026-06-02, 라이브 확인):
+                                        // 중계사이트 소켓(wss://hl-101.com/ws)이 보내는
+                                        //   {"type":"balance","total":N,"local":N,"game":N,"breakdown":{...}}
+                                        // 프레임은 아래 Evolution forward 필터(historyUpdated/result/winner…)에
+                                        // "balance" 키워드가 없어 프론트로 전달되지 않았다 → 자동 실배팅 시
+                                        // realBalance가 안 갱신되던 근본 원인. 모드(predict/auto) 무관하게,
+                                        // 그리고 Pragmatic/Evolution 분기 이전에 명시적으로 forward한다.
+                                        // (프론트 EvolutionAdapter.parseMessage가 game/total을 동적 추출)
+                                        if let Some(ref j) = parsed_json {
+                                            if j.get("type").and_then(|v| v.as_str())
+                                                == Some("balance")
+                                            {
+                                                if let Some(main_window) =
+                                                    app_handle.get_webview_window("main")
+                                                {
+                                                    let _ = main_window.emit(
+                                                        "evolution_multi_event",
+                                                        serde_json::json!({
+                                                            "eventType": "balance",
+                                                            "data": j
+                                                        }),
+                                                    );
+                                                }
+                                            }
+                                        }
+
                                         // ✅ Pragmatic detection: URL-based OR content-based
                                         let is_pragmatic_by_url = matches!(
                                             last_ws_provider.as_deref(),
@@ -3685,9 +4010,9 @@ async fn monitor_page_continuously(
                                         // 🔍 DEBUG: Log Pragmatic detection result
                                         if is_pragmatic_by_url || is_pragmatic_by_content {
                                             info!(
-                                                "🎲 Pragmatic frame: by_url={}, by_content={}, payload={}...",
+                                                "🎲 Pragmatic frame: by_url={}, by_content={}, payload_len={}",
                                                 is_pragmatic_by_url, is_pragmatic_by_content,
-                                                &payload[..payload.len().min(100)]
+                                                payload.len()
                                             );
                                         }
 
@@ -3822,7 +4147,10 @@ async fn monitor_page_continuously(
                                                     }
                                                 }
                                                 None => {
-                                                    debug!("🎲 Pragmatic parse returned None for: {}...", &payload[..payload.len().min(50)]);
+                                                    debug!(
+                                                        "🎲 Pragmatic parse returned None (payload_len={})",
+                                                        payload.len()
+                                                    );
                                                 }
                                             }
                                         }
@@ -3830,6 +4158,50 @@ async fn monitor_page_continuously(
                                         // Skip Evolution handling if already handled as Pragmatic
                                         if handled_as_pragmatic {
                                             continue;
+                                        }
+
+                                        // 📡 [ROOM-FIX 2026-06-10] CDP가 캡처한 '실제' Evolution 프레임을 프론트로 raw forward.
+                                        // 프론트 EvolutionAdapter가 단일 파서 — 라이브 덤프로 확인된 실제 타입을 그대로 넘기면 처리한다:
+                                        //   widget.availableTables(방 목록 · args.availableTables[]),
+                                        //   baccarat.shoeState/encodedShoeState/tableState/newGame(게임·결과·gameId), tableState, 잔액.
+                                        // 아래 구(舊) predict 블록은 실재하지 않는 키(args["lobbydata.categories"]·args.historyUpdated)를
+                                        // 찾아 어떤 실제 프레임도 매칭 못 했다 → 방·결과가 영영 전달 안 됨 = "방 안 보임"의 직접 원인.
+                                        // 모드 무관하게 forward(예측·자동 둘 다 데이터 필요). 프론트는 gameId 기반으로 중복 제거.
+                                        if let Some(ref json_msg) = parsed_json {
+                                            let mtype = json_msg
+                                                .get("type")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let forward = mtype.starts_with("baccarat.")
+                                                || mtype == "widget.availableTables"
+                                                || mtype == "widget.resolved"
+                                                || mtype == "tableState"
+                                                || mtype == "game.result"
+                                                || mtype == "game.state"
+                                                || mtype == "lobby.historyUpdated"
+                                                || mtype == "lobby.balanceUpdated"
+                                                || mtype == "balanceUpdated";
+                                            if forward {
+                                                let tid = json_msg
+                                                    .get("args")
+                                                    .and_then(|a| {
+                                                        a.get("tableId")
+                                                            .or_else(|| a.get("table_id"))
+                                                    })
+                                                    .and_then(|v| v.as_str());
+                                                if let Some(main_window) =
+                                                    app_handle.get_webview_window("main")
+                                                {
+                                                    let _ = main_window.emit(
+                                                        "evolution_multi_event",
+                                                        serde_json::json!({
+                                                            "eventType": mtype,
+                                                            "tableId": tid,
+                                                            "data": json_msg,
+                                                        }),
+                                                    );
+                                                }
+                                            }
                                         }
 
                                         // 📊 PREDICT MODE: Forward Evolution lobby WS messages to frontend
@@ -4259,7 +4631,6 @@ async fn monitor_page_continuously(
             }
         }
 
-
         // For non-lobby pages, exit the reconnect loop after connection ends
         if !is_lobby_page {
             break;
@@ -4318,6 +4689,55 @@ pub async fn restart_cdp_monitoring() -> Result<(), String> {
     Ok(())
 }
 
+/// Rotate the short-lived Evolution session without allowing the browser and
+/// Rust clients to own the same session concurrently.
+///
+/// Order is intentional: stop the old CDP capture, disconnect the real shared
+/// multi-client, start a fresh capture loop, then click the relay launcher.
+/// The replacement socket is therefore observed only after the previous Rust
+/// client has released its session.
+#[tauri::command]
+pub async fn rotate_evolution_session(
+    app: AppHandle,
+    app_mode: Option<String>,
+) -> Result<bool, String> {
+    let _rotation_guard = try_acquire_atomic_flag(&SESSION_ROTATION_IN_PROGRESS)
+        .ok_or_else(|| "Evolution session rotation is already in progress".to_string())?;
+
+    let mode = app_mode.unwrap_or_else(|| "auto".to_string());
+    info!(
+        "[SESSION-ROTATE] Starting atomic session handover (mode={})",
+        mode
+    );
+
+    stop_cdp_monitoring().await?;
+    {
+        let mut client = MULTIWIDGET_CLIENT.lock().await;
+        client.disconnect().await;
+    }
+    MULTIWIDGET_CONNECTED.store(false, Ordering::SeqCst);
+
+    start_cdp_monitoring(app, Some(mode)).await?;
+    // start_cdp_monitoring spawns a poller with a two-second Chrome startup
+    // grace period. Do not click until that poller has had time to attach and
+    // enable Network events, otherwise the replacement socket can be missed.
+    tokio::time::sleep(tokio::time::Duration::from_millis(2_500)).await;
+
+    match click_evolution_launch().await {
+        Ok(true) => {
+            info!("[SESSION-ROTATE] Relay launch clicked; waiting for fresh session capture");
+            Ok(true)
+        }
+        Ok(false) => {
+            Err("Evolution launcher was not found; CDP monitoring remains active".to_string())
+        }
+        Err(error) => Err(format!(
+            "Evolution session rotation could not click the launcher: {}",
+            error
+        )),
+    }
+}
+
 /// Navigate to a Pragmatic room using the captured launcher URL
 /// Replaces operatorGameId in the stored launcher URL and navigates via CDP
 #[tauri::command]
@@ -4337,42 +4757,54 @@ pub async fn navigate_pragmatic_room(
     // ROSE room lists are keyed by Pragmatic tableId, while launcher URLs need
     // operatorGameId. Resolve both directions so selecting "401" can still
     // produce a valid Pragmatic launcher URL.
-    let mut table_id_override = PRAGMATIC_TABLE_ID_BY_OPERATOR_GAME_ID.lock().ok().and_then(|m| {
-        if let Some(table_id) = m.get(&room_id) {
-            return Some(table_id.clone());
-        }
-
-        for (op_id, table_id) in m.iter() {
-            if table_id == &requested_table_id {
-                operator_game_id = op_id.clone();
+    let mut table_id_override = PRAGMATIC_TABLE_ID_BY_OPERATOR_GAME_ID
+        .lock()
+        .ok()
+        .and_then(|m| {
+            if let Some(table_id) = m.get(&room_id) {
                 return Some(table_id.clone());
             }
-        }
 
-        None
-    });
+            for (op_id, table_id) in m.iter() {
+                if table_id == &requested_table_id {
+                    operator_game_id = op_id.clone();
+                    return Some(table_id.clone());
+                }
+            }
+
+            None
+        });
 
     // If no mapping found OR launcher URL is missing, try to capture from DOM dynamically
     // capture_pragmatic_table_mappings_from_dom also captures JSESSIONID now.
-    let launcher_missing = PRAGMATIC_LAUNCHER_URL.lock().map(|g| g.is_none()).unwrap_or(true);
-    
+    let launcher_missing = PRAGMATIC_LAUNCHER_URL
+        .lock()
+        .map(|g| g.is_none())
+        .unwrap_or(true);
+
     if table_id_override.is_none() || launcher_missing {
-        info!("🎲 Mapping or Launcher missing for {}, capturing from DOM...", room_id);
+        info!(
+            "🎲 Mapping or Launcher missing for {}, capturing from DOM...",
+            room_id
+        );
         let mappings = capture_pragmatic_table_mappings_from_dom().await;
-        
+
         // Store all mappings in cache
         if let Ok(mut map) = PRAGMATIC_TABLE_ID_BY_OPERATOR_GAME_ID.lock() {
             for (table_id, op_id) in &mappings {
                 map.insert(op_id.clone(), table_id.clone());
             }
         }
-        
+
         // Find the mapping for our room_id
         if table_id_override.is_none() {
             for (table_id, op_id) in mappings {
                 if op_id == room_id || table_id == requested_table_id {
                     operator_game_id = op_id.clone();
-                    info!("🎲 Found tableId {} for operatorGameId {} from DOM", table_id, room_id);
+                    info!(
+                        "🎲 Found tableId {} for operatorGameId {} from DOM",
+                        table_id, room_id
+                    );
                     table_id_override = Some(table_id);
                     break;
                 }
@@ -4396,86 +4828,89 @@ pub async fn navigate_pragmatic_room(
         }
     }
 
-    let new_url = if let Some(base_url) = base_url {
-        info!(
-            "🎲 Base Pragmatic URL: {}...",
-            &base_url[..base_url.len().min(100)]
-        );
+    let new_url =
+        if let Some(base_url) = base_url {
+            info!(
+                "🎲 Base Pragmatic URL available (url_len={}, has_jsession={})",
+                base_url.len(),
+                base_url.to_ascii_lowercase().contains("jsessionid=")
+            );
 
-        let mut parsed_url = url::Url::parse(&base_url)
-            .map_err(|e| format!("Failed to parse Pragmatic URL: {}", e))?;
+            let mut parsed_url = url::Url::parse(&base_url)
+                .map_err(|e| format!("Failed to parse Pragmatic URL: {}", e))?;
 
-        let table_id_for_url = table_id_override.clone();
-        let mut has_operator_game_id = false;
-        let mut has_table_id = false;
+            let table_id_for_url = table_id_override.clone();
+            let mut has_operator_game_id = false;
+            let mut has_table_id = false;
 
-        let new_query: Vec<(String, String)> = parsed_url
-            .query_pairs()
-            .map(|(k, v)| {
-                if k == "operatorGameId" {
-                    has_operator_game_id = true;
-                    (k.into_owned(), operator_game_id.clone())
-                } else if k == "tableId" {
-                    has_table_id = true;
-                    if let Some(ref table_id) = table_id_for_url {
-                        (k.into_owned(), table_id.clone())
+            let new_query: Vec<(String, String)> = parsed_url
+                .query_pairs()
+                .map(|(k, v)| {
+                    if k == "operatorGameId" {
+                        has_operator_game_id = true;
+                        (k.into_owned(), operator_game_id.clone())
+                    } else if k == "tableId" {
+                        has_table_id = true;
+                        if let Some(ref table_id) = table_id_for_url {
+                            (k.into_owned(), table_id.clone())
+                        } else {
+                            (k.into_owned(), v.into_owned())
+                        }
                     } else {
                         (k.into_owned(), v.into_owned())
                     }
-                } else {
-                    (k.into_owned(), v.into_owned())
-                }
-            })
-            .collect();
+                })
+                .collect();
 
-        parsed_url.query_pairs_mut().clear();
-        for (k, v) in new_query {
-            parsed_url.query_pairs_mut().append_pair(&k, &v);
-        }
+            parsed_url.query_pairs_mut().clear();
+            for (k, v) in new_query {
+                parsed_url.query_pairs_mut().append_pair(&k, &v);
+            }
 
-        if !has_operator_game_id {
-            parsed_url
-                .query_pairs_mut()
-                .append_pair("operatorGameId", &operator_game_id);
-        }
-        if !has_table_id {
-            if let Some(ref table_id) = table_id_for_url {
+            if !has_operator_game_id {
                 parsed_url
                     .query_pairs_mut()
-                    .append_pair("tableId", table_id);
+                    .append_pair("operatorGameId", &operator_game_id);
             }
-        }
+            if !has_table_id {
+                if let Some(ref table_id) = table_id_for_url {
+                    parsed_url
+                        .query_pairs_mut()
+                        .append_pair("tableId", table_id);
+                }
+            }
 
-        parsed_url.to_string()
-    } else {
-        let ws_url_for_room = PRAGMATIC_WS_URL_BY_OPERATOR_GAME_ID
-            .lock()
-            .ok()
-            .and_then(|m| {
-                m.get(&operator_game_id)
-                    .cloned()
-                    .or_else(|| m.get(&requested_table_id).cloned())
-            })
-            .or_else(|| PRAGMATIC_LAST_WS_URL.lock().ok().and_then(|g| g.clone()));
-
-        if let Some(ws_url) = ws_url_for_room {
-            build_pragmatic_launcher_url_for_operator_game_id(
-                &ws_url,
-                &operator_game_id,
-                table_id_override.as_deref(),
-            )
-            .ok_or_else(|| "프라그마틱 런처 URL 생성에 실패했습니다.".to_string())?
+            parsed_url.to_string()
         } else {
-            let manager = state.manager.lock().await;
-            manager.construct_launcher_url(&requested_table_id).ok_or_else(|| {
+            let ws_url_for_room = PRAGMATIC_WS_URL_BY_OPERATOR_GAME_ID
+                .lock()
+                .ok()
+                .and_then(|m| {
+                    m.get(&operator_game_id)
+                        .cloned()
+                        .or_else(|| m.get(&requested_table_id).cloned())
+                })
+                .or_else(|| PRAGMATIC_LAST_WS_URL.lock().ok().and_then(|g| g.clone()));
+
+            if let Some(ws_url) = ws_url_for_room {
+                build_pragmatic_launcher_url_for_operator_game_id(
+                    &ws_url,
+                    &operator_game_id,
+                    table_id_override.as_deref(),
+                )
+                .ok_or_else(|| "프라그마틱 런처 URL 생성에 실패했습니다.".to_string())?
+            } else {
+                let manager = state.manager.lock().await;
+                manager.construct_launcher_url(&requested_table_id).ok_or_else(|| {
                 "프라그마틱 세션이 없습니다. 프라그마틱 소켓이 먼저 캡처되었는지 확인해주세요."
                     .to_string()
             })?
-        }
-    };
+            }
+        };
     info!(
-        "🎲 New Pragmatic room URL: {}...",
-        &new_url[..new_url.len().min(100)]
+        "🎲 New Pragmatic room URL built (url_len={}, has_jsession={})",
+        new_url.len(),
+        new_url.to_ascii_lowercase().contains("jsessionid=")
     );
 
     // Cache the launcher URL so subsequent navigations work without a fallback
@@ -4542,7 +4977,6 @@ pub async fn navigate_pragmatic_room(
         "method": "Page.addScriptToEvaluateOnNewDocument",
         "params": {
             "source": WS_BLOCKER_SCRIPT,
-            "worldName": "BCR_BLOCKER"
         }
     });
 
@@ -4755,7 +5189,9 @@ pub async fn click_pragmatic_room_in_lobby(mut room_id: String) -> Result<String
         }
     });
     ws_write
-        .send(tokio_tungstenite::tungstenite::Message::Text(eval.to_string()))
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            eval.to_string(),
+        ))
         .await
         .map_err(|e| format!("Failed to send Runtime.evaluate: {}", e))?;
 
@@ -4882,7 +5318,9 @@ pub async fn refresh_pragmatic_lobby_rooms_from_dom() -> Result<Vec<serde_json::
     });
 
     ws_write
-        .send(tokio_tungstenite::tungstenite::Message::Text(eval.to_string()))
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            eval.to_string(),
+        ))
         .await
         .map_err(|e| format!("Failed to send Runtime.evaluate: {}", e))?;
 
@@ -4912,6 +5350,21 @@ pub async fn refresh_pragmatic_lobby_rooms_from_dom() -> Result<Vec<serde_json::
 
     serde_json::from_str::<Vec<serde_json::Value>>(value)
         .map_err(|e| format!("Invalid DOM room payload: {}", e))
+}
+
+/// 🔬 프론트엔드 진단 로그를 파일(bcr-runtime.log)에 남긴다(슬롯/정산 실시간 흐름 디버그용 임시).
+/// 프론트 콘솔은 Tauri 웹뷰에만 떠서 파일로 안 남으므로, AutoMode가 이 커맨드로 핵심 결정을 포워딩한다.
+#[tauri::command]
+pub fn fe_diag(line: String) {
+    tracing::info!("[FE-DIAG] {}", line.chars().take(600).collect::<String>());
+}
+
+/// 🧪 베팅 포맷 캡처 모드 여부(env `BCR_BET_CAPTURE=1`). 켜지면 Rust는 멀티위젯에 연결하지 않아
+/// 브라우저가 유일 세션이 되어 Evolution 베팅 UI가 정상 작동한다(중복세션 킥 방지). 캡처 후엔 변수 빼고 재실행.
+fn is_bet_capture_mode() -> bool {
+    std::env::var("BCR_BET_CAPTURE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 const WS_BLOCKER_SCRIPT: &str = r#"
@@ -4968,43 +5421,73 @@ const WS_BLOCKER_SCRIPT: &str = r#"
             return dummy;
         }
 
-        // 🔥 CRITICAL: Wrap WebSocket to intercept send() and modify forceCloseExistingConnection
-        function wrapWebSocket(ws, url) {
-            var origSend = ws.send.bind(ws);
-            ws.send = function(data) {
-                try {
-                    if (typeof data === 'string' && data.indexOf('forceCloseExistingConnection') !== -1) {
-                        var parsed = JSON.parse(data);
-                        if (parsed.subscribe && parsed.subscribe.forceCloseExistingConnection === true) {
-                            parsed.subscribe.forceCloseExistingConnection = false;
-                            data = JSON.stringify(parsed);
-                            console.log('[BCR] 🔧 Modified forceCloseExistingConnection: true → false');
-                        }
-                    }
-                } catch (e) {
-                    // Not JSON, send as-is
-                }
-                return origSend(data);
-            };
-            return ws;
-        }
-
         window.WebSocket = function(url, protocols) {
             url = String(url || '');
 
-            // 🔥 Block lobby and multiwidget sockets only
-            // Game socket is ALLOWED so user can enter rooms and see the game
-            // Rust handles multiwidget for multi-table data
             var isBlockedSocket = (
-                // Lobby socket: /public/lobby/socket
-                (url.indexOf('/lobby/socket') !== -1) ||
-                // Multiwidget socket: /multiwidget/socket
-                (url.indexOf('/multiwidget/socket') !== -1)
+                (url.indexOf('/multiwidget/socket') !== -1) ||
+                (url.indexOf('/multiwidget/') !== -1) ||
+                (url.indexOf('/multiplay/') !== -1) ||
+                (url.indexOf('multiwidget') !== -1) ||
+                (url.indexOf('multiplay') !== -1) ||
+                (url.indexOf('mwLayout') !== -1)
             );
 
             if (isBlockedSocket) {
-                var socketType = url.indexOf('/multiwidget/') !== -1 ? 'multiwidget' : 'lobby';
-                console.log('[BCR] 🚫 Blocked ' + socketType + ' WebSocket (Rust handles this):', url.substring(0, 80));
+                // 🧪 [BET-CAPTURE] 베팅 포맷 캡처 모드: sessionStorage 플래그가 켜져 있으면 멀티위젯 소켓을
+                //   '진짜'로 열되 send()를 가로채 모든 송신 프레임을 로그로 남기고, playerBetRequest(실제 베팅)는
+                //   '기록만 하고 전송 차단'한다(서버로 안 나감 = 실제 돈 안 빠짐). 캡처 끝나면 플래그 제거+리로드.
+                //   켜기(Chrome devtools): sessionStorage.setItem('__BCR_BET_CAPTURE__','1'); location.reload();
+                //   끄기: sessionStorage.removeItem('__BCR_BET_CAPTURE__'); location.reload();
+                var captureOn = false;
+                try { captureOn = (sessionStorage.getItem('__BCR_BET_CAPTURE__') === '1'); } catch (e) {}
+                if (captureOn) {
+                    try { console.log('[BCR_CAPTURE_MODE_ON]'); } catch (e) {}
+                    var realWs = protocols ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
+
+                    // 📥 수신(IN) 캡처: 베팅 수락/거절 응답 포맷을 따온다(로직에 녹이려면 reject/accept 형식이 필요).
+                    //   playerBettingState(acceptedBets/rejectedBets/HasBet) + betResponse/denied/notAuthorised 류만.
+                    try {
+                        realWs.addEventListener('message', function(ev) {
+                            try {
+                                var d = ev && ev.data;
+                                if (typeof d !== 'string') return;
+                                if (d.indexOf('layerBettingState') !== -1 || d.indexOf('cceptedBets') !== -1
+                                    || d.indexOf('ejectedBets') !== -1 || d.indexOf('etResponse') !== -1
+                                    || d.indexOf('etDenied') !== -1 || d.indexOf('otAuthor') !== -1
+                                    || d.indexOf('HasBet') !== -1) {
+                                    console.log('[BCR_RECV_FRAME] ' + (d.length > 1500 ? d.substring(0, 1500) : d));
+                                }
+                            } catch (e) {}
+                        });
+                    } catch (e) {}
+
+                    // 📤 송신(OUT) 캡처: 모든 송신 프레임 로그 + playerBetRequest 포맷 캡처.
+                    //   기본은 DROP(서버 안 감=돈 안 빠짐). __BCR_BET_SEND__=1 이면 실제 전송 →
+                    //   거절 시 무료로 reject 응답 캡처, 수락 시에만 돈 나감.
+                    var origSend = realWs.send.bind(realWs);
+                    realWs.send = function(data) {
+                        try {
+                            var s = (typeof data === 'string') ? data : ('[binary ' + (data && data.byteLength) + 'B]');
+                            console.log('[BCR_SENT_FRAME] ' + (s.length > 1500 ? s.substring(0, 1500) : s));
+                            if (typeof s === 'string' && s.indexOf('playerBetRequest') !== -1) {
+                                console.log('[BCR_BET_CAPTURED] ' + s);
+                                var doSend = false;
+                                try { doSend = (sessionStorage.getItem('__BCR_BET_SEND__') === '1'); } catch (e) {}
+                                if (!doSend) {
+                                    console.log('[BCR] 🧪 [BET-CAPTURE] playerBetRequest 캡처+DROP(돈 안 나감). 거절/수락 응답까지 보려면 sessionStorage.setItem(\'__BCR_BET_SEND__\',\'1\') 후 베팅(거절=무료, 수락=돈나감).');
+                                    return; // drop → 서버 전송 안 함
+                                }
+                                console.log('[BCR] 🧪 [BET-CAPTURE] __BCR_BET_SEND__ on → 실제 전송(거절이면 무료로 reject 캡처, 수락이면 돈 나감).');
+                            }
+                        } catch (e) {}
+                        return origSend(data);
+                    };
+                    return realWs;
+                }
+                var socketType = 'multiwidget';
+                try { console.log('[BCR_WS_CAPTURE]', JSON.stringify({ url: url, socketType: socketType, href: location.href })); } catch (e) {}
+                console.log('[BCR] Blocked ' + socketType + ' WebSocket (Rust handles this):', url.substring(0, 80));
                 return createDummyWebSocket(url);
             }
 
@@ -5028,7 +5511,7 @@ const WS_BLOCKER_SCRIPT: &str = r#"
 /// Finds Evolution Gaming tab (lobby or room) and navigates it
 #[tauri::command]
 pub async fn navigate_chrome(url: String) -> Result<(), String> {
-    info!("🌐 Navigating Chrome to: {}", url);
+    info!("🌐 Navigating Chrome (url_len={})", url.len());
 
     let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
 
@@ -5062,10 +5545,7 @@ pub async fn navigate_chrome(url: String) -> Result<(), String> {
         if let Some(ws_debugger_url) = ws_url {
             // Check if this is a room tab
             if page_url.contains("table_id=") {
-                info!(
-                    "🎰 Found existing room tab: {}",
-                    &page_url[..page_url.len().min(80)]
-                );
+                info!("🎰 Found existing room tab (url_len={})", page_url.len());
                 room_tab = Some(ws_debugger_url.to_string());
             }
             // Check if this is Evolution lobby/game page
@@ -5073,10 +5553,7 @@ pub async fn navigate_chrome(url: String) -> Result<(), String> {
                 || page_url.contains("evolutiongaming")
                 || page_url.contains("/lobby")
             {
-                info!(
-                    "🏠 Found Evolution lobby tab: {}",
-                    &page_url[..page_url.len().min(80)]
-                );
+                info!("🏠 Found Evolution lobby tab (url_len={})", page_url.len());
                 lobby_tab = Some(ws_debugger_url.to_string());
             }
             // Keep any tab as fallback
@@ -5117,20 +5594,133 @@ pub async fn navigate_chrome(url: String) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to send navigate command: {}", e))?;
 
-    info!("✅ Chrome navigated to: {}", url);
+    info!("✅ Chrome navigation completed (url_len={})", url.len());
     Ok(())
+}
+
+/// 🧪 [실험 — 라이브 검증 필수] 브라우저 로비 탭을 about:blank로 '주차'한다.
+///
+/// 목적: lobby v2는 단일 세션(EVOSESSIONID) 소켓이라, 브라우저 로비와 Rust 멀티소켓이 같은 세션을
+/// 동시에 구독하면 서버가 중복으로 보고 한쪽을 킥한다(킥 워 → 베팅 소켓이 죽음). Rust 연결 후
+/// 브라우저 로비 탭을 빈 페이지로 navigate해 '주차'(차단=0.6s 리로드 루프라 navigate 사용)하면
+/// Rust가 유일 구독자가 된다. 룸 데이터는 Rust가 lobby.subscribe로 받으므로 브라우저 로비를 비워도
+/// 무방하다는 게 설계 가정(evolution_lobby_v2_protocol) — 단 **방 목록이 유지되는지 반드시 라이브로
+/// 검증**해야 한다. 잘못되면(방 증발/리로드 루프) 호출부(useCasino)의 park 호출만 제거하면 즉시 원복.
+///
+/// 안전: 룸 탭(table_id=)·이미 about:blank·빈 URL은 절대 건드리지 않는다. 전체 page URL을 로그로 남겨
+/// 라이브에서 실제 로비 탭 URL을 확인할 수 있게 한다(휴리스틱이 못 맞히면 패턴 보강용).
+#[tauri::command]
+pub async fn park_browser_lobby() -> Result<String, String> {
+    info!("🅿️ [PARK] 브라우저 로비 주차 시도(실험 — 라이브 검증 필요)");
+
+    let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
+    let response = reqwest::get(&cdp_url)
+        .await
+        .map_err(|e| format!("CDP 연결 실패: {}", e))?;
+    let pages: Vec<serde_json::Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("CDP 응답 파싱 실패: {}", e))?;
+
+    let mut all_page_urls: Vec<String> = Vec::new();
+    let mut targets: Vec<(String, String)> = Vec::new(); // (webSocketDebuggerUrl, page_url)
+
+    for page in &pages {
+        let page_type = page.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if page_type != "page" {
+            continue;
+        }
+        let page_url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        all_page_urls.push(page_url.to_string());
+
+        // 룸 탭·이미 주차된 탭·빈 URL은 건드리지 않는다(세션/베팅 보호).
+        if page_url.contains("table_id=")
+            || page_url.is_empty()
+            || page_url.starts_with("about:blank")
+        {
+            continue;
+        }
+        // Evolution 로비/릴레이로 보이는 페이지만 주차 대상.
+        let is_lobby = page_url.contains("/frontend/evo")
+            || page_url.contains("evolutiongaming")
+            || page_url.contains("evo-games")
+            || page_url.contains("/lobby");
+        if !is_lobby {
+            continue;
+        }
+        if let Some(ws_dbg) = page.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
+            targets.push((ws_dbg.to_string(), page_url.to_string()));
+        }
+    }
+
+    info!(
+        "🅿️ [PARK] page 탭 {}개 / 주차 대상 {}개",
+        all_page_urls.len(),
+        targets.len()
+    );
+
+    if targets.is_empty() {
+        let msg = format!(
+            "주차 대상(로비 탭) 없음. 확인한 page 탭 수: {}",
+            all_page_urls.len()
+        );
+        warn!("🅿️ [PARK] {}", msg);
+        return Ok(msg);
+    }
+
+    use futures_util::SinkExt;
+    use tokio_tungstenite::connect_async;
+
+    let mut parked = 0usize;
+    for (ws_dbg, page_url) in &targets {
+        let short: String = page_url.chars().take(80).collect();
+        match connect_async(ws_dbg).await {
+            Ok((mut ws_stream, _)) => {
+                let navigate_cmd = serde_json::json!({
+                    "id": 1,
+                    "method": "Page.navigate",
+                    "params": { "url": "about:blank" }
+                });
+                match ws_stream
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        navigate_cmd.to_string(),
+                    ))
+                    .await
+                {
+                    Ok(_) => {
+                        parked += 1;
+                        info!("🅿️ [PARK] ✅ 주차됨: {}", short);
+                    }
+                    Err(e) => warn!("🅿️ [PARK] navigate 전송 실패({}): {}", short, e),
+                }
+            }
+            Err(e) => warn!("🅿️ [PARK] CDP 페이지 연결 실패({}): {}", short, e),
+        }
+    }
+
+    let msg = format!(
+        "로비 탭 {}/{}개 주차(about:blank). 라이브에서 방 목록 유지·중복세션 킥 멈춤 확인 필요.",
+        parked,
+        targets.len()
+    );
+    info!("🅿️ [PARK] {}", msg);
+    Ok(msg)
 }
 
 /// Navigate to Evolution room with game WebSocket blocked
 /// This prevents the browser from creating a conflicting game socket
 /// while Rust multiwidget socket stays connected
-/// 
+///
 /// IMPORTANT: This function NEVER touches the lobby tab to preserve session.
 /// - If a room tab exists (table_id= in URL), navigate within that tab
 /// - If no room tab exists, create a NEW window (don't touch lobby)
 #[tauri::command]
 pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Result<(), String> {
-    info!("🎰 Navigating to room with WS blocker: {}", url);
+    info!(
+        "🎰 Navigating to room with WS blocker (url_len={}, has_table_id={})",
+        url.len(),
+        url.contains("table_id=")
+    );
 
     let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
 
@@ -5159,7 +5749,7 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
         if let Some(ws_debugger_url) = ws_url {
             // Only look for existing room tabs (has table_id=)
             if page_url.contains("table_id=") {
-                info!("🎰 Found existing room tab: {}", page_url);
+                info!("🎰 Found existing room tab (url_len={})", page_url.len());
                 room_tab = Some(ws_debugger_url.to_string());
                 break;
             }
@@ -5177,7 +5767,9 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
                 lobby_ws_url
             } else {
                 // Fallback: create new window
-                info!("⚠️ No lobby tab found, creating new window (session may expire after 30min)");
+                info!(
+                    "⚠️ No lobby tab found, creating new window (session may expire after 30min)"
+                );
                 return create_new_room_tab_with_ws_block(app, url).await;
             }
         }
@@ -5288,7 +5880,6 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
         "method": "Page.addScriptToEvaluateOnNewDocument",
         "params": {
             "source": ws_blocker_script,
-            "worldName": "BCR_BLOCKER"
         }
     });
 
@@ -5356,8 +5947,8 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
         .map_err(|e| format!("Failed to reload: {}", e))?;
 
     info!(
-        "✅ Navigated to room with WS blocker (reload triggered): {}",
-        url
+        "✅ Navigated to room with WS blocker (reload triggered, url_len={})",
+        url.len()
     );
     Ok(())
 }
@@ -5367,7 +5958,10 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
 /// Uses URL-based tab detection via HTTP API: finds existing tab with table_id= in URL and navigates it
 #[tauri::command]
 pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String> {
-    info!("🌐 Opening/navigating room tab in CDP Chrome: {}", url);
+    info!(
+        "🌐 Opening/navigating room tab in CDP Chrome (url_len={})",
+        url.len()
+    );
 
     // Get list of pages via HTTP API (simpler and more reliable than WebSocket)
     let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
@@ -5393,7 +5987,7 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
 
         if page_type == "page" && page_url.contains("table_id=") {
             if let Some(ws_url) = ws_debugger_url {
-                info!("🎰 Found existing room tab: {}", page_url);
+                info!("🎰 Found existing room tab (url_len={})", page_url.len());
                 existing_room_ws_url = Some(ws_url.to_string());
                 break;
             }
@@ -5452,7 +6046,6 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
             "method": "Page.addScriptToEvaluateOnNewDocument",
             "params": {
                 "source": ws_blocker_script,
-                "worldName": "BCR_BLOCKER"
             }
         });
 
@@ -5462,7 +6055,7 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
             ))
             .await;
 
-        info!("✅ Navigated existing room tab to: {}", url);
+        info!("✅ Navigated existing room tab (url_len={})", url.len());
 
         // Notify frontend
         if let Some(main_window) = app.get_webview_window("main") {
@@ -5482,7 +6075,7 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
     // Evolution Gaming sessions expire after 30 minutes of lobby inactivity
     if let Some(lobby_ws_url) = find_lobby_tab_ws_url(&pages) {
         info!("🏠 No room tab found, navigating LOBBY tab to keep session alive");
-        
+
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::connect_async;
 
@@ -5517,7 +6110,10 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
                         .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or("Unknown");
-                    warn!("⚠️ Lobby navigation failed: {}, creating new window", message);
+                    warn!(
+                        "⚠️ Lobby navigation failed: {}, creating new window",
+                        message
+                    );
                     return create_new_room_tab_via_browser(app, url).await;
                 }
             }
@@ -5540,7 +6136,10 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
             ))
             .await;
 
-        info!("✅ Navigated LOBBY tab to room and reloaded: {}", url);
+        info!(
+            "✅ Navigated LOBBY tab to room and reloaded (url_len={})",
+            url.len()
+        );
 
         // Notify frontend
         if let Some(main_window) = app.get_webview_window("main") {
@@ -5630,19 +6229,23 @@ async fn create_new_room_tab_via_browser(app: AppHandle, url: String) -> Result<
                     // ✅ Step 2: Inject WebSocket blocker script into the new tab
                     // We need to wait a bit for the target to be available for connection
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    
-                    let target_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", CDP_PORT, target_id);
+
+                    let target_ws_url =
+                        format!("ws://127.0.0.1:{}/devtools/page/{}", CDP_PORT, target_id);
                     if let Ok((mut target_ws, _)) = connect_async(&target_ws_url).await {
                         let add_script_cmd = serde_json::json!({
                             "id": 100,
                             "method": "Page.addScriptToEvaluateOnNewDocument",
                             "params": {
                                 "source": WS_BLOCKER_SCRIPT,
-                                "worldName": "BCR_BLOCKER"
                             }
                         });
-                        let _ = target_ws.send(tokio_tungstenite::tungstenite::Message::Text(add_script_cmd.to_string())).await;
-                        
+                        let _ = target_ws
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                add_script_cmd.to_string(),
+                            ))
+                            .await;
+
                         // Also evaluate immediately in case it's already loading
                         let eval_cmd = serde_json::json!({
                             "id": 101,
@@ -5652,7 +6255,11 @@ async fn create_new_room_tab_via_browser(app: AppHandle, url: String) -> Result<
                                 "returnByValue": true
                             }
                         });
-                        let _ = target_ws.send(tokio_tungstenite::tungstenite::Message::Text(eval_cmd.to_string())).await;
+                        let _ = target_ws
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                eval_cmd.to_string(),
+                            ))
+                            .await;
                     }
                 }
             } else if let Some(error) = json.get("error") {
@@ -5738,17 +6345,21 @@ async fn create_new_room_tab_with_ws_block(app: AppHandle, url: String) -> Resul
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
                     // Inject WebSocket blocker script into the new tab
-                    let target_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", CDP_PORT, target_id);
+                    let target_ws_url =
+                        format!("ws://127.0.0.1:{}/devtools/page/{}", CDP_PORT, target_id);
                     if let Ok((mut target_ws, _)) = connect_async(&target_ws_url).await {
                         let add_script_cmd = serde_json::json!({
                             "id": 100,
                             "method": "Page.addScriptToEvaluateOnNewDocument",
                             "params": {
                                 "source": WS_BLOCKER_SCRIPT,
-                                "worldName": "BCR_BLOCKER"
                             }
                         });
-                        let _ = target_ws.send(tokio_tungstenite::tungstenite::Message::Text(add_script_cmd.to_string())).await;
+                        let _ = target_ws
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                add_script_cmd.to_string(),
+                            ))
+                            .await;
 
                         // Also evaluate immediately in case it's already loading
                         let eval_cmd = serde_json::json!({
@@ -5759,8 +6370,12 @@ async fn create_new_room_tab_with_ws_block(app: AppHandle, url: String) -> Resul
                                 "returnByValue": true
                             }
                         });
-                        let _ = target_ws.send(tokio_tungstenite::tungstenite::Message::Text(eval_cmd.to_string())).await;
-                        
+                        let _ = target_ws
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                eval_cmd.to_string(),
+                            ))
+                            .await;
+
                         info!("✅ WebSocket blocker injected into new room window");
                     }
                 }
@@ -5807,7 +6422,11 @@ pub async fn refresh_lobby_page() -> Result<bool, String> {
         // Check if this is an Evolution lobby page
         if let Some(ws_debugger_url) = ws_url {
             if is_evolution_lobby_url(page_url) {
-                info!("🏛️ Found lobby page: {} ({})", page_id, page_url);
+                info!(
+                    "🏛️ Found lobby page: {} (url_len={})",
+                    page_id,
+                    page_url.len()
+                );
 
                 // Connect and reload
                 use futures_util::SinkExt;
@@ -5840,6 +6459,95 @@ pub async fn refresh_lobby_page() -> Result<bool, String> {
     }
 
     warn!("⚠️ Lobby page not found in CDP targets");
+    Ok(false)
+}
+
+/// 중계사이트의 "게임입장 에볼루션" 요소를 CDP로 클릭해 **새 EVOSESSIONID**를 발급받는다.
+///
+/// EVOSESSIONID는 카지노/중계사이트가 발급하는 ~10분 수명 쿠키다. 만료되면 브라우저+Rust 둘 다
+/// connection.kickout(inactivity) 당하고, 같은 세션 재연결/단순 reload는 같은 토큰을 재사용해
+/// 즉시 또 킥된다(라이브 확인). 반면 중계사이트의 게임입장 버튼을 다시 누르면 **새 세션이 발급됨**을
+/// 라이브로 확인했다(s3k2ju… → subde2…). 그래서 만료 직전(~8.5분)에 이걸 눌러 세션을 선제 회전시킨다.
+/// 이후 restart_cdp_monitoring으로 CDP가 새 세션의 lobby v2 소켓을 재캡처 → Rust 재연결.
+#[tauri::command]
+pub async fn click_evolution_launch() -> Result<bool, String> {
+    info!("🎰 [SESSION-ROTATE] Clicking '게임입장 에볼루션' on relay site for a fresh EVOSESSIONID...");
+    let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
+    let pages: Vec<serde_json::Value> = reqwest::get(&cdp_url)
+        .await
+        .map_err(|e| format!("Failed to connect to CDP: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse CDP response: {}", e))?;
+
+    // 가장 구체적인(텍스트 짧은) "게임입장 … 에볼루션" 요소를 찾아 클릭.
+    // ⚠️ 중계사이트 런처 버튼이 iframe 안에 있는 경우가 있어 top document만 훑으면 NONE이 떠
+    //    세션 회전이 통째로 실패한다. 그래서 findIn()이 (1) top document를 보고, (2) 같은 출처
+    //    중첩 iframe(contentDocument 접근 가능)을 재귀로 들어간다. 교차 출처 OOPIF는 별도 CDP
+    //    타깃(type:"iframe")으로 분리되므로 아래 루프에서 type을 "page"+"iframe" 둘 다 받아 커버한다.
+    let click_js = r#"(function(){function findIn(doc){try{var a=[].slice.call(doc.querySelectorAll('div,a,button,span,li,p'));var c=a.filter(function(e){var t=(e.innerText||e.textContent||'').replace(/\s+/g,'');return t.indexOf('게임입장')>=0&&t.indexOf('에볼루션')>=0;});c.sort(function(x,y){return (x.innerText||x.textContent||'').length-(y.innerText||y.textContent||'').length;});if(c.length){c[0].click();return true;}}catch(e){}try{var fr=[].slice.call(doc.querySelectorAll('iframe'));for(var i=0;i<fr.length;i++){try{var d=fr[i].contentDocument;if(d&&findIn(d))return true;}catch(e){}}}catch(e){}return false;}return findIn(document)?'CLICKED':'NONE';})()"#;
+
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::connect_async;
+
+    for page in pages {
+        // type:"page"(메인 탭)과 type:"iframe"(교차 출처 OOPIF로 분리된 프레임)을 모두 받는다.
+        // 중계사이트 런처가 OOPIF 안에 있으면 별도 타깃으로만 노출되므로 page만 보면 놓친다.
+        let ptype = page.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if ptype != "page" && ptype != "iframe" {
+            continue;
+        }
+        let url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        // evo 게임 페이지는 건너뛴다(런처 버튼은 중계사이트 페이지에 있음).
+        if url.contains("evo-games") {
+            continue;
+        }
+        let ws = match page.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
+            Some(w) => w,
+            None => continue,
+        };
+        let (mut stream, _) = match connect_async(ws).await {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let cmd = serde_json::json!({
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": { "expression": click_js, "returnByValue": true }
+        });
+        if stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                cmd.to_string(),
+            ))
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        // 결과(id:1) 메시지를 몇 개 안에서 찾는다.
+        for _ in 0..5 {
+            match tokio::time::timeout(std::time::Duration::from_secs(3), stream.next()).await {
+                Ok(Some(Ok(msg))) => {
+                    let txt = msg.to_string();
+                    if txt.contains("CLICKED") {
+                        info!(
+                            "🎰 [SESSION-ROTATE] ✅ Clicked launch on relay page (url_len={})",
+                            url.len()
+                        );
+                        let _ = stream.close(None).await;
+                        return Ok(true);
+                    }
+                    if txt.contains("\"NONE\"") {
+                        break; // 이 페이지엔 요소 없음 → 다음 페이지
+                    }
+                }
+                _ => break,
+            }
+        }
+        let _ = stream.close(None).await;
+    }
+
+    warn!("🎰 [SESSION-ROTATE] ⚠️ '게임입장 에볼루션' element not found on any page");
     Ok(false)
 }
 
@@ -5878,11 +6586,11 @@ pub async fn navigate_to_evolution_lobby() -> Result<bool, String> {
         }
 
         if let Some(ws_debugger_url) = ws_url {
-            info!("🎰 Found Evolution room tab: {}", &page_url[..page_url.len().min(80)]);
+            info!("🎰 Found Evolution room tab (url_len={})", page_url.len());
 
             // Generate lobby URL by removing table_id from current URL
             let lobby_url = generate_lobby_url(page_url);
-            info!("🏠 Navigating to lobby URL: {}", &lobby_url[..lobby_url.len().min(80)]);
+            info!("🏠 Navigating to lobby URL (url_len={})", lobby_url.len());
 
             // Connect and navigate
             use futures_util::{SinkExt, StreamExt};
@@ -5911,7 +6619,10 @@ pub async fn navigate_to_evolution_lobby() -> Result<bool, String> {
             // Wait for navigation response
             if let Some(Ok(msg)) = ws_stream.next().await {
                 if let tokio_tungstenite::tungstenite::Message::Text(response) = msg {
-                    info!("📜 Navigation response: {}", &response[..response.len().min(100)]);
+                    info!(
+                        "📜 Navigation response: {}",
+                        &response[..response.len().min(100)]
+                    );
                 }
             }
 
@@ -6082,8 +6793,9 @@ pub async fn connect_multiwidget_manual(
     mwg_params: Option<String>,
 ) -> Result<(), String> {
     info!(
-        "📡 Manual multiwidget connection requested: {}",
-        &ws_url[..ws_url.len().min(100)]
+        "📡 Manual multiwidget connection requested (url_len={}, has_session_query={})",
+        ws_url.len(),
+        ws_url.to_ascii_lowercase().contains("evosessionid=")
     );
 
     let mut client = MULTIWIDGET_CLIENT.lock().await;
@@ -6112,5 +6824,21 @@ pub async fn connect_multiwidget_manual(
             MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod session_rotation_tests {
+    use super::*;
+
+    #[test]
+    fn atomic_flag_allows_only_one_rotation_and_releases_on_drop() {
+        let flag = AtomicBool::new(false);
+
+        let first = try_acquire_atomic_flag(&flag).expect("first rotation should acquire the flag");
+        assert!(try_acquire_atomic_flag(&flag).is_none());
+
+        drop(first);
+        assert!(try_acquire_atomic_flag(&flag).is_some());
     }
 }

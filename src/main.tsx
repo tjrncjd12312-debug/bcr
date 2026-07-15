@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import './styles/visual-refresh.css'
 import { setupContainer } from './application/di'
 import { ErrorProvider, DIProvider } from './presentation/context'
 import { ErrorBoundary } from './presentation/components/ErrorBoundary/ErrorBoundary'

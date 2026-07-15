@@ -3,13 +3,8 @@
 //! V2 API를 사용하는 예측 저장소
 
 use crate::data::datasources::{
-    LocalStorage,
-    PredictionApi,
-    PredictionApiConfig,
-    RoomSelectionRequest,
-    RoomSelectionResponse,
-    V2PredictionRequest,
-    V2PredictionResponse,
+    LocalStorage, PredictionApi, PredictionApiConfig, RoomSelectionRequest, RoomSelectionResponse,
+    V2PredictionRequest, V2PredictionResponse,
 };
 use crate::domain::entities::{
     GameResult, PredictionRequest, PredictionResponse, PredictionStatus, RoomPrediction,

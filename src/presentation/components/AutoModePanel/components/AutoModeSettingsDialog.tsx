@@ -5,6 +5,7 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import type { BetStrategyType } from '../../../../domain/entities'
+import type { CustomStrategyDefinitionV1 } from '../../../../domain/strategies/customStrategy'
 import type { AutoModeSettings } from '../../../../application/services/AutoModeService'
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
@@ -19,13 +20,13 @@ const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: strin
   { value: 'flat', label: '플랫', desc: '고정 금액 유지' },
   { value: 'fibonacci', label: '피보나치', desc: '피보나치 수열' },
   { value: 'paroli', label: '파롤리', desc: '승리시 2배 증가' },
-  { value: 'custom', label: '커스텀', desc: '단계별 직접 설정' },
+  { value: 'custom', label: '단계별 금액', desc: '기본 단계 금액 직접 설정' },
 ]
 
 const TABS: SettingsTabDef<SettingsTab>[] = [
   { value: 'general', label: '일반' },
   { value: 'safety', label: '안전 장치' },
-  { value: 'strategy', label: '배팅 전략' },
+  { value: 'strategy', label: '기본 배팅 전략' },
 ]
 
 interface AutoModeSettingsDialogProps {
@@ -38,6 +39,8 @@ interface AutoModeSettingsDialogProps {
   totalLosses: number
   cumulativeProfit: number
   realBalance: number | null
+  activeStructuredStrategy?: CustomStrategyDefinitionV1 | null
+  onOpenStrategyBuilder?: () => void
 }
 
 export function AutoModeSettingsDialog({
@@ -50,6 +53,8 @@ export function AutoModeSettingsDialog({
   totalLosses,
   cumulativeProfit,
   realBalance,
+  activeStructuredStrategy = null,
+  onOpenStrategyBuilder,
 }: AutoModeSettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
 
@@ -255,9 +260,37 @@ export function AutoModeSettingsDialog({
       {/* ========== Tab: 배팅 전략 ========== */}
       {activeTab === 'strategy' && (
         <>
+          {activeStructuredStrategy && (
+            <div className="ams-strategy-owner" role="status">
+              <div>
+                <span className="ams-strategy-owner__eyebrow">현재 실행 기준</span>
+                <strong>{activeStructuredStrategy.name}</strong>
+                <p>
+                  이 조건 전략이 배팅 방향, 단계, 각 단계의 1차·2차 금액을 직접 관리합니다.
+                  아래 기본 배팅 전략은 중복 적용되지 않고 저장 상태로만 유지됩니다.
+                </p>
+              </div>
+              {onOpenStrategyBuilder && (
+                <button type="button" onClick={onOpenStrategyBuilder}>
+                  조건 전략 편집
+                </button>
+              )}
+            </div>
+          )}
+
+          <fieldset
+            className="ams-strategy-fieldset"
+            disabled={Boolean(activeStructuredStrategy)}
+            aria-describedby={activeStructuredStrategy ? 'ams-structured-strategy-note' : undefined}
+          >
+            {activeStructuredStrategy && (
+              <p id="ams-structured-strategy-note" className="ams-strategy-fieldset__note">
+                조건 전략을 해제하면 아래 설정이 다시 실행 기준이 됩니다.
+              </p>
+            )}
           {/* 배팅 전략 선택 */}
           <div className="ams-section">
-            <div className="ams-section-title">배팅 전략</div>
+            <div className="ams-section-title">기본 배팅 전략</div>
             <div className="ams-strategy-grid">
               {BET_STRATEGY_OPTIONS.map(opt => (
                 <button
@@ -355,6 +388,7 @@ export function AutoModeSettingsDialog({
               </div>
             </div>
           </div>
+          </fieldset>
 
           <div className="ams-section">
             <div className="ams-section-title">동시 배팅 제한</div>

@@ -44,7 +44,7 @@ export function WatchView({
     <AppShell
       backLabel="홈"
       onBack={onHome}
-      breadcrumb="살펴보기 › 방 목록"
+      breadcrumb="예측 보기 › 방 목록"
       connection={connection}
       freshness={freshness}
     >

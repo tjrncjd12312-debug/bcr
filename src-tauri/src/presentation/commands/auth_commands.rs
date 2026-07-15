@@ -80,7 +80,10 @@ pub async fn login(
                 // ✅ Security: 사용 시간 만료 체크 (remaining_seconds가 0 이하면 로그인 거부)
                 let remaining = login_response.remaining_seconds.unwrap_or(0);
                 if remaining <= 0 {
-                    info!("❌ Login rejected: 사용 시간 만료 (remaining_seconds: {})", remaining);
+                    info!(
+                        "❌ Login rejected: 사용 시간 만료 (remaining_seconds: {})",
+                        remaining
+                    );
                     return Ok(LoginResult {
                         success: false,
                         message: "사용 시간이 만료되었습니다. 관리자에게 문의하세요.".to_string(),

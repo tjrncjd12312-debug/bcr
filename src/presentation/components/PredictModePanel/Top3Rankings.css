@@ -257,25 +257,25 @@
   color: #b0b8c1;
 }
 
-/* Rank 4 — Purple (No Commission variant) */
+/* Rank 4 — Info cyan (No Commission variant) */
 .top3-card--rank4 {
   background: var(--bg-card);
-  border: 1px solid rgba(139, 92, 246, 0.4);
+  border: 1px solid rgba(86, 199, 255, 0.45);
 }
 
 .top3-card--rank4:hover {
-  border-color: var(--accent-purple);
-  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.25);
+  border-color: var(--status-info);
+  box-shadow: none;
 }
 
 .top3-card--rank4 .top3-card__rank {
-  background: linear-gradient(135deg, var(--accent-purple) 0%, #6d28d9 100%);
-  color: #ffffff;
-  box-shadow: 0 2px 6px rgba(139, 92, 246, 0.4);
+  background: var(--status-info);
+  color: #07131a;
+  box-shadow: none;
 }
 
 .top3-card--rank4 .top3-card__recent {
-  color: #b794f6;
+  color: var(--status-info);
 }
 
 /* Rank 5 — Emerald */

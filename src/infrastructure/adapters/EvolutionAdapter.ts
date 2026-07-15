@@ -20,6 +20,7 @@ import type {
   BettingPhaseEvent,
   GamePhase,
   BetType,
+  BetOutcome,
   TableBettingConfig,
   EvolutionBetPayload,
 } from '../../domain/entities'
@@ -179,6 +180,29 @@ type ShoeChangeCallback = (roomId: string, koreanName: string) => void
 type BalanceUpdateCallback = (balance: number) => void
 type TableConfigUpdateCallback = (config: Partial<TableBettingConfig>) => void
 
+export interface BetPlacementConfirmation {
+  tableId: string
+  gameId?: string
+  betType?: BetType
+  amount?: number
+  status: 'accepted' | 'rejected' | 'unknown'
+  accepted: boolean
+  rejected: boolean
+  error?: string
+  source: 'playerBettingState' | 'playerBetResponse' | 'resolved' | 'timeout' | 'disconnect' | 'dispose'
+}
+
+interface BetConfirmationWaiter {
+  tableId: string
+  gameId?: string
+  betType: BetType
+  amount: number
+  timeoutId: ReturnType<typeof setTimeout>
+  resolve: (confirmation: BetPlacementConfirmation) => void
+}
+
+type BetPlacementConfirmationCallback = (confirmation: BetPlacementConfirmation) => void
+
 // ==================== Adapter Implementation ====================
 class EvolutionAdapterImpl implements ICasinoAdapter {
   readonly name = 'Evolution Gaming'
@@ -194,6 +218,8 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
   private shoeChangeCallbacks: ShoeChangeCallback[] = []
   private balanceUpdateCallbacks: BalanceUpdateCallback[] = []
   private tableConfigCallbacks: TableConfigUpdateCallback[] = []
+  private betPlacementConfirmationCallbacks: BetPlacementConfirmationCallback[] = []
+  private betConfirmationWaiters: BetConfirmationWaiter[] = []
 
   // State
   private rooms: Map<string, Room> = new Map()
@@ -216,12 +242,17 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
   /** Last bet gameId per table to prevent duplicate bets (Map<tableId, gameId>) */
   private lastBetGameIds: Map<string, string> = new Map()
   private lastHistoryLengths: Map<string, number> = new Map() // 방별 마지막 히스토리 길이 (중복/슈체인지 감지)
+  private longShoeWarned: Set<string> = new Set() // [진단] 히스토리가 정상 슈 길이를 초과(누적 의심)했다고 한 번 경고한 방
   private lastEmittedResults: Map<string, { winner: Winner; timestamp: number; historyLength: number }> = new Map() // 방별 마지막 emit된 결과 (최종 중복 방지)
   private lastProcessedGameIds: Map<string, string> = new Map() // 방별 마지막 처리된 gameId (중복 결과 방지)
   /** v2 lobby.historyUpdated의 results 형식(c:"R"/"B")으로 '바카라'임이 입증된 테이블 ID.
    *  암호 ID(예: tzxd9y6k1sqqqztk)는 이름 패턴 필터(shouldIncludeRoom)를 통과 못하므로,
    *  데이터로 바카라가 확인되면 이 Set에 넣어 방 생성 필터를 우회한다(전체 바카라 멀티방 표시). */
   private v2BaccaratTables: Set<string> = new Set()
+
+  /** lobby.configs(lobby v2)에서 받은 테이블 메타: tableId → {title(한글명), gt(게임타입)}.
+   *  lobby.categories의 평문 ID 목록에 한글명을 붙이고 바카라 여부를 판별하는 데 쓴다. */
+  private tableMeta: Map<string, { title?: string; gt?: string }> = new Map()
 
   // 🔥 Room update 렉 방지용 타이머
   private roomUpdateTimer: ReturnType<typeof setTimeout> | null = null
@@ -247,6 +278,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     this.tableConfigs.clear()
     this.tableCurrencies.clear()
     this.capturedTables.clear()
+    this.clearBetConfirmationWaiters('Evolution 연결이 종료되어 체결 여부를 확인할 수 없습니다', 'disconnect')
     // 🔥 타이머 초기화 (렉 방지)
     if (this.roomUpdateTimer) {
       clearTimeout(this.roomUpdateTimer)
@@ -291,6 +323,8 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     this.shoeChangeCallbacks = []
     this.balanceUpdateCallbacks = []
     this.tableConfigCallbacks = []
+    this.betPlacementConfirmationCallbacks = []
+    this.clearBetConfirmationWaiters('Evolution 어댑터가 종료되어 체결 여부를 확인할 수 없습니다', 'dispose')
 
     // 5. 기본값으로 초기화
     this.currencyCode = 'KRW'
@@ -342,6 +376,33 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     try {
       const data = JSON.parse(raw)
       const msgType = (data.type as string) || ''
+
+      // 💰 실시간 잔액 (라이브 확인 2026-06-02): 중계사이트 소켓(wss://hl-101.com/ws)이 보내는
+      //   {"type":"balance","total":N,"local":N,"game":N,"breakdown":{"hl","cs","mega"}}
+      // Playwright로 실제 캡처해 확인한 형식. 이 프레임은 기존 Evolution forward 필터에 안 걸려
+      // 프론트로 오지 못했고(=자동 실배팅 시 realBalance 안 오르던 근본 원인), Rust CDP에서
+      // evolution_multi_event로 forward하도록 고쳤다. 여기서 잔액을 '동적으로' 추출한다 —
+      // game(게임 내 베팅 잔액) 우선, 없으면 total. 특정 테이블/필드경로 하드코딩 없음.
+      if (msgType === 'balance') {
+        const b = data as Record<string, unknown>
+        const bal = typeof b.game === 'number' ? b.game
+          : typeof b.total === 'number' ? b.total
+            : null
+        if (typeof bal === 'number' && bal !== this.lastBalance) {
+          this.lastBalance = bal
+          this.emitBalanceUpdate(bal)
+        }
+        return { type: 'balance', data }
+      }
+
+      // 🔬 [BET-DIAG] 임시 진단(2026-06-02): 실배팅 후 Evolution의 반응(수락/거부/에러)을 확인해
+      // "실배팅이 실제로 안 되는" 원인을 확정한다. 실배팅 1회 후 devtools 콘솔 'BET-DIAG'로 본다.
+      //  - 거부/에러가 보이면 → 그 사유(gameId/채널/포맷)에 맞춰 고친다.
+      //  - 아무 반응도 없으면 → lobby v2 소켓이 betting 채널이 아닐 가능성(전송돼도 무시).
+      // (확정 후 이 블록과 AutoBettingService의 [BET-DIAG]는 제거)
+      if (/playerbet|betsaccept|betsreject|betresponse|notauthor|notaccept|insufficient|betdenied|"error"/i.test(raw)) {
+        console.log(`[BET-DIAG] Evo resp/err: type="${msgType}" | ${raw.slice(0, 400)}`)
+      }
 
       // Direct log payloads (CLIENT_BET_CHIP / Undo etc.) from multi-socket
       if (data.log && typeof data.log.type === 'string') {
@@ -461,9 +522,17 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       }
 
       // betting stats / player betting state → phase update
-      if ((msgType === 'baccarat.bettingStats' || msgType === 'baccarat.playerBettingState') && data.args) {
-        this.handleBettingState(data.args)
+      if ((msgType === 'baccarat.bettingStats' || msgType === 'baccarat.playerBettingState' || msgType === 'baccarat.playerBetResponse') && data.args) {
+        this.handleBettingState(data.args, msgType)
         return { type: msgType, data: data.args }
+      }
+
+      // lobby.configs (lobby v2) - 테이블 메타데이터(한글명 title, 게임타입 gt). 방 이름/필터 소스.
+      // 라이브 캡처(2026-06-10)로 확인: args.configs = { <tableId>: { gt:"baccarat", title:"코리안 스피드 바카라 B", ... } }
+      // lobby.categories는 ID만 주므로, 여기서 한글명을 캐시해 두고 방 생성 시 갖다 쓴다.
+      if (msgType === 'lobby.configs' && data.args?.configs) {
+        this.handleLobbyConfigs(data.args.configs as Record<string, { title?: string; gt?: string }>)
+        return { type: 'lobby.configs', data: data.args }
       }
 
       // lobby.categories - 방 목록
@@ -509,36 +578,52 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
   }
 
   // ==================== Lobby Categories ====================
-  private handleLobbyCategories(categories: Array<{ id: string; tables?: string[] }>): void {
+  /** lobby.configs 처리: 테이블 메타(한글명 title / 게임타입 gt)를 캐시한다. 방 생성은 lobby.categories에서. */
+  private handleLobbyConfigs(configs: Record<string, { title?: string; gt?: string }>): void {
+    if (!configs || typeof configs !== 'object') return
+    for (const [tableId, cfg] of Object.entries(configs)) {
+      if (!cfg || typeof cfg !== 'object') continue
+      this.tableMeta.set(tableId, { title: cfg.title, gt: cfg.gt })
+    }
+  }
+
+  private handleLobbyCategories(categories: Array<{ id?: string; tables?: unknown }>): void {
     const updatedRooms: Room[] = []
 
     categories.forEach((category) => {
-      if (category.id?.includes('baccarat') && category.tables) {
-        category.tables.forEach((tableStr: string) => {
-          const parts = tableStr.split(':')
-          if (parts.length >= 2) {
-            const tableId = parts[0]
-            const tableName = parts.slice(1).join(':')
+      // 🔧 [LOBBY-V2 2026-06-10] lobby v2: 'baccarat' 카테고리에 전체 바카라 테이블 ID가
+      // **평문 문자열 배열**로 온다(예: "onokyd4wn7uekbjx"). 일부는 합성 콜론 ID
+      // (예: "KoPTBaccarat0001:swkbnct6r3nqifjf")인데 ROOM_MAPPING 키와 동일하게 **전체가 tableId**다.
+      // 구버전은 "id:name" 형태였는데, split(':') 후 length>=2만 받던 옛 코드가 평문 ID 94/98개를
+      // 통째로 버려서 "방 1개만" 떴다. 이제 콜론 분리 없이 entry 전체를 tableId로 쓰고, 한글명은
+      // lobby.configs(tableMeta) → ROOM_MAPPING 순으로 붙인다.
+      if (!category?.id?.includes('baccarat') || !Array.isArray(category.tables)) return
 
-            // 동적 필터링: 라이트닝/살롱/RNG 제외, 바카라만 포함
-            if (!shouldIncludeRoom(tableId, tableName)) return
+      category.tables.forEach((entry) => {
+        if (typeof entry !== 'string' || !entry) return
+        const tableId = entry
+        const koreanName = ROOM_MAPPING[tableId] || this.tableMeta.get(tableId)?.title
 
-            // 한글명 매핑 (있으면 사용, 없으면 원본 이름 사용)
-            const koreanName = ROOM_MAPPING[tableId] || tableName
+        // 이름을 아는 경우에만 라이트닝/살롱/RNG 제외 필터를 적용한다(이름 없으면 카테고리 멤버십을
+        // 신뢰해 포함 — 암호 ID 전체 바카라 표시). v2BaccaratTables에 넣어 ensureRoom의 이름필터도 우회.
+        if (koreanName && !shouldIncludeRoom(tableId, koreanName)) return
+        this.v2BaccaratTables.add(tableId)
 
-            const existing = this.rooms.get(tableId)
-            const room: Room = {
-              id: tableId,
-              name: tableName || existing?.name || tableId,
-              koreanName,
-              history: existing?.history || [],
-              gameCount: existing?.gameCount || 0,
-            }
-            this.rooms.set(tableId, room)
-            updatedRooms.push(room)
-          }
-        })
-      }
+        const existing = this.rooms.get(tableId)
+        const displayName = koreanName || existing?.koreanName || tableId
+        const room: Room = {
+          id: tableId,
+          name: existing?.name || displayName,
+          koreanName: displayName,
+          history: existing?.history || [],
+          gameCount: existing?.gameCount || 0,
+        }
+        this.rooms.set(tableId, room)
+        // 테이블별 기본 설정/통화 초기화(배팅 블로킹 방지) — ensureRoom과 동일 규칙.
+        if (!this.tableConfigs.has(tableId)) this.tableConfigs.set(tableId, { ...this.tableConfig })
+        if (!this.tableCurrencies.has(tableId)) this.tableCurrencies.set(tableId, this.currencyCode)
+        updatedRooms.push(room)
+      })
     })
 
     if (updatedRooms.length > 0) {
@@ -782,6 +867,16 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const tableId = (args as any)?.tableId as string | undefined
     if (!tableId) return
 
+    // 🔧 [GAMEID-FIX 2026-06-10] 실시간 gameId 추적: 멀티테이블 모드에서는 newGame/gameState 프레임이
+    // 오지 않고 gameId가 오직 baccarat.tableState.currentGame.gameId 로만 온다(라이브 덤프 확인).
+    // 여기서 안 잡으면 getCurrentGameId()=null → ensureGameId()가 synthetic-… 을 만들고, 실배팅이 그
+    // stale/synthetic gameId로 나가 Evolution이 칩만 받고 '잘못된'(현재 라운드 불일치)으로 무효 처리한다
+    // → "돈은 나가는데 잘못됨"의 근본 원인(사용자 라이브 2026-06-10). 매 tableState마다 최신값으로 갱신.
+    const currentGameId = (args as any)?.currentGame?.gameId as string | undefined
+    if (currentGameId && typeof currentGameId === 'string' && !currentGameId.startsWith('synthetic-')) {
+      this.currentGameIds.set(tableId, currentGameId)
+    }
+
     const tableName = (args as any)?.tableName as string | undefined
 
     // Try multiple possible paths for time remaining and betting status
@@ -940,10 +1035,20 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const isInitialized = this.initializedRooms.has(tableId)
 
     // 🔥 슈 체인지 감지: 히스토리 길이가 줄어들면 새 슈 시작
+    const prevLen = room.history?.length ?? 0
     if (isInitialized && room.history && parsedHistory.length < room.history.length) {
+      // [진단] 슈 체인지가 실제로 감지될 때 — 이게 찍혀야 빠진 방이 재진입한다.
+      console.log(`[SHOE] 🔄 슈 체인지 감지 ${koreanName}(${tableId}): ${prevLen} → ${parsedHistory.length}`)
+      this.longShoeWarned.delete(tableId)
       this.initializedRooms.delete(tableId)
       this.lastHistoryLengths.delete(tableId)
       this.emitShoeChange(tableId, koreanName)
+    } else if (isInitialized && parsedHistory.length > 90 && !this.longShoeWarned.has(tableId)) {
+      // [진단] 정상 바카라 슈는 ~60-80판. 90을 넘는데도 리셋이 안 됐다면 히스토리가
+      // 슈별로 리셋되지 않고 누적/롤링되는 것 → "히스토리 길이 감소" 기반 슈 감지가 영영
+      // 안 떠서 한번 빠진 방이 재진입 못 하는 원인. 방당 한 번만 경고.
+      this.longShoeWarned.add(tableId)
+      console.warn(`[SHOE] ⚠️ ${koreanName}(${tableId}) 히스토리 길이=${parsedHistory.length} — 슈 리셋이 안 됨(누적 의심). 슈 경계 감지 실패 가능성.`)
     }
 
     // 변경 없으면 불필요한 emit 건너뛴다
@@ -1168,6 +1273,24 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
         this.emitRoomUpdate(Array.from(this.rooms.values()))
         this.emitHistoryUpdate(tableId, history)
 
+        // 🎯 실배팅 체결결과 추출(2026-06-23, baccarat.resolved): 내 베팅이 수락(acceptedBets)/거절
+        // (rejectedBets, 예 error '1013'=최소금액 미달)됐는지를 정산에 전달한다. gameState에는 bets가
+        // 없으므로 betOutcome=undefined → AutoMode는 기존 히스토리 추론으로 폴백.
+        const betsRaw = (args as any)?.bets as Record<string, unknown> | undefined
+        const winningSpotsRaw = (args as any)?.winningSpots
+        const betOutcome = (betsRaw || Array.isArray(winningSpotsRaw))
+          ? {
+              gameId,
+              winningSpots: Array.isArray(winningSpotsRaw) ? (winningSpotsRaw as string[]) : undefined,
+              acceptedBets: betsRaw?.acceptedBets as Record<string, number> | undefined,
+              rejectedBets: betsRaw?.rejectedBets as Record<string, { amount?: number; error?: string }> | undefined,
+            }
+          : undefined
+        const placementConfirmations = betOutcome
+          ? this.extractResolvedBetPlacementConfirmations(tableId, betOutcome)
+          : []
+        placementConfirmations.forEach(confirmation => this.emitBetPlacementConfirmation(confirmation))
+
         // 🔥 GameResult emit (AutoMode, SemiAuto 등에서 사용)
         this.emitGameResult({
           roomId: tableId,
@@ -1176,6 +1299,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
           isBankerPair: parsed.isBankerPair,
           playerScore: parsed.playerScore,
           bankerScore: parsed.bankerScore,
+          betOutcome,
         })
 
         // 🔥 다음 라운드 예측 트리거
@@ -1351,9 +1475,153 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     }
   }
 
-  private handleBettingState(args: Record<string, unknown>): void {
+  private extractBetPlacementConfirmations(
+    args: Record<string, unknown>,
+    source: 'playerBettingState' | 'playerBetResponse',
+  ): BetPlacementConfirmation[] {
+    const tableId = (args as any)?.tableId as string | undefined
+    if (!tableId) return []
+
+    const gameId = ((args as any)?.gameId || (args as any)?.currentGame?.gameId) as string | undefined
+    const nestedState = (args as any)?.state
+    const betsRaw = ((args as any)?.bets && typeof (args as any).bets === 'object')
+      ? (args as any).bets as Record<string, unknown>
+      : (nestedState && typeof nestedState === 'object')
+        ? nestedState as Record<string, unknown>
+        : args
+    const acceptedBets = this.asBetAmountRecord((betsRaw as any)?.acceptedBets)
+    const currentChips = this.asBetAmountRecord((betsRaw as any)?.currentChips)
+    const rejectedBets = (betsRaw as any)?.rejectedBets as Record<string, unknown> | undefined
+    const confirmations: BetPlacementConfirmation[] = []
+
+    Object.entries(rejectedBets || {}).forEach(([spot, rejected]) => {
+      const rejectedInfo = typeof rejected === 'object' && rejected !== null
+        ? rejected as { amount?: number; error?: string }
+        : {}
+      confirmations.push({
+        tableId,
+        gameId,
+        betType: this.spotToBetType(spot),
+        amount: this.numberFromUnknown(rejected),
+        status: 'rejected',
+        accepted: false,
+        rejected: true,
+        error: rejectedInfo.error || 'Evolution rejected bet',
+        source,
+      })
+    })
+
+    const acceptedSpots = new Set([...Object.keys(acceptedBets), ...Object.keys(currentChips)])
+    acceptedSpots.forEach(spot => {
+      if (rejectedBets && Object.prototype.hasOwnProperty.call(rejectedBets, spot)) return
+      const acceptedAmount = acceptedBets[spot]
+      const amount = acceptedAmount && acceptedAmount > 0 ? acceptedAmount : currentChips[spot]
+      if (!(amount > 0)) return
+      confirmations.push({
+        tableId,
+        gameId,
+        betType: this.spotToBetType(spot),
+        amount,
+        status: 'accepted',
+        accepted: true,
+        rejected: false,
+        source,
+      })
+    })
+
+    // Parse these live fields as corroborating state, but do not use them to
+    // satisfy an exact waiter without a spot. They cannot identify betType.
+    const totalAmount = this.numberFromUnknown((betsRaw as any)?.totalAmount)
+    const hasBet = (betsRaw as any)?.HasBet === true || (betsRaw as any)?.hasBet === true
+    if (confirmations.length === 0 && (hasBet || (typeof totalAmount === 'number' && totalAmount > 0))) {
+      confirmations.push({
+        tableId,
+        gameId,
+        amount: totalAmount,
+        status: 'accepted',
+        accepted: true,
+        rejected: false,
+        source,
+      })
+    }
+
+    return confirmations
+  }
+
+  private extractResolvedBetPlacementConfirmations(tableId: string, betOutcome: BetOutcome): BetPlacementConfirmation[] {
+    const confirmations: BetPlacementConfirmation[] = []
+    Object.entries(betOutcome.rejectedBets || {}).forEach(([spot, rejectedInfo]) => {
+      confirmations.push({
+        tableId,
+        gameId: betOutcome.gameId,
+        betType: this.spotToBetType(spot),
+        amount: rejectedInfo?.amount,
+        status: 'rejected',
+        accepted: false,
+        rejected: true,
+        error: rejectedInfo?.error || 'Evolution rejected bet',
+        source: 'resolved',
+      })
+    })
+
+    const acceptedBets = this.asBetAmountRecord(betOutcome.acceptedBets)
+    Object.entries(acceptedBets).forEach(([spot, amount]) => {
+      if (!(amount > 0)) return
+      confirmations.push({
+        tableId,
+        gameId: betOutcome.gameId,
+        betType: this.spotToBetType(spot),
+        amount,
+        status: 'accepted',
+        accepted: true,
+        rejected: false,
+        source: 'resolved',
+      })
+    })
+    return confirmations
+  }
+
+  private asBetAmountRecord(value: unknown): Record<string, number> {
+    if (!value || typeof value !== 'object') return {}
+    const record: Record<string, number> = {}
+    Object.entries(value as Record<string, unknown>).forEach(([spot, raw]) => {
+      const amount = this.numberFromUnknown(raw)
+      if (typeof amount === 'number') record[spot] = amount
+    })
+    return record
+  }
+
+  private numberFromUnknown(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string') {
+      const parsed = Number(value.replace(/,/g, ''))
+      return Number.isFinite(parsed) ? parsed : undefined
+    }
+    if (value && typeof value === 'object') {
+      const amount = (value as { amount?: unknown }).amount
+      return this.numberFromUnknown(amount)
+    }
+    return undefined
+  }
+
+  private spotToBetType(spot: string): BetType | undefined {
+    const normalized = spot.toLowerCase()
+    if (normalized.includes('banker')) return 'Banker'
+    if (normalized.includes('player')) return 'Player'
+    if (normalized.includes('tie')) return 'Tie'
+    return undefined
+  }
+
+  private handleBettingState(args: Record<string, unknown>, msgType?: string): void {
     const tableId = (args as any)?.tableId as string | undefined
     if (!tableId) return
+
+    if (msgType === 'baccarat.playerBettingState' || msgType === 'baccarat.playerBetResponse') {
+      const source = msgType === 'baccarat.playerBetResponse' ? 'playerBetResponse' : 'playerBettingState'
+      this.extractBetPlacementConfirmations(args, source)
+        .forEach(confirmation => this.emitBetPlacementConfirmation(confirmation))
+    }
+
     const room = this.ensureRoom(tableId)
     if (!room) return
 
@@ -1421,16 +1689,23 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       const playerScore = winner === 'P' ? winScore : undefined
       const bankerScore = winner === 'B' ? winScore : undefined
 
-      // 🔥 ties 필드는 로드맵에서 선으로 표시되는 메타데이터 → 별도 결과로 추가하지 않음
-      const resultObj: RoadResult = {
+      // 로드맵 results 형식: 셀 1개 = 승자(P/B) 1판 + 그 직후 발생한 타이 횟수(ties).
+      // 라이브 경로(parseHistoryFromHistoryV2)·게임결과 경로(handleGameState)는 타이를
+      // 별도 'T' 항목으로 히스토리에 넣으므로, 로비 경로도 동일하게 펼쳐 넣어야 한다.
+      // 안 그러면 ① 타이 필터(tie_frequent/no_tie_room/tie_drought)가 타이를 0건으로
+      // 오인하고 ② 빅로드·통계·입장 후 라이브 화면과 히스토리가 어긋난다(길이 차로
+      // 거짓 슈체인지까지 유발). 빅로드 렌더러는 'T'를 직전 셀의 마크로 다시 접는다.
+      history.push({
         winner,
         isPlayerPair,
         isBankerPair,
-        tieCount: ties,
         playerScore,
         bankerScore,
+      })
+      // 이 셀 직후 타이들을 시간순으로 펼침(승자 다음 = 다음 승자 이전).
+      for (let t = 0; t < ties; t++) {
+        history.push({ winner: 'T', isPlayerPair: false, isBankerPair: false })
       }
-      history.push(resultObj)
     })
 
     return history.reverse() // newest-first
@@ -1614,6 +1889,43 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     }
   }
 
+  onBetPlacementConfirmation(callback: BetPlacementConfirmationCallback): () => void {
+    this.betPlacementConfirmationCallbacks.push(callback)
+    return () => {
+      this.betPlacementConfirmationCallbacks = this.betPlacementConfirmationCallbacks.filter((cb) => cb !== callback)
+    }
+  }
+
+  waitForBetConfirmation(
+    request: { tableId: string; gameId?: string; betType: BetType; amount: number },
+    timeoutMs = 2500,
+  ): Promise<BetPlacementConfirmation> {
+    return new Promise(resolve => {
+      let waiterRef: BetConfirmationWaiter
+      const timeoutId = setTimeout(() => {
+        this.betConfirmationWaiters = this.betConfirmationWaiters.filter(waiter => waiter !== waiterRef)
+        resolve({
+          tableId: request.tableId,
+          gameId: request.gameId,
+          betType: request.betType,
+          amount: request.amount,
+          status: 'unknown',
+          accepted: false,
+          rejected: false,
+          error: '실제 베팅 체결 확인 시간 초과',
+          source: 'timeout',
+        })
+      }, timeoutMs)
+
+      waiterRef = {
+        ...request,
+        timeoutId,
+        resolve,
+      }
+      this.betConfirmationWaiters.push(waiterRef)
+    })
+  }
+
   // ==================== Event Emitters ====================
   // ✅ 스로틀링 제거 - 실시간 업데이트
   private emitRoomUpdate(_rooms?: Room[]): void {
@@ -1662,6 +1974,49 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
 
   private emitBalanceUpdate(balance: number): void {
     this.balanceUpdateCallbacks.forEach((cb) => cb(balance))
+  }
+
+  private emitBetPlacementConfirmation(confirmation: BetPlacementConfirmation): void {
+    this.betPlacementConfirmationCallbacks.forEach(cb => cb(confirmation))
+
+    const matched = this.betConfirmationWaiters.filter(waiter => this.matchesBetConfirmation(waiter, confirmation))
+    matched.forEach(waiter => {
+      clearTimeout(waiter.timeoutId)
+      waiter.resolve(confirmation)
+    })
+    if (matched.length > 0) {
+      this.betConfirmationWaiters = this.betConfirmationWaiters.filter(waiter => !matched.includes(waiter))
+    }
+  }
+
+  private matchesBetConfirmation(waiter: BetConfirmationWaiter, confirmation: BetPlacementConfirmation): boolean {
+    if (waiter.tableId !== confirmation.tableId) return false
+    if (waiter.gameId !== confirmation.gameId) return false
+    if (waiter.betType !== confirmation.betType) return false
+    if (waiter.amount !== confirmation.amount) return false
+    return confirmation.status === 'accepted' || confirmation.status === 'rejected'
+  }
+
+  private clearBetConfirmationWaiters(
+    error = 'Evolution 체결 확인 대기가 중단되었습니다',
+    source: 'disconnect' | 'dispose' = 'disconnect',
+  ): void {
+    const waiters = this.betConfirmationWaiters
+    this.betConfirmationWaiters = []
+    waiters.forEach(waiter => {
+      clearTimeout(waiter.timeoutId)
+      waiter.resolve({
+        tableId: waiter.tableId,
+        gameId: waiter.gameId,
+        betType: waiter.betType,
+        amount: waiter.amount,
+        status: 'unknown',
+        accepted: false,
+        rejected: false,
+        error,
+        source,
+      })
+    })
   }
 
   // ==================== Getters ====================
@@ -1907,7 +2262,9 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
   }): string | null {
     const { tableId, betType, amount } = params
     const gameId = this.currentGameIds.get(tableId)
-    if (!gameId) {
+    // 🛡️ [실배팅 안전장치 #1] 실배팅 메시지는 synthetic/미수신 gameId로 절대 만들지 않는다.
+    // (가짜 gameId로 실제 돈이 나가 Evolution이 무효 처리하는 사고 방지 — 메시지 빌더 레벨 방어)
+    if (!gameId || gameId.startsWith('synthetic-')) {
       return null
     }
 
@@ -1963,50 +2320,6 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       result += hex.charAt(Math.floor(Math.random() * hex.length))
     }
     return result
-  }
-
-  /** Build Evolution undo bet message */
-  buildUndoBetMessage(params: {
-    tableId: string
-    betType: BetType
-    amount: number
-    balance: number
-    config?: Partial<TableBettingConfig>
-  }): string | null {
-    const { tableId, betType, amount, balance, config } = params
-    const gameId = this.currentGameIds.get(tableId)
-    if (!gameId) {
-      return null
-    }
-
-    const finalConfig = { ...this.getTableConfig(tableId), ...config }
-
-    const now = new Date()
-    const gameTime = now.toLocaleTimeString('en-GB', { hour12: false })
-    const betCode = BET_CODES[betType]
-    const currencyCode = this.tableCurrencies.get(tableId) || this.currencyCode
-
-    const payload: EvolutionBetPayload = {
-      type: 'Undo',
-      amount: -amount,
-      codes: { [betCode]: -amount },
-      bets: {},  // Empty on undo
-      gameType: 'baccarat',
-      gameTime,
-      currency: currencyCode,
-      chipStack: finalConfig.chipStack,
-      tableMinLimit: finalConfig.tableMinLimit,
-      tableMaxLimit: finalConfig.tableMaxLimit,
-      balance,
-      tableId,
-      orientation: finalConfig.orientation,
-      goodRoads: false,
-      channel: finalConfig.channel,
-      gameDimensions: finalConfig.gameDimensions,
-      gameId,
-    }
-
-    return JSON.stringify({ log: { type: 'CLIENT_BET_CHIP', value: payload } })
   }
 
   /** Subscribe to table config updates */

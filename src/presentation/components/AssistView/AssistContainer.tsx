@@ -42,7 +42,7 @@ export function AssistContainer({ onHome }: AssistContainerProps) {
     <AppShell
       backLabel="홈"
       onBack={onHome}
-      breadcrumb="도움받기"
+      breadcrumb="추천 받기"
       connection={connection}
     >
       <SemiAutoPanel

@@ -264,8 +264,8 @@ mod tests {
         let mock = Arc::new(MockFlusher::default());
         let agg = EventAggregator::with_flusher(
             mock.clone(),
-            8,                            // threshold
-            Duration::from_millis(100),   // interval
+            8,                          // threshold
+            Duration::from_millis(100), // interval
         );
 
         for i in 0..4u64 {
@@ -317,7 +317,10 @@ mod tests {
         let calls = mock.snapshot();
         assert_eq!(calls.len(), 1, "threshold flush should fire");
         assert_eq!(calls[0].0, "evt");
-        assert_eq!(calls[0].1, vec![Value::from(0u64), Value::from(1u64), Value::from(2u64)]);
+        assert_eq!(
+            calls[0].1,
+            vec![Value::from(0u64), Value::from(1u64), Value::from(2u64)]
+        );
 
         agg.shutdown().await;
     }
@@ -325,11 +328,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn per_type_fifo_preserved_with_interleaved_pushes() {
         let mock = Arc::new(MockFlusher::default());
-        let agg = EventAggregator::with_flusher(
-            mock.clone(),
-            1024,
-            Duration::from_millis(50),
-        );
+        let agg = EventAggregator::with_flusher(mock.clone(), 1024, Duration::from_millis(50));
 
         // Interleave two event names.
         agg.push("a", Value::from(1u64));
@@ -359,7 +358,11 @@ mod tests {
         );
         assert_eq!(
             by_name.get("b").cloned().unwrap_or_default(),
-            vec![Value::from(100u64), Value::from(200u64), Value::from(300u64)],
+            vec![
+                Value::from(100u64),
+                Value::from(200u64),
+                Value::from(300u64)
+            ],
             "type 'b' must preserve FIFO"
         );
 
@@ -375,8 +378,8 @@ mod tests {
         let mock = Arc::new(MockFlusher::default());
         let agg = EventAggregator::with_flusher(
             mock.clone(),
-            100_000,                       // never trigger threshold flush
-            Duration::from_secs(3600),     // never trigger timer flush
+            100_000,                   // never trigger threshold flush
+            Duration::from_secs(3600), // never trigger timer flush
         );
 
         // Fill the bounded channel. We do NOT yield to the runtime so the

@@ -57,7 +57,7 @@
   animation-delay: -4s;
 }
 
-/* Container - Frosted glass card with purple glow */
+/* Container - Frosted glass card */
 .login__container {
   position: relative;
   width: 100%;
@@ -93,7 +93,7 @@
   }
 }
 
-/* Header - Bold branding with purple accent */
+/* Header - Bold branding with action accent */
 .login__header {
   text-align: center;
   display: flex;
@@ -323,7 +323,7 @@
   filter: drop-shadow(0 0 6px rgba(49, 130, 246, 0.4));
 }
 
-/* Form - Clean dark inputs with purple focus */
+/* Form - Clean dark inputs with high-contrast focus */
 .login__form {
   width: 100%;
   display: flex;
@@ -403,7 +403,7 @@
   background: rgba(49, 130, 246, 0.15);
 }
 
-/* Options - Purple checkboxes */
+/* Options - High-contrast checkboxes */
 .login__options {
   display: flex;
   gap: 24px;
@@ -492,7 +492,7 @@
   }
 }
 
-/* Submit Button - Bold purple gradient with glow */
+/* Submit Button - Primary action */
 .login__submit {
   width: 100%;
   padding: 16px 28px;

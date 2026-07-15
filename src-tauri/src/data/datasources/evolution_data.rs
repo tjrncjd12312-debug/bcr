@@ -166,9 +166,15 @@ impl EvolutionDataManager {
     }
 
     /// V2 예측 요청 생성 (베팅 타입 포함)
-    pub fn get_v2_request_with_bet_type(&self, room_id: &str, bet_type: Option<String>) -> Option<V2PredictionRequest> {
+    pub fn get_v2_request_with_bet_type(
+        &self,
+        room_id: &str,
+        bet_type: Option<String>,
+    ) -> Option<V2PredictionRequest> {
         let rooms = self.rooms.read();
-        rooms.get(room_id).map(|r| r.to_v2_request_with_bet_type(bet_type))
+        rooms
+            .get(room_id)
+            .map(|r| r.to_v2_request_with_bet_type(bet_type))
     }
 
     // ==================== Evolution WebSocket 메시지 처리 ====================
@@ -221,8 +227,7 @@ impl EvolutionDataManager {
             // R3: 새 Vec을 빌드해 Arc로 감싼다. 이전 Arc는 마지막 consumer가
             // drop하면 자연 해제된다(refcount). 이전 스냅샷을 잡고 있던 소비자가
             // 있다면 계속 이전 데이터를 본다 — immutable snapshot 계약.
-            let new_history: Vec<GameRound> =
-                history.iter().filter_map(parse_game_round).collect();
+            let new_history: Vec<GameRound> = history.iter().filter_map(parse_game_round).collect();
             let new_len = new_history.len();
             room.history = Arc::new(new_history);
 
@@ -236,10 +241,7 @@ impl EvolutionDataManager {
             }
 
             room.prev_history_length = new_len;
-            debug!(
-                "📊 {} 히스토리 업데이트: {}게임",
-                room.room_name, new_len
-            );
+            debug!("📊 {} 히스토리 업데이트: {}게임", room.room_name, new_len);
         }
 
         shoe_changed

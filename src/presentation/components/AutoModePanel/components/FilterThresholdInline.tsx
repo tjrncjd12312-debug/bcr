@@ -10,7 +10,10 @@ import type { RoomFilterType } from '../../../../domain/entities'
 import FilterThresholdsService, { type FilterThresholds } from '../../../../application/services/FilterThresholdsService'
 import './FilterThresholdInline.css'
 
-type ThresholdKey = keyof FilterThresholds
+// 숫자형 임계값 키만 사용 (불리언 설정인 tieFrequentRequireFullWindow 등은 제외).
+type ThresholdKey = {
+  [K in keyof FilterThresholds]: FilterThresholds[K] extends number ? K : never
+}[keyof FilterThresholds]
 
 interface ThresholdSlot {
   key: ThresholdKey

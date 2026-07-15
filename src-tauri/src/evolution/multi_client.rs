@@ -14,15 +14,13 @@
 //! Uses wreq with Chrome impersonation (BoringSSL) to bypass Akamai bot detection.
 
 use super::connection_state::{ConnectionStateMachine, StateTransition};
-use super::events::{DisconnectReason, EvolutionEvent, EventSender, TableSummary};
+use super::events::{DisconnectReason, EventSender, EvolutionEvent, TableSummary};
 use super::message_parser::{IncomingMessage, MessageParser, TableInfo};
 use super::protocol::ProtocolSequence;
 use super::table_filter::TableFilter;
 use crate::presentation::task_registry::TaskRegistry;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
-use wreq::ws::message::Message as WsMessage;
-use wreq_util::Emulation;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +28,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
+use wreq::ws::message::Message as WsMessage;
+use wreq_util::Emulation;
 
 /// 최대 구독 테이블 수 (제한 없음)
 const MAX_SUBSCRIBE_TABLES: usize = 60;
@@ -47,6 +47,14 @@ const SUBSCRIBE_GAP_MAX_MS: u64 = 280;
 const HEARTBEAT_MIN_MS: u64 = 4000;
 const HEARTBEAT_MAX_MS: u64 = 6000;
 
+// WebSocket 제어프레임 Ping(opcode 0x9) keepalive 주기 (ms) — "핑퐁".
+// metrics.ping(텍스트 앱 메시지)과는 별개로, 브라우저가 하듯 "진짜 WS Ping"을 주기적으로 보낸다.
+// 서버의 연결 liveness 타이머가 (앱 텍스트 트래픽이 아니라) WS 제어 ping/pong을 기준으로 동작하면,
+// 이게 없을 때 metrics.ping이 매초 흘러도 서버는 비활성으로 간주해 ~20분 후 세션을 킥아웃한다.
+// 제어프레임이므로 메시지 파서/프론트엔드/방 상태에 절대 닿지 않는다 → 방 초기화·자동배팅 영향 0.
+const WS_PING_MIN_MS: u64 = 10_000;
+const WS_PING_MAX_MS: u64 = 15_000;
+
 // 서버로부터 아무 메시지도 수신하지 못하면 좀비 연결로 판단하는 시간 (ms).
 // Evolution 서버는 보통 1-2초 간격으로 테이블 이벤트를 보내므로 15초면 충분히 보수적.
 const RECEIVE_TIMEOUT_MS: u64 = 15_000;
@@ -56,6 +64,10 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 // 자동 재연결 기본 딜레이 (ms) — 지수 백오프: 2s, 4s, 8s, 16s, 30s cap
 const RECONNECT_BASE_DELAY_MS: u64 = 2000;
 const RECONNECT_MAX_DELAY_MS: u64 = 30_000;
+
+// Outbound messages are acknowledged by the socket task. This prevents the
+// caller from seeing success when a safety gate dropped the message locally.
+const OUTBOUND_ACK_TIMEOUT_SECS: u64 = 5;
 
 /// 위장용 기본 User-Agent. TLS/HTTP2 Emulation(`Emulation::Chrome136`, single_connection_attempt)과
 /// 반드시 동일한 Chrome 버전이어야 한다 — UA가 다르면 UA-vs-JA3 불일치로 Akamai 봇 스코어링에 걸린다(ua-1).
@@ -73,6 +85,125 @@ fn jitter_deadline(min_ms: u64, max_ms: u64) -> tokio::time::Instant {
     use rand::Rng;
     let ms = rand::thread_rng().gen_range(min_ms..max_ms);
     tokio::time::Instant::now() + tokio::time::Duration::from_millis(ms)
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn diagnostics_enabled() -> bool {
+    static ENABLED: Lazy<bool> = Lazy::new(|| env_flag_enabled("BCR_DIAGNOSTICS"));
+    *ENABLED
+}
+
+/// Return a credential-free endpoint for logs. Query strings and fragments can
+/// contain EVOSESSIONID, tokens, and browser instance identifiers.
+fn websocket_endpoint_for_log(ws_url: &str) -> String {
+    Url::parse(ws_url)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?;
+            let port = url
+                .port()
+                .map(|value| format!(":{value}"))
+                .unwrap_or_default();
+            Some(format!("{}://{}{}{}", url.scheme(), host, port, url.path()))
+        })
+        .unwrap_or_else(|| "<invalid-websocket-url>".to_string())
+}
+
+/// Diagnostic output is metadata-only. Raw frames are never written or logged,
+/// even when diagnostics are explicitly enabled.
+fn diagnostic_frame_summary(text: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
+    let message_type = parsed
+        .as_ref()
+        .and_then(|value| value.get("type"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.chars().take(64).collect::<String>())
+        .unwrap_or_else(|| "<unknown>".to_string());
+    let has_table_id = parsed
+        .as_ref()
+        .and_then(|value| value.get("args"))
+        .and_then(|args| args.get("tableId"))
+        .and_then(|value| value.as_str())
+        .is_some();
+    let has_error = text.contains("\"error\"") || text.contains("Author") || text.contains("eject");
+    let has_bet_state = text.contains("playerBettingState") || text.contains("playerBetRequest");
+
+    format!(
+        "type={message_type} len={} table_id_present={has_table_id} error_signal={has_error} bet_signal={has_bet_state}",
+        text.len()
+    )
+}
+
+/// Apply the real-money round-id safety gate before a queued message reaches
+/// the socket. A playerBetRequest is valid only when this connection has seen a
+/// current, non-synthetic gameId for the target table.
+fn prepare_outgoing_message(
+    message: String,
+    table_game_ids: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    if !message.contains("playerBetRequest") {
+        return Ok(message);
+    }
+
+    let mut value = serde_json::from_str::<serde_json::Value>(&message)
+        .map_err(|_| "Blocked playerBetRequest: malformed JSON".to_string())?;
+    let args = value
+        .get_mut("args")
+        .and_then(|value| value.as_object_mut())
+        .ok_or_else(|| "Blocked playerBetRequest: missing args".to_string())?;
+    let table_id = args
+        .get("tableId")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Blocked playerBetRequest: missing tableId".to_string())?;
+    let tracked_game_id = table_game_ids
+        .get(&table_id)
+        .filter(|value| !value.is_empty() && !value.starts_with("synthetic-"))
+        .cloned()
+        .ok_or_else(|| {
+            format!("Blocked playerBetRequest: current gameId unavailable for table {table_id}")
+        })?;
+
+    args.insert(
+        "gameId".to_string(),
+        serde_json::Value::String(tracked_game_id),
+    );
+    serde_json::to_string(&value)
+        .map_err(|error| format!("Blocked playerBetRequest: serialization failed: {error}"))
+}
+
+/// lobby.categories 프레임에서 'baccarat' 카테고리의 테이블 ID(평문 문자열)를 추출한다.
+/// lobby v2: args.categories[].id == "baccarat" 의 tables = ["onokyd4wn7uekbjx", ...] (평문 ID 배열).
+/// 이 ID들로 lobby.subscribe를 보내면 서버가 해당 테이블의 결과/히스토리/gameId를 push한다.
+fn extract_baccarat_table_ids(data: &serde_json::Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(cats) = data
+        .get("args")
+        .and_then(|a| a.get("categories"))
+        .and_then(|c| c.as_array())
+    {
+        for cat in cats {
+            let id = cat.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if id.contains("baccarat") {
+                if let Some(tables) = cat.get("tables").and_then(|t| t.as_array()) {
+                    for t in tables {
+                        if let Some(s) = t.as_str() {
+                            if !s.is_empty() {
+                                ids.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids
 }
 
 /// 멀티테이블 이벤트(정규화) - 하위 호환성 유지
@@ -95,11 +226,27 @@ pub struct MultiSocketOptions {
     pub mwg_params: Option<String>,
 }
 
+struct OutboundMessage {
+    payload: String,
+    response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    expires_at: tokio::time::Instant,
+}
+
+/// `handle_incoming_message`가 메시지 루프에 돌려주는 후속 동작 신호.
+enum HandleOutcome {
+    /// availableTables 수신 → 이 테이블들을 구독해야 함
+    Subscribe(Vec<TableInfo>),
+    /// 서버 킥아웃 수신 → 루프를 즉시 종료해야 함(만료 세션 재연결 금지)
+    Kickout(String),
+    /// lobby.categories 수신 → 바카라 테이블들을 lobby.subscribe로 구독해야 함(lobby v2 subscriptionModel)
+    LobbySubscribe(Vec<String>),
+}
+
 /// 멀티테이블 WS 클라이언트 (단일 소켓)
 pub struct EvolutionMultiSocket {
     state_machine: ConnectionStateMachine,
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
-    msg_tx: Option<tokio::sync::mpsc::Sender<String>>,
+    msg_tx: Option<tokio::sync::mpsc::Sender<OutboundMessage>>,
     event_tx: Option<EventSender>,
     /// Internal registry of background tasks spawned by `connect()`.
     ///
@@ -122,7 +269,6 @@ pub struct EvolutionMultiSocket {
 /// 글로벌 싱글턴 멀티위젯 클라이언트
 pub static GLOBAL_MULTI_CLIENT: Lazy<TokioMutex<EvolutionMultiSocket>> =
     Lazy::new(|| TokioMutex::new(EvolutionMultiSocket::new()));
-
 
 impl EvolutionMultiSocket {
     pub fn new() -> Self {
@@ -152,9 +298,7 @@ impl EvolutionMultiSocket {
     }
 
     /// 이벤트 채널 생성 및 반환
-    pub fn create_event_channel(
-        &mut self,
-    ) -> super::events::EventReceiver {
+    pub fn create_event_channel(&mut self) -> super::events::EventReceiver {
         let (tx, rx) = super::events::create_event_channel(EVENT_CHANNEL_BUFFER);
         self.event_tx = Some(tx);
         rx
@@ -232,7 +376,7 @@ impl EvolutionMultiSocket {
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx);
 
-        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<String>(64);
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<OutboundMessage>(64);
         self.msg_tx = Some(msg_tx);
 
         // 이벤트 송신자 복제 (없으면 더미 채널 생성)
@@ -284,7 +428,7 @@ impl EvolutionMultiSocket {
         cookie: String,
         referer: String,
         event_tx: EventSender,
-        mut msg_rx: tokio::sync::mpsc::Receiver<String>,
+        mut msg_rx: tokio::sync::mpsc::Receiver<OutboundMessage>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         connected: Arc<AtomicBool>,
     ) {
@@ -294,7 +438,8 @@ impl EvolutionMultiSocket {
             attempt += 1;
             info!(
                 "[Evolution-Multi] 🚀 Connection attempt #{} to {}",
-                attempt, ws_url
+                attempt,
+                websocket_endpoint_for_log(&ws_url)
             );
 
             // Human-like dwell before opening the socket
@@ -330,7 +475,10 @@ impl EvolutionMultiSocket {
                     return;
                 }
                 DisconnectReason::Kickout(reason) => {
-                    warn!("[Evolution-Multi] ⚠️ Kicked out ({}), not auto-reconnecting", reason);
+                    warn!(
+                        "[Evolution-Multi] ⚠️ Kicked out ({}), not auto-reconnecting",
+                        reason
+                    );
                     let _ = event_tx
                         .send(EvolutionEvent::Disconnected {
                             url: ws_url.clone(),
@@ -365,7 +513,10 @@ impl EvolutionMultiSocket {
 
                     warn!(
                         "[Evolution-Multi] 🔄 Auto-reconnect in {}ms (attempt {}/{}, reason: {})",
-                        delay_ms, attempt, MAX_RECONNECT_ATTEMPTS, reason.as_str()
+                        delay_ms,
+                        attempt,
+                        MAX_RECONNECT_ATTEMPTS,
+                        reason.as_str()
                     );
 
                     // 프론트엔드에 재연결 시도 알림
@@ -418,7 +569,7 @@ impl EvolutionMultiSocket {
         cookie: &str,
         referer: &str,
         event_tx: &EventSender,
-        msg_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        msg_rx: &mut tokio::sync::mpsc::Receiver<OutboundMessage>,
         shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
         connected: &AtomicBool,
     ) -> DisconnectReason {
@@ -462,6 +613,19 @@ impl EvolutionMultiSocket {
                     upgrade_response.status()
                 );
 
+                let status = upgrade_response.status();
+                if status.as_u16() == 401 || status.as_u16() == 403 {
+                    let reason = format!(
+                        "upgrade_forbidden_{}:duplicate_or_invalid_evosessionid",
+                        status.as_u16()
+                    );
+                    error!(
+                        "[Evolution-Multi] Upgrade rejected with {} - fatal session conflict, no reconnect",
+                        status
+                    );
+                    return DisconnectReason::Kickout(reason);
+                }
+
                 match upgrade_response.into_websocket().await {
                     Ok(websocket) => {
                         info!("[Evolution-Multi] ✅ WebSocket connected!");
@@ -472,7 +636,8 @@ impl EvolutionMultiSocket {
                         if is_multiwidget {
                             let is_lobby_v2 = ws_url.contains("/lobby/socket/v2")
                                 || ws_url.contains("/lobby/socket/V2");
-                            if let Err(e) = Self::send_init_sequence(&mut write, is_lobby_v2).await {
+                            if let Err(e) = Self::send_init_sequence(&mut write, is_lobby_v2).await
+                            {
                                 error!("[Evolution-Multi] ❌ Init failed: {}", e);
                                 let _ = event_tx
                                     .send(EvolutionEvent::Error {
@@ -497,14 +662,8 @@ impl EvolutionMultiSocket {
                         connected.store(true, Ordering::SeqCst);
 
                         // 메시지 루프
-                        Self::run_message_loop(
-                            event_tx,
-                            &mut write,
-                            &mut read,
-                            msg_rx,
-                            shutdown_rx,
-                        )
-                        .await
+                        Self::run_message_loop(event_tx, &mut write, &mut read, msg_rx, shutdown_rx)
+                            .await
                     }
                     Err(e) => {
                         error!("[Evolution-Multi] ❌ Upgrade failed: {}", e);
@@ -566,7 +725,7 @@ impl EvolutionMultiSocket {
             );
         }
 
-        info!("[Evolution-Multi] 🔄 New instance ID: {}", new_instance);
+        info!("[Evolution-Multi] 🔄 Regenerated browser instance ID");
         new_url
     }
 
@@ -612,11 +771,17 @@ impl EvolutionMultiSocket {
     /// 연결 정보 로깅
     fn log_connection_info(ws_url: &str, host: &str, origin: &str, referer: &str, cookie: &str) {
         info!("[Evolution-Multi] 🔌 Connecting with Chrome TLS fingerprint...");
-        info!("[Evolution-Multi] 📍 URL: {}", &ws_url[..ws_url.len().min(150)]);
+        info!(
+            "[Evolution-Multi] 📍 Endpoint: {}",
+            websocket_endpoint_for_log(ws_url)
+        );
         info!("[Evolution-Multi] 📋 Host: {}", host);
-        info!("[Evolution-Multi] 📋 Origin: {}", origin);
-        info!("[Evolution-Multi] 📋 Referer: {}", &referer[..referer.len().min(100)]);
-        info!("[Evolution-Multi] 📋 Cookie: {}...", &cookie[..cookie.len().min(50)]);
+        info!(
+            "[Evolution-Multi] 📋 Credentials: origin_present={} referer_present={} cookie_present={}",
+            !origin.is_empty(),
+            !referer.is_empty(),
+            !cookie.is_empty()
+        );
     }
 
     /// 초기화 시퀀스 전송
@@ -636,10 +801,7 @@ impl EvolutionMultiSocket {
         };
 
         for (i, msg) in sequence.iter().enumerate() {
-            if let Err(e) = write
-                .send(WsMessage::Text(msg.to_string().into()))
-                .await
-            {
+            if let Err(e) = write.send(WsMessage::Text(msg.to_string().into())).await {
                 return Err(format!("Init message {} failed: {}", i + 1, e));
             }
             jitter_sleep(INIT_GAP_MIN_MS, INIT_GAP_MAX_MS).await;
@@ -654,7 +816,7 @@ impl EvolutionMultiSocket {
         event_tx: &EventSender,
         write: &mut W,
         read: &mut R,
-        msg_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        msg_rx: &mut tokio::sync::mpsc::Receiver<OutboundMessage>,
         shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
     ) -> DisconnectReason
     where
@@ -665,6 +827,9 @@ impl EvolutionMultiSocket {
         // 하트비트 타이밍 랜덤화 - 봇 탐지 패턴 분석 방지
         let mut next_heartbeat = jitter_deadline(HEARTBEAT_MIN_MS, HEARTBEAT_MAX_MS);
 
+        // WS 제어프레임 Ping(핑퐁) — metrics.ping과 독립 스케줄. 세션 liveness 유지용.
+        let mut next_ws_ping = jitter_deadline(WS_PING_MIN_MS, WS_PING_MAX_MS);
+
         // 수신 타임아웃: 마지막으로 서버에서 데이터를 받은 시각 추적
         let mut last_received = tokio::time::Instant::now();
         let receive_timeout = tokio::time::Duration::from_millis(RECEIVE_TIMEOUT_MS);
@@ -672,7 +837,13 @@ impl EvolutionMultiSocket {
         info!("[Evolution-Multi] 🔄 Entering message loop...");
 
         let mut tables_subscribed = false;
+        // lobby v2: lobby.categories를 받아 lobby.subscribe를 보냈는지(1회만 전송).
+        let mut lobby_subscribed = false;
         let mut msg_count: u64 = 0;
+        // 🔧 [BET-FIX] 테이블별 실시간 gameId (tableId → 현재 라운드 gameId). 배팅 전송 시
+        // 프론트가 넣은 synthetic-… gameId를 이 실제 gameId로 치환하는 데 쓴다(실배팅 등록 수정).
+        let mut table_game_ids: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
 
         loop {
             let timeout_deadline = last_received + receive_timeout;
@@ -686,19 +857,121 @@ impl EvolutionMultiSocket {
                         Some(Ok(WsMessage::Text(text))) => {
                             debug!("[Evolution-Multi] 📨 MSG#{} len={}", msg_count, text.len());
 
-                            if let Some(tables) = Self::handle_incoming_message(event_tx, &text).await {
-                                if !tables_subscribed {
-                                    match Self::subscribe_to_tables(write, &tables).await {
-                                        Ok(count) => {
-                                            tables_subscribed = true;
-                                            let _ = event_tx.send(EvolutionEvent::RoomsReady {
-                                                room_count: count,
-                                                total_available: tables.len(),
-                                            }).await;
+                            // Opt-in diagnostics expose metadata only. Raw frames can contain
+                            // session cookies, tokens, balances, and bet payloads.
+                            if diagnostics_enabled()
+                                && (text.contains("categor") || text.contains("lobbydata")
+                                    || text.contains("availableTables") || text.contains("historyUpdated")
+                                    || text.contains("histories"))
+                            {
+                                info!(
+                                    "[Evolution-Multi] [LOBBY-DIAG] {}",
+                                    diagnostic_frame_summary(&text)
+                                );
+                            }
+
+                            // 🔧 [BET-FIX] 실시간 gameId 추적: 게임 프레임(newGame/gameState/playerBettingState 등)은
+                            // args에 tableId+gameId를 담는다. 이 실제 gameId를 테이블별로 저장해 두었다가, 배팅 전송 시
+                            // 프론트가 넣은 synthetic-… gameId를 치환한다(auto 모드에서 프론트가 실시간 gameId를 못 받는
+                            // 구조적 gap 보완 — webview CDP forward가 predict 전용이라). 값싼 substring 가드로 게임 프레임만 파싱.
+                            if text.contains("\"gameId\"") && text.contains("\"tableId\"") {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                                    if let Some(args) = v.get("args") {
+                                        // 멀티테이블 모드의 실시간 gameId는 두 경로로 도착한다(라이브 덤프 확인):
+                                        //  - baccarat.gameState / newGame: top-level args.gameId
+                                        //  - baccarat.tableState:          args.currentGame.gameId (중첩)
+                                        // 둘 다 추적해야 BET-FIX가 최신 gameId를 확보한다(예전엔 top-level만 봐서
+                                        // tableState만 받는 테이블은 추적값이 비어 synthetic/stale 전송됨 = 실배팅 무효 원인).
+                                        let tid = args.get("tableId").and_then(|x| x.as_str());
+                                        let gid = args.get("gameId").and_then(|x| x.as_str())
+                                            .or_else(|| {
+                                                args.get("currentGame")
+                                                    .and_then(|c| c.get("gameId"))
+                                                    .and_then(|x| x.as_str())
+                                            });
+                                        if let (Some(tid), Some(gid)) = (tid, gid) {
+                                            if !gid.is_empty() && !gid.starts_with("synthetic-") {
+                                                table_game_ids.insert(tid.to_string(), gid.to_string());
+                                            }
                                         }
-                                        Err(e) => warn!("[Evolution-Multi] Subscribe failed: {}", e),
                                     }
                                 }
+                            }
+
+                            if diagnostics_enabled()
+                                && (text.contains("Bet") || text.contains("Chip") || text.contains("Author")
+                                    || text.contains("\"error\"") || text.contains("eject") || text.contains("ccept"))
+                            {
+                                info!(
+                                    "[Evolution-Multi] [BET-DIAG] IN {}",
+                                    diagnostic_frame_summary(&text)
+                                );
+                            }
+
+                            // ✅ [BET-CONFIRM] 실배팅이 Evolution에 '실제로 등록'됐는지 확인(라이브 검증용).
+                            // playerBettingState에 실제 베팅이 잡히면(HasBet:true / acceptedBets·currentChips 비어있지 않음 /
+                            // totalAmount>0) 등록 성공이다. playerBetRequest OUT 후 이 줄이 한 번도 안 뜨면
+                            // = Evolution이 베팅을 무시(미등록)한 것 = 실제로는 배팅이 안 된 것.
+                            if text.contains("playerBettingState")
+                                && (
+                                    text.contains("\"HasBet\":true")
+                                    || text.contains("\"acceptedBets\":{\"")
+                                    || text.contains("\"currentChips\":{\"")
+                                    || (text.contains("\"totalAmount\":") && !text.contains("\"totalAmount\":0"))
+                                )
+                            {
+                                info!("[Evolution-Multi] ✅ [BET-CONFIRM] 베팅 등록 확인");
+                                if diagnostics_enabled() {
+                                    info!(
+                                        "[Evolution-Multi] [BET-DIAG] CONFIRM {}",
+                                        diagnostic_frame_summary(&text)
+                                    );
+                                }
+                            }
+
+                            match Self::handle_incoming_message(event_tx, &text).await {
+                                // 서버 킥아웃(세션 만료/중복세션 등). 같은 만료 EVOSESSIONID로 재연결하면
+                                // 100% 다시 킥당하므로 루프를 즉시 종료한다 → connection_task의 Kickout 분기로
+                                // 라우팅되어 재연결 없이 Disconnected만 방출(방 상태 보존, 헛재연결 폭주 방지).
+                                Some(HandleOutcome::Kickout(reason)) => {
+                                    warn!(
+                                        "[Evolution-Multi] ⚠️ Kickout in message loop ({}) — stopping, no reconnect",
+                                        reason
+                                    );
+                                    return DisconnectReason::Kickout(reason);
+                                }
+                                Some(HandleOutcome::Subscribe(tables)) => {
+                                    if !tables_subscribed {
+                                        match Self::subscribe_to_tables(write, &tables).await {
+                                            Ok(count) => {
+                                                tables_subscribed = true;
+                                                let _ = event_tx.send(EvolutionEvent::RoomsReady {
+                                                    room_count: count,
+                                                    total_available: tables.len(),
+                                                }).await;
+                                            }
+                                            Err(e) => warn!("[Evolution-Multi] Subscribe failed: {}", e),
+                                        }
+                                    }
+                                }
+                                Some(HandleOutcome::LobbySubscribe(table_ids)) => {
+                                    // lobby v2: 받은 바카라 테이블들을 한 번만 구독한다(subscriptionModel).
+                                    if !lobby_subscribed {
+                                        lobby_subscribed = true;
+                                        let sub = ProtocolSequence::lobby_subscribe(&table_ids);
+                                        match write.send(WsMessage::Text(sub.to_string().into())).await {
+                                            Ok(_) => {
+                                                info!("[Evolution-Multi] 📋 lobby.subscribe 전송 — {} 바카라 테이블 구독(결과/gameId push 요청)", table_ids.len());
+                                                let _ = event_tx.send(EvolutionEvent::RoomsReady {
+                                                    room_count: table_ids.len(),
+                                                    total_available: table_ids.len(),
+                                                }).await;
+                                            }
+                                            Err(e) => warn!("[Evolution-Multi] lobby.subscribe 실패: {}", e),
+                                        }
+                                    }
+                                }
+                                None => {}
                             }
                         }
                         Some(Ok(WsMessage::Ping(data))) => {
@@ -708,8 +981,16 @@ impl EvolutionMultiSocket {
                             // 서버 pong 수신 — last_received 이미 갱신됨
                         }
                         Some(Ok(WsMessage::Close(frame))) => {
-                            if let Some(cf) = frame {
-                                warn!("[Evolution-Multi] Server closed: {:?}", cf.reason);
+                            // 종료 코드/사유를 명확히 로깅 — ~20분 만료의 실제 원인(코드/사유) 진단용.
+                            match &frame {
+                                Some(cf) => warn!(
+                                    "[Evolution-Multi] Server closed: code={:?} reason={:?} (after {} msgs)",
+                                    cf.code, cf.reason, msg_count
+                                ),
+                                None => warn!(
+                                    "[Evolution-Multi] Server closed (no close frame, after {} msgs)",
+                                    msg_count
+                                ),
                             }
                             return DisconnectReason::ServerClosed;
                         }
@@ -725,9 +1006,66 @@ impl EvolutionMultiSocket {
                     }
                 }
                 Some(outgoing) = msg_rx.recv() => {
-                    if let Err(e) = write.send(WsMessage::Text(outgoing.into())).await {
-                        error!("[Evolution-Multi] ❌ Send failed: {}", e);
-                        return DisconnectReason::NetworkError(e.to_string());
+                    let OutboundMessage { payload, response_tx, expires_at } = outgoing;
+
+                    if response_tx.is_closed() {
+                        continue;
+                    }
+                    if tokio::time::Instant::now() >= expires_at {
+                        let _ = response_tx.send(Err(
+                            "Outbound message expired before socket send".to_string()
+                        ));
+                        continue;
+                    }
+
+                    let to_send = match prepare_outgoing_message(payload, &table_game_ids) {
+                        Ok(message) => message,
+                        Err(error) => {
+                            warn!("[Evolution-Multi] 🛡️ {}", error);
+                            let _ = response_tx.send(Err(error));
+                            continue;
+                        }
+                    };
+
+                    if diagnostics_enabled()
+                        && (to_send.contains("Bet") || to_send.contains("bet")
+                            || to_send.contains("Chip") || to_send.contains("chips"))
+                    {
+                        info!(
+                            "[Evolution-Multi] [BET-DIAG] OUT {}",
+                            diagnostic_frame_summary(&to_send)
+                        );
+                    }
+
+                    // Do not send a message after its caller has timed out or cancelled.
+                    if response_tx.is_closed() || tokio::time::Instant::now() >= expires_at {
+                        let _ = response_tx.send(Err(
+                            "Outbound message expired before socket send".to_string()
+                        ));
+                        continue;
+                    }
+
+                    match tokio::time::timeout_at(
+                        expires_at,
+                        write.send(WsMessage::Text(to_send.into())),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            let _ = response_tx.send(Ok(()));
+                        }
+                        Ok(Err(error)) => {
+                            let error_message = format!("Socket send failed: {error}");
+                            let _ = response_tx.send(Err(error_message.clone()));
+                            error!("[Evolution-Multi] ❌ {}", error_message);
+                            return DisconnectReason::NetworkError(error.to_string());
+                        }
+                        Err(_) => {
+                            let error_message = "Socket send deadline exceeded".to_string();
+                            let _ = response_tx.send(Err(error_message.clone()));
+                            warn!("[Evolution-Multi] ⏰ {}", error_message);
+                            return DisconnectReason::NetworkError(error_message);
+                        }
                     }
                 }
                 _ = tokio::time::sleep_until(next_heartbeat) => {
@@ -736,7 +1074,31 @@ impl EvolutionMultiSocket {
                         warn!("[Evolution-Multi] Heartbeat failed: {}", e);
                         return DisconnectReason::NetworkError(e.to_string());
                     }
+                    // lobby v2 앱-레벨 keepalive PING(eventType:PING) — 서버의 세션 활성 신호.
+                    // 이게 없으면 metrics.ping/게임데이터가 흘러도 서버가 ~10분 뒤 inactivity로
+                    // 세션을 만료(server_closed→재연결 시 KICKOUT:inactivity)한다(라이브 확인 2026-05-31).
+                    let lobby_ping = ProtocolSequence::lobby_ping();
+                    if let Err(e) = write.send(WsMessage::Text(lobby_ping.to_string().into())).await {
+                        warn!("[Evolution-Multi] Lobby ping failed: {}", e);
+                        return DisconnectReason::NetworkError(e.to_string());
+                    }
                     next_heartbeat = jitter_deadline(HEARTBEAT_MIN_MS, HEARTBEAT_MAX_MS);
+                }
+                _ = tokio::time::sleep_until(next_ws_ping) => {
+                    // 진짜 WS 제어프레임 Ping(핑퐁). 서버는 표준에 따라 Pong을 돌려주고(위 Pong 처리에서
+                    // last_received 갱신), 텍스트가 아니므로 파서/프론트엔드/방 상태에 닿지 않는다.
+                    // 빈 페이로드는 RFC 6455 허용. 송신 실패는 소켓이 죽었다는 의미 → 재연결로 라우팅.
+                    if let Err(e) = write.send(WsMessage::Ping(Default::default())).await {
+                        warn!("[Evolution-Multi] WS ping(control frame) failed: {}", e);
+                        return DisconnectReason::NetworkError(e.to_string());
+                    }
+                    // INFO 레벨 — 이게 10~15초마다 계속 찍히면 소켓 생존 중. 끊기면 이 줄이 멈춘다.
+                    info!(
+                        "[Evolution-Multi] 🏓 WS keepalive ping (msgs={}, {}s since last recv)",
+                        msg_count,
+                        last_received.elapsed().as_secs()
+                    );
+                    next_ws_ping = jitter_deadline(WS_PING_MIN_MS, WS_PING_MAX_MS);
                 }
                 _ = tokio::time::sleep_until(timeout_deadline) => {
                     let elapsed = last_received.elapsed().as_secs();
@@ -757,10 +1119,7 @@ impl EvolutionMultiSocket {
 
     /// 수신 메시지 처리 - 테이블 목록 반환 시 Some
     #[tracing::instrument(skip_all, level = "debug", fields(msg_len = text.len()))]
-    async fn handle_incoming_message(
-        event_tx: &EventSender,
-        text: &str,
-    ) -> Option<Vec<TableInfo>> {
+    async fn handle_incoming_message(event_tx: &EventSender, text: &str) -> Option<HandleOutcome> {
         let parsed = match MessageParser::parse(text) {
             Ok(msg) => msg,
             Err(e) => {
@@ -768,6 +1127,10 @@ impl EvolutionMultiSocket {
                 return None;
             }
         };
+
+        // lobby.categories(Other로 분류)를 받으면 바카라 ID를 추출해 루프에 구독을 신호한다.
+        // 그 외 메시지는 None. (Kickout/AvailableTables는 아래 arm에서 early-return하므로 무관)
+        let mut pending: Option<HandleOutcome> = None;
 
         match &parsed {
             IncomingMessage::Pong => {
@@ -791,11 +1154,9 @@ impl EvolutionMultiSocket {
             }
             IncomingMessage::Kickout { reason } => {
                 warn!("[Evolution-Multi] ⚠️ KICKOUT: {}", reason);
-                let _ = event_tx
-                    .send(EvolutionEvent::Kickout {
-                        reason: reason.clone(),
-                    })
-                    .await;
+                // 루프에 즉시 종료를 신호한다(만료/중복 세션 재연결 폭주 방지).
+                // Disconnected 이벤트는 connection_task의 Kickout 분기에서 단일 방출한다.
+                return Some(HandleOutcome::Kickout(reason.clone()));
             }
             IncomingMessage::Error { message, data } => {
                 error!("[Evolution-Multi] ❌ Error: {}", message);
@@ -815,7 +1176,7 @@ impl EvolutionMultiSocket {
                     .send(EvolutionEvent::TablesAvailable { tables: summaries })
                     .await;
 
-                return Some(tables.clone());
+                return Some(HandleOutcome::Subscribe(tables.clone()));
             }
             IncomingMessage::Other {
                 msg_type,
@@ -830,6 +1191,20 @@ impl EvolutionMultiSocket {
                             data: data.clone(),
                         })
                         .await;
+                }
+                // 🔧 [LOBBY-V2 SUBSCRIBE] lobby.categories(전체 방 목록)를 받으면 바카라 ID를 뽑아
+                // lobby.subscribe를 보내도록 신호한다. lobby v2는 subscriptionModel이라 구독한 테이블만
+                // per-table 결과/히스토리/gameId를 push한다(브라우저 캡처 확인). 구독해야 로드맵·예측·
+                // 자동배팅 데이터가 흐른다. (RawMessage 포워딩은 match 아래에서 계속 진행됨)
+                if msg_type.as_str() == "lobby.categories" {
+                    let ids = extract_baccarat_table_ids(data);
+                    if !ids.is_empty() {
+                        info!(
+                            "[Evolution-Multi] 📑 lobby.categories 수신 — 바카라 {}개 구독 예약",
+                            ids.len()
+                        );
+                        pending = Some(HandleOutcome::LobbySubscribe(ids));
+                    }
                 }
             }
         }
@@ -850,7 +1225,7 @@ impl EvolutionMultiSocket {
                 .await;
         }
 
-        None
+        pending
     }
 
     /// 테이블 구독 - 구독 성공 개수 반환
@@ -868,7 +1243,10 @@ impl EvolutionMultiSocket {
         use rand::seq::SliceRandom;
         targets.shuffle(&mut rand::thread_rng());
 
-        info!("[Evolution-Multi] 🎰 Subscribing to {} tables", targets.len());
+        info!(
+            "[Evolution-Multi] 🎰 Subscribing to {} tables",
+            targets.len()
+        );
 
         let mut sent_count = 0;
         for table_id in &targets {
@@ -895,18 +1273,43 @@ impl EvolutionMultiSocket {
             jitter_sleep(SUBSCRIBE_GAP_MIN_MS, SUBSCRIBE_GAP_MAX_MS).await;
         }
 
-        info!("[Evolution-Multi] ✅ Subscribed to {}/{}", sent_count, targets.len());
+        info!(
+            "[Evolution-Multi] ✅ Subscribed to {}/{}",
+            sent_count,
+            targets.len()
+        );
         Ok(sent_count)
     }
 
     /// 메시지 송신
     pub async fn send_message(&self, message: String) -> Result<(), String> {
-        if let Some(tx) = &self.msg_tx {
-            tx.send(message).await.map_err(|e| e.to_string())?;
-            Ok(())
-        } else {
-            Err("Not connected".to_string())
+        if !self.is_connected() {
+            return Err("Not connected".to_string());
         }
+
+        let tx = self
+            .msg_tx
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?;
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let timeout = tokio::time::Duration::from_secs(OUTBOUND_ACK_TIMEOUT_SECS);
+        let deadline = tokio::time::Instant::now() + timeout;
+        tokio::time::timeout_at(
+            deadline,
+            tx.send(OutboundMessage {
+                payload: message,
+                response_tx,
+                expires_at: deadline,
+            }),
+        )
+        .await
+        .map_err(|_| "Timed out waiting to enqueue socket message".to_string())?
+        .map_err(|_| "Connection task stopped before message enqueue".to_string())?;
+
+        tokio::time::timeout_at(deadline, response_rx)
+            .await
+            .map_err(|_| "Timed out waiting for socket send acknowledgement".to_string())?
+            .map_err(|_| "Connection task stopped before socket send".to_string())?
     }
 
     /// 종료
@@ -941,4 +1344,120 @@ impl Default for EvolutionMultiSocket {
 /// Tauri 상태용 래퍼
 pub struct EvolutionMultiSocketState {
     pub client: std::sync::Arc<tokio::sync::Mutex<EvolutionMultiSocket>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn bet_message(game_id: &str) -> String {
+        serde_json::json!({
+            "type": "baccarat.playerBetRequest",
+            "args": {
+                "tableId": "table-1",
+                "gameId": game_id,
+                "chips": { "Banker": 1000 }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn player_bet_uses_connection_tracked_game_id() {
+        let tracked = HashMap::from([("table-1".to_string(), "current-round".to_string())]);
+
+        let prepared = prepare_outgoing_message(bet_message("stale-round"), &tracked).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+
+        assert_eq!(value["args"]["gameId"], "current-round");
+    }
+
+    #[test]
+    fn player_bet_without_tracked_game_id_is_fail_closed_even_if_id_looks_real() {
+        let error = prepare_outgoing_message(bet_message("looks-real-but-stale"), &HashMap::new())
+            .unwrap_err();
+
+        assert!(error.contains("current gameId unavailable"));
+    }
+
+    #[test]
+    fn player_bet_without_tracked_game_id_rejects_synthetic_id() {
+        let error = prepare_outgoing_message(bet_message("synthetic-table-1-123"), &HashMap::new())
+            .unwrap_err();
+
+        assert!(error.contains("current gameId unavailable"));
+    }
+
+    #[test]
+    fn malformed_player_bet_is_fail_closed() {
+        let error =
+            prepare_outgoing_message("playerBetRequest:not-json".to_string(), &HashMap::new())
+                .unwrap_err();
+
+        assert_eq!(error, "Blocked playerBetRequest: malformed JSON");
+    }
+
+    #[test]
+    fn non_bet_message_is_unchanged() {
+        let message = r#"{"type":"lobby.ping","args":{}}"#.to_string();
+
+        assert_eq!(
+            prepare_outgoing_message(message.clone(), &HashMap::new()).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn diagnostic_summary_does_not_include_sensitive_values() {
+        let frame = serde_json::json!({
+            "type": "baccarat.playerBettingState",
+            "args": {
+                "tableId": "secret-table-id",
+                "EVOSESSIONID": "secret-session-value",
+                "token": "secret-token-value",
+                "error": "secret-error-detail"
+            }
+        })
+        .to_string();
+
+        let summary = diagnostic_frame_summary(&frame);
+
+        assert!(summary.contains("baccarat.playerBettingState"));
+        assert!(!summary.contains("secret-table-id"));
+        assert!(!summary.contains("secret-session-value"));
+        assert!(!summary.contains("secret-token-value"));
+        assert!(!summary.contains("secret-error-detail"));
+    }
+
+    #[test]
+    fn websocket_log_endpoint_strips_query_and_fragment() {
+        let endpoint = websocket_endpoint_for_log(
+            "wss://example.test/public/lobby/socket/v2?EVOSESSIONID=secret#token",
+        );
+
+        assert_eq!(endpoint, "wss://example.test/public/lobby/socket/v2");
+        assert!(!endpoint.contains("secret"));
+        assert!(!endpoint.contains("token"));
+    }
+
+    #[tokio::test]
+    async fn send_message_returns_socket_task_rejection_to_caller() {
+        let mut client = EvolutionMultiSocket::new();
+        client.connected.store(true, Ordering::SeqCst);
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel(1);
+        client.msg_tx = Some(msg_tx);
+
+        let reject = async move {
+            let queued: OutboundMessage = msg_rx.recv().await.unwrap();
+            queued
+                .response_tx
+                .send(Err("safety gate rejected message".to_string()))
+                .unwrap();
+        };
+        let send = client.send_message("payload".to_string());
+        let (_, result) = tokio::join!(reject, send);
+
+        assert_eq!(result.unwrap_err(), "safety gate rejected message");
+    }
 }

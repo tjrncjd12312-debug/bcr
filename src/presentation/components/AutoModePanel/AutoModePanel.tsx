@@ -15,9 +15,11 @@ import { AutoModeHistory } from './components/AutoModeHistory'
 import { RoomSelectorModal } from '../shared'
 import { FilterSettingsDialog } from '../common/FilterSettingsDialog'
 import { filterBaccaratRooms } from '../../utils'
-import type { RoomBetConfig } from '../../../domain/entities'
+import type { Room, RoomBetConfig } from '../../../domain/entities'
 import PatternManagerModal from '../MainScreen/components/PatternManagerModal'
+import CustomStrategyManagerModal from '../MainScreen/components/CustomStrategyManagerModal'
 import CustomPatternService from '../../../application/services/CustomPatternService'
+import CustomStrategyService from '../../../application/services/CustomStrategyService'
 import VirtualBettingService from '../../../application/services/VirtualBettingService'
 import type { AutoModeBetLogEvent } from '../../../application/services/AutoModeService'
 import type { RoomFilterType, RoomSortType, CustomPattern } from '../../../domain/entities'
@@ -39,6 +41,8 @@ interface AutoModePanelProps {
   onLogout: () => void
   sessionWarning?: string
   isOnline: boolean
+  /** 통합 홈으로 복귀 (있으면 헤더에 [홈] 버튼 노출) */
+  onHome?: () => void
 }
 
 interface HistoryLog {
@@ -55,7 +59,7 @@ interface HistoryLog {
   winner?: 'P' | 'B' | 'T' // 승자
 }
 
-export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: AutoModePanelProps) {
+export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHome }: AutoModePanelProps) {
   const {
     user,
     rooms,
@@ -93,7 +97,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     totalLosses,
     cumulativeProfit,
     roomStates: autoModeRoomStates,
-    tieAutoCompletedRoomIds,
     toggle,
     updateSettings,
     resetStats,
@@ -122,6 +125,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     return 'list'
   })
   const [showPatternModal, setShowPatternModal] = useState(false)
+  const [showStrategyModal, setShowStrategyModal] = useState(false)
   const [showFilterDialog, setShowFilterDialog] = useState(false)
   const [showRoomSelector, setShowRoomSelector] = useState(false)
   const [sortType, setSortType] = useState<RoomSortType>('games')
@@ -223,8 +227,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   }, [autoModeRoomStates])
 
   // ✅ 세션 손익은 항상 AutoModeService에서 가져옴 (승패 카운트와 동일 소스 사용)
-  // VirtualBettingService의 totalNetProfit 대신 AutoModeService의 cumulativeProfit 사용
-  const sessionProfit = cumulativeProfit
+  // 🆕 2026-07-08 실잔액 기준 통일(사용자: "실잔액 -6만인데 프로그램 -4만"): 실모드에서는
+  // 자체추정(cumulativeProfit)이 정산 유실로 실제와 어긋나므로, '진짜 돈' 실잔액 기반 손익
+  // (realNetProfit)을 우선 표시한다. 가상모드/실잔액 미수신 시 cumulativeProfit로 폴백.
+  const sessionProfit = (!settings.isVirtualMode && autoMode.realNetProfit != null)
+    ? autoMode.realNetProfit
+    : cumulativeProfit
 
   // 헤더에 표시되는 손익·현재배팅·예상수익만 카운트업. 시작금액/전체배팅/최대수익/최대손실은 설정창의 통계 영역에서 정적으로 확인.
   const animatedSessionProfit = useCountUp(Math.abs(sessionProfit), 800)
@@ -258,12 +266,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   const selectedRoomPatternCounts = useMemo(() => {
     const counts: Record<string, number> = { all: selectedRoomIds.size }
 
-    // tie_frequent에서 이 슈 동안 이미 적중한 방은 후보 풀에서 제외
-    // (사용자 요구: "타이가 나온방들이 필터에서 방에 보여 이겨서 사라져야하는데")
-    const tieCompletedSet = new Set(tieAutoCompletedRoomIds)
-    const isExcludedFromFilter = (filterType: string, roomId: string) =>
-      filterType === 'tie_frequent' && tieCompletedSet.has(roomId)
-
     // 등록된 모든 customPatterns 사용 (enabled 필터링 제거)
     // 선택된 방이 없으면 전체 방 기준
     if (selectedRoomIds.size === 0) {
@@ -272,7 +274,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         let count = 0
         rooms.forEach(room => {
           const state = roomStates.get(room.id) || null
-          if (isExcludedFromFilter(filter.type, room.id)) return
           if (matchesFilter(room, state, filter.type)) count++
         })
         counts[filter.type] = count
@@ -285,7 +286,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       let count = 0
       rooms.forEach(room => {
         if (!selectedRoomIds.has(room.id)) return
-        if (isExcludedFromFilter(filter.type, room.id)) return
         const state = roomStates.get(room.id) || null
         if (matchesFilter(room, state, filter.type)) count++
       })
@@ -293,13 +293,18 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     })
 
     return counts
-  }, [selectedRoomIds, rooms, roomStates, availableFilters, matchesFilter, roomDataVersion, tieAutoCompletedRoomIds])
+  }, [selectedRoomIds, rooms, roomStates, availableFilters, matchesFilter, roomDataVersion])
 
   const filterSettingsSignature = useMemo(() => {
     return availableFilters
       .map(filter => `${filter.type}:${filter.label}:${filter.description}`)
       .join('|')
   }, [availableFilters])
+
+  const activeStructuredStrategy = useMemo(() => {
+    const strategyFilter = activeFilters.find(filter => CustomStrategyService.isStrategyFilter(filter))
+    return strategyFilter ? CustomStrategyService.getByFilterType(strategyFilter) : null
+  }, [activeFilters, filterSettingsSignature])
 
   // 배팅 대상 방 필터링 로직:
   // 정책: 선택된 방이 있으면 그 범위만, 없으면 활성 필터가 있을 때 전체 바카라 방 중 매칭 방만 자동 배팅 대상.
@@ -315,14 +320,20 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       return []
     }
 
-    // 1. 마틴 회복/연승 ID 수집
-    // 마틴 진행 중인 방은 패턴 매칭 여부와 무관하게 승리할 때까지 유지
+    // 1. 마틴 회복 ID 수집 — 마틴 진행 중(level>0)인 방은 패턴 매칭 여부와 무관하게
+    //    승리할 때까지 유지(마틴 중도 포기 방지).
+    // 🐞 로테이션(2026-07-07, 정확 모델): '연승(consecutiveWins>0)' 방을 매칭과 무관하게
+    //    유지하던 로직 제거. 타이 적중(=승리) 직후 그 방은 필터('지금까지 타이 0개')에서
+    //    빠지는데, 연승 유지가 그걸 무시하고 계속 배팅시켜 "이기고도 그 방에서 배팅"의
+    //    원인이었다. 이제 승리한 방은 필터에서 빠지면 배팅 대상에서도 빠져 다른 방으로 회전한다.
     const martinRecoveryRoomIds = new Set<string>()
-    const winStreakRoomIds = new Set<string>()
     autoModeRoomStates.forEach((state: any, roomId: string) => {
       if (selectedRoomIds.size > 0 && !selectedRoomIds.has(roomId)) return
-      if (state.martinLevel > 0) martinRecoveryRoomIds.add(roomId)
-      if (state.consecutiveWins > 0) winStreakRoomIds.add(roomId)
+      if (
+        state.martinLevel > 0 ||
+        state.customStrategyStatus === 'ready' ||
+        state.customStrategyStatus === 'pending'
+      ) martinRecoveryRoomIds.add(roomId)
     })
 
     // 2. 활성 필터가 있으면 대상 범위 중 매칭된 방만, 없으면 선택된 방 전체
@@ -330,15 +341,10 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       ? Array.from(rooms.values()).filter(r => selectedRoomIds.has(r.id))
       : baccaratRoomList
 
-    // tie_frequent 자동에서 이 슈에 이미 적중한 방은 후보에서 제외
-    const tieCompletedSet = new Set(tieAutoCompletedRoomIds)
-    const isTieFrequentFilter = activeFilters.length === 1 && activeFilters[0] === 'tie_frequent'
-
     let matchedIds: string[]
     if (activeFilters.length > 0) {
       matchedIds = targetRooms
         .filter(room => {
-          if (isTieFrequentFilter && tieCompletedSet.has(room.id)) return false
           const state = roomStates.get(room.id) || null
           return activeFilters.some(filterType => matchesFilter(room, state, filterType))
         })
@@ -347,17 +353,47 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       matchedIds = targetRooms.map(r => r.id)
     }
 
-    // 3. 매칭 + 마틴 회복 + 연승 방 합치기 (중복 제거)
-    const result = Array.from(new Set([...winStreakRoomIds, ...matchedIds, ...martinRecoveryRoomIds]))
+    // 3. 매칭 + 마틴 회복 방 합치기 (중복 제거)
+    const result = Array.from(new Set([...matchedIds, ...martinRecoveryRoomIds]))
 
-    console.log(`[AutoMode] 🔄 선택방 기반 배팅 대상 (v${roomDataVersion}): 선택=${selectedRoomIds.size}, 매칭=${matchedIds.length}, 마틴회복=${martinRecoveryRoomIds.size}, 연승=${winStreakRoomIds.size}, 총=${result.length}`)
+    console.log(`[AutoMode] 🔄 선택방 기반 배팅 대상 (v${roomDataVersion}): 선택=${selectedRoomIds.size}, 매칭=${matchedIds.length}, 마틴회복=${martinRecoveryRoomIds.size}, 총=${result.length}`)
     return result
-  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, baccaratRoomList, roomDataVersion, filterSettingsSignature, tieAutoCompletedRoomIds])
+  }, [rooms, roomStates, autoModeRoomStates, activeFilters, matchesFilter, selectedRoomIds, baccaratRoomList, roomDataVersion, filterSettingsSignature])
 
   // 필터된 방 목록과 현재 패턴 필터를 서비스에 전달
   useEffect(() => {
     setActiveBettingRooms(filteredBettingRoomIds, activeFilters.length > 0 ? activeFilters[0] : 'all')
   }, [filteredBettingRoomIds, activeFilters, setActiveBettingRooms])
+
+  const roomsForAutoModeDisplay = useMemo(() => {
+    const next = new Map<string, Room>(rooms)
+
+    autoModeRoomStates.forEach((state: any, roomId: string) => {
+      if (next.has(roomId)) return
+      if (
+        !state?.waitingForResult &&
+        !(state?.martinLevel > 0) &&
+        state?.customStrategyStatus !== 'ready' &&
+        state?.customStrategyStatus !== 'pending'
+      ) return
+
+      const roomName = state.roomName || roomId
+      next.set(roomId, {
+        id: roomId,
+        name: roomName,
+        koreanName: roomName,
+        history: [],
+        gameCount: 0,
+        phase: 'betting',
+        gameState: {
+          playerHand: { score: 0, cards: [] },
+          bankerHand: { score: 0, cards: [] },
+        },
+      })
+    })
+
+    return next
+  }, [rooms, autoModeRoomStates])
 
   const addHistoryLog = useCallback((
     roomName: string,
@@ -886,17 +922,20 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
           {/* Strategy Display Badge (New) */}
           <button
-            className="auto-mode__header-btn"
+            className={`auto-mode__header-btn ${activeStructuredStrategy ? 'auto-mode__header-btn--structured' : ''}`}
             onClick={() => setShowSettings(true)}
-            title="배팅 전략 설정"
+            title={activeStructuredStrategy
+              ? '조건 전략이 방향·단계·금액을 직접 관리합니다.'
+              : '기본 배팅 전략 설정'}
           >
             <Workflow size={14} />
             <span>
-              {settings.betStrategy === 'martingale' ? '마틴' :
-                settings.betStrategy === 'fibonacci' ? '피보나치' :
-                  settings.betStrategy === 'paroli' ? '파롤리' :
-                    settings.betStrategy === 'flat' ? '플랫' : '커스텀'}
-              {settings.betStrategy !== 'flat' && ` (${settings.maxMartin}단계)`}
+              {activeStructuredStrategy
+                ? `${activeStructuredStrategy.name} · 자체 단계`
+                : `기본: ${settings.betStrategy === 'martingale' ? '마틴' :
+                  settings.betStrategy === 'fibonacci' ? '피보나치' :
+                    settings.betStrategy === 'paroli' ? '파롤리' :
+                      settings.betStrategy === 'flat' ? '플랫' : '단계별 금액'}${settings.betStrategy !== 'flat' ? ` (${settings.maxMartin}단계)` : ''}`}
             </span>
           </button>
         </div>
@@ -915,7 +954,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   const effectiveBalance = virtualInitialBalance + sessionProfit - currentBettingInfo.totalCurrentBet
                   return `${effectiveBalance.toLocaleString()}원`
                 })()
-                : `${(realBalance || 0).toLocaleString()}원`}
+                : `${((autoMode.realDisplayBalance ?? realBalance) || 0).toLocaleString()}원`}
             </span>
             {settings.isVirtualMode && (
               (() => {
@@ -1003,67 +1042,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
             </button>
           )}
 
-          {/* View Mode Toggle & Sort Buttons */}
-          {isConnected && (
-            <div className="auto-mode__header-view-toggle" style={{ display: 'flex', gap: '4px', marginRight: '8px' }}>
-              <button
-                className={`auto-mode__header-btn ${viewMode === 'grid' ? 'active' : ''}`}
-                onClick={() => setViewMode('grid')}
-                title="그리드 뷰 (상세)"
-              >
-                <LayoutGrid size={14} />
-              </button>
-              <button
-                className={`auto-mode__header-btn ${viewMode === 'list' ? 'active' : ''}`}
-                onClick={() => setViewMode('list')}
-                title="리스트 뷰 (분석)"
-              >
-                <List size={14} />
-              </button>
-              <button
-                className={`auto-mode__header-btn ${viewMode === 'mosaic' ? 'active' : ''}`}
-                onClick={() => setViewMode('mosaic')}
-                title="모자이크 뷰"
-              >
-                <LayoutTemplate size={14} />
-              </button>
-            </div>
-          )}
-
-          {/* Sort Buttons - 정렬 버튼들 (4개만 표시) + 방향 토글 */}
-          {isConnected && (
-            <div className="auto-mode__header-sort">
-              {SORT_OPTIONS.filter(opt =>
-                ['name', 'games', 'martin', 'winRate', 'profit'].includes(opt.type)
-              ).map(option => (
-                <button
-                  key={option.type}
-                  className={`auto-mode__header-sort-btn ${sortType === option.type ? 'active' : ''}`}
-                  onClick={() => setSortType(option.type)}
-                  title={option.label}
-                >
-                  {option.shortLabel}
-                </button>
-              ))}
-              {/* Sort Direction Toggle */}
-              <button
-                className={`auto-mode__header-sort-btn auto-mode__sort-direction ${sortDirection}`}
-                onClick={toggleSortDirection}
-                title={sortDirection === 'asc' ? '오름차순 (클릭하여 내림차순으로 변경)' : '내림차순 (클릭하여 오름차순으로 변경)'}
-              >
-                {sortDirection === 'asc' ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M12 19V5M5 12l7-7 7 7" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M12 5v14M5 12l7 7 7-7" />
-                  </svg>
-                )}
-              </button>
-            </div>
-          )}
-
           {sessionWarning && (
             <div className="auto-mode__header-warning">{sessionWarning}</div>
           )}
@@ -1095,6 +1073,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
             </button>
           )}
 
+          {onHome && (
+            <button className="auto-mode__header-btn" onClick={onHome}>
+              홈
+            </button>
+          )}
+
           <button className="auto-mode__header-btn auto-mode__header-btn--logout" onClick={onLogout}>
             로그아웃
           </button>
@@ -1103,7 +1087,11 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
       {/* Main Content */}
       {
-        !isConnected ? (
+        /* 방 데이터(rooms Map)가 있으면 Rust 소켓 상태/roomsReady와 무관하게 목록을 보인다.
+           방·자동배팅 데이터는 CDP 브라우저 프레임이 공급하므로, Rust 멀티소켓이 ~10분에
+           킥당해 isConnected=false/roomsReady=false가 돼도 배팅은 계속 돈다(라이브 확인 2026-05-31).
+           그때 스피너로 목록을 가리면 "데이터/배팅은 멀쩡한데 UI만 뱅글뱅글"이 된다 → rooms.size로 게이팅. */
+        (!isConnected && rooms.size === 0) ? (
           <main className="auto-mode__empty">
             <div className="auto-mode__empty-content">
               {(status === 'launching' || status === 'monitoring') && (
@@ -1111,8 +1099,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
               )}
             </div>
           </main>
-        ) : !roomsReady ? (
-          /* 멀티소켓 연결됨, 방 구독 진행 중 */
+        ) : (!roomsReady && rooms.size === 0) ? (
+          /* 방 데이터가 아직 0개일 때만 스피너 */
           <main className="auto-mode__empty">
             <div className="auto-mode__empty-content">
               <div className="auto-mode__empty-spinner" />
@@ -1121,11 +1109,86 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
           </main>
         ) : (
           <div className="auto-mode__content">
+            <section className="auto-mode__workspace-bar" aria-label="자동배팅 운영 화면">
+              <div className="auto-mode__workspace-context">
+                <span>현재 운영 화면</span>
+                <strong>
+                  {viewMode === 'grid' ? '집중 관제' : viewMode === 'list' ? '전체 비교' : '밀집 감시'}
+                </strong>
+                <p>
+                  {viewMode === 'grid'
+                    ? '진행 중인 방의 배팅·단계·최근 결과를 크게 확인합니다.'
+                    : viewMode === 'list'
+                      ? '모든 방의 상태·다음 배팅·손익을 한 줄로 비교합니다.'
+                      : '많은 방의 이상 상태와 결과 대기를 한눈에 감시합니다.'}
+                </p>
+              </div>
+
+              <div className="auto-mode__workspace-views" role="group" aria-label="화면 보기 선택">
+                <button
+                  className={viewMode === 'grid' ? 'active' : ''}
+                  onClick={() => setViewMode('grid')}
+                  aria-pressed={viewMode === 'grid'}
+                >
+                  <LayoutGrid size={17} />
+                  <span><strong>집중 관제</strong><small>진행 방 크게</small></span>
+                </button>
+                <button
+                  className={viewMode === 'list' ? 'active' : ''}
+                  onClick={() => setViewMode('list')}
+                  aria-pressed={viewMode === 'list'}
+                >
+                  <List size={17} />
+                  <span><strong>전체 비교</strong><small>상태·손익 정렬</small></span>
+                </button>
+                <button
+                  className={viewMode === 'mosaic' ? 'active' : ''}
+                  onClick={() => setViewMode('mosaic')}
+                  aria-pressed={viewMode === 'mosaic'}
+                >
+                  <LayoutTemplate size={17} />
+                  <span><strong>밀집 감시</strong><small>최대 방 스캔</small></span>
+                </button>
+              </div>
+
+              <div className="auto-mode__workspace-tools">
+                <div className="auto-mode__workspace-counts" aria-label="운영 현황">
+                  <span>전체 <strong>{roomsForAutoModeDisplay.size}</strong></span>
+                  <span>대상 <strong>{filteredBettingRoomIds.length}</strong></span>
+                  <span className={currentBettingInfo.bettingRoomCount > 0 ? 'is-live' : ''}>
+                    배팅 중 <strong>{currentBettingInfo.bettingRoomCount}</strong>
+                  </span>
+                </div>
+                <div className="auto-mode__header-sort" aria-label="방 정렬">
+                  {SORT_OPTIONS.filter(opt =>
+                    ['name', 'games', 'martin', 'winRate', 'profit'].includes(opt.type)
+                  ).map(option => (
+                    <button
+                      key={option.type}
+                      className={`auto-mode__header-sort-btn ${sortType === option.type ? 'active' : ''}`}
+                      onClick={() => setSortType(option.type)}
+                      title={option.label}
+                    >
+                      {option.shortLabel}
+                    </button>
+                  ))}
+                  <button
+                    className={`auto-mode__header-sort-btn auto-mode__sort-direction ${sortDirection}`}
+                    onClick={toggleSortDirection}
+                    title={sortDirection === 'asc' ? '오름차순' : '내림차순'}
+                    aria-label={sortDirection === 'asc' ? '오름차순, 클릭하면 내림차순' : '내림차순, 클릭하면 오름차순'}
+                  >
+                    {sortDirection === 'asc' ? '↑' : '↓'}
+                  </button>
+                </div>
+              </div>
+            </section>
+
             {/* Room Grid - 메인 영역 */}
             <main className="auto-mode__rooms">
               {viewMode === 'grid' ? (
                 <AutoModeRoomGrid
-                  rooms={rooms}
+                  rooms={roomsForAutoModeDisplay}
                   roomStates={roomStates}
                   autoModeRoomStates={autoModeRoomStates}
                   enabledRoomIds={enabledRoomIds}
@@ -1144,7 +1207,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 />
               ) : viewMode === 'list' ? (
                 <AutoModeRoomList
-                  rooms={rooms}
+                  rooms={roomsForAutoModeDisplay}
                   roomStates={roomStates}
                   autoModeRoomStates={autoModeRoomStates}
                   enabledRoomIds={enabledRoomIds}
@@ -1166,7 +1229,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
               ) : (
                 // mosaic view
                 <AutoModeMosaic
-                  rooms={Array.from(rooms.values())}
+                  rooms={Array.from(roomsForAutoModeDisplay.values())}
                   roomStates={roomStates}
                   bettingStates={autoModeRoomStates}
                   activePredictions={new Map()}
@@ -1221,6 +1284,11 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         totalLosses={totalLosses}
         cumulativeProfit={sessionProfit}
         realBalance={realBalance}
+        activeStructuredStrategy={activeStructuredStrategy}
+        onOpenStrategyBuilder={() => {
+          setShowSettings(false)
+          setShowStrategyModal(true)
+        }}
       />
 
       {/* Pattern Manager Modal */}
@@ -1266,6 +1334,21 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         }}
       />
 
+      <CustomStrategyManagerModal
+        isOpen={showStrategyModal}
+        onClose={() => setShowStrategyModal(false)}
+        activeFilter={activeFilters[0] || 'all'}
+        onApply={(filter) => {
+          const isOnlyActive = activeFilters.length === 1 && activeFilters[0] === filter
+          if (!isOnlyActive) {
+            clearAutoModeFilters()
+            toggleAutoModeFilter(filter)
+          }
+          setShowStrategyModal(false)
+          showSuccess('커스텀 전략을 저장하고 필터에 적용했습니다.')
+        }}
+      />
+
       {/* Room Selector Modal */}
       <RoomSelectorModal
         isOpen={showRoomSelector}
@@ -1291,6 +1374,10 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
         filterCounts={selectedRoomPatternCounts}
         onOpenPatternManager={() => {
           setShowPatternModal(true)
+          setShowFilterDialog(false)
+        }}
+        onOpenStrategyManager={() => {
+          setShowStrategyModal(true)
           setShowFilterDialog(false)
         }}
         freshShoeScope="auto"

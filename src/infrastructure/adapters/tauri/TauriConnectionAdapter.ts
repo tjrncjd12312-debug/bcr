@@ -34,6 +34,12 @@ export interface MultiSocketParams {
   userAgent?: string
 }
 
+interface MultiSocketStatus {
+  is_connected?: boolean
+  isConnected?: boolean
+  state?: string
+}
+
 // ==================== Implementation ====================
 
 class TauriConnectionAdapterImpl implements IConnectionAdapter {
@@ -61,7 +67,9 @@ class TauriConnectionAdapterImpl implements IConnectionAdapter {
   }
 
   async getEvolutionMultiStatus(): Promise<boolean> {
-    return invoke<boolean>('get_evolution_multi_status')
+    const status = await invoke<boolean | MultiSocketStatus>('get_evolution_multi_status')
+    if (typeof status === 'boolean') return status
+    return status.is_connected === true || status.isConnected === true
   }
 
   // ==================== Manual 연결 ====================

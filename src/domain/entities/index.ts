@@ -243,6 +243,18 @@ export interface BettingPhaseEvent {
   phase: 'start' | 'end'
 }
 
+/**
+ * 실배팅 체결 결과 — Evolution `baccarat.resolved`의 args에서 추출.
+ * 히스토리 추론과 달리 "내가 보낸 베팅이 실제로 체결됐는지/거절됐는지"를 알려준다.
+ * acceptedBets/rejectedBets 키 = 평문 베팅 spot('Banker'|'Player'|'Tie' 등).
+ */
+export interface BetOutcome {
+  gameId?: string
+  winningSpots?: string[]
+  acceptedBets?: Record<string, number | { amount?: number; payoff?: number; limited?: boolean }>
+  rejectedBets?: Record<string, { amount?: number; error?: string }>
+}
+
 export interface GameResultEvent {
   roomId: string
   winner: Winner
@@ -252,11 +264,14 @@ export interface GameResultEvent {
   isBankerPair?: boolean
   isReplay?: boolean
   history?: RoadResult[]
+  /** baccarat.resolved에서만 채워짐. 없으면 히스토리 추론으로 폴백(기존 동작). */
+  betOutcome?: BetOutcome
 }
 
 // ==================== Room Filters ====================
 
 export type CustomPatternType = `custom:${string}`
+export type CustomStrategyFilterType = `strategy:${string}`
 
 export type RoomFilterType =
   | 'losing_streak'      // 5-8 consecutive losses
@@ -273,6 +288,7 @@ export type RoomFilterType =
   | 'fresh_room'         // 방 입장 직후 N게임 이내 (default N=5)
   | 'fresh_shoe'         // 카지노 슈가 막 시작된 방
   | CustomPatternType
+  | CustomStrategyFilterType
 
 /** Tie 미발생 임계 게임 수 (tie_drought 필터용) */
 export const TIE_DROUGHT_THRESHOLD = 20
@@ -284,6 +300,9 @@ export const TIE_FREQUENT_START = 1
 export const TIE_FREQUENT_MIN_COUNT = 0
 /** Tie 자주 출현 — 최대 횟수 기본값 (상한 미사용 시) (tie_frequent 필터용) */
 export const TIE_FREQUENT_MAX_COUNT = 0
+/** tie_frequent 진입 시점 — true: 구간(예 1~20판)이 다 끝난 뒤에만 매칭("20판부터").
+ *  false: 구간 진행 중에도 지금까지 본 결과로 미리 매칭(슈 시작부터, 기존 '타이 자동' 조기진입). */
+export const TIE_FREQUENT_REQUIRE_FULL_WINDOW = true
 /** 새 방 진입 직후 N게임 (fresh_room 필터용) */
 export const FRESH_ROOM_GAMES = 5
 /** 카지노 슈가 막 시작된 직후 N게임 (fresh_shoe 필터용) */
@@ -297,7 +316,9 @@ export interface RoomFilter {
   label: string
   description: string
   isCustom?: boolean
+  isStrategy?: boolean
   patternId?: string
+  strategyId?: string
   sequence?: Winner[]
   betDirection?: PatternBetDirection  // 이 패턴 감지시 배팅 방향 (표시용)
 }
@@ -402,6 +423,8 @@ export interface RoomPredictionState {
   predictionCount: number   // Total predictions made for this room (for visual feedback)
   history: PredictionHistoryItem[] // ✅ 최근 예측 결과 히스토리 (O/X)
   isShoeReset?: boolean     // 🔥 슈 초기화 상태 (히스토리 5개 미만)
+  /** Timestamp from an explicit casino shoe-change event, not inferred from short history. */
+  shoeChangeDetectedAt?: number
 }
 
 export interface MultiRoomPredictionState {
@@ -449,11 +472,14 @@ export type BetStrategyType = 'martingale' | 'fibonacci' | 'paroli' | 'flat' | '
 /** 배팅 타입 */
 export type BetType = 'Player' | 'Banker' | 'Tie'
 
-/** Evolution 배팅 코드 */
+/** Evolution 배팅 코드(=베팅 스팟 키).
+ *  ★2026-06-23 라이브 캡처로 확정: 실제 baccarat.playerBetRequest 의 action.chips 키는 평문
+ *  'Player'/'Banker'/'Tie' 다(BAC_ 접두사 아님). 과거 'BAC_*' 는 Evolution이 인식 못 해 베팅이
+ *  무시(HasBet:false)되던 근본 원인 → 평문으로 교정(캡처: chips:{"Banker":2000}, currentChips/rejectedBets 동일). */
 export const BET_CODES: Record<BetType, string> = {
-  Player: 'BAC_Player',
-  Banker: 'BAC_Banker',
-  Tie: 'BAC_Tie',
+  Player: 'Player',
+  Banker: 'Banker',
+  Tie: 'Tie',
 } as const
 
 /** 자동 배팅 상태 */
@@ -507,6 +533,9 @@ export interface EvolutionBetPayload {
   gameId: string
 }
 
+/** 실배팅 요청의 현재 체결 상태. */
+export type BetPlacementLifecycleStatus = 'attempted' | 'accepted' | 'unknown' | 'sent'
+
 /** 진행 중인 배팅 정보 */
 export interface PendingBetInfo {
   tableId: string
@@ -514,6 +543,12 @@ export interface PendingBetInfo {
   amount: number
   gameId: string
   timestamp: number
+  /**
+   * `unknown`은 요청 전송 후 제한 시간 안에 서버 응답을 확정하지 못한 상태다.
+   * 미체결을 뜻하지 않으므로 같은 gameId에 다시 전송하면 안 된다.
+   */
+  placementStatus: BetPlacementLifecycleStatus
+  placementError?: string
 }
 
 // ==================== Semi-Auto Settings ====================
@@ -545,6 +580,7 @@ export interface SemiAutoSettings {
   baseBetAmount: number         // 기본 배팅 금액
   autoBetting: boolean          // 자동배팅 ON/OFF
   betStrategy: BetStrategyType  // 배팅 전략
+  forceBetDirection: 'auto' | 'tie_only' // Fresh-Shoe 프리셋 배팅 방향
   baseUrl: string               // Evolution Gaming 베이스 URL
   soundEnabled: boolean         // 사운드 ON/OFF
 
@@ -591,6 +627,7 @@ export const DEFAULT_SEMI_AUTO_SETTINGS: SemiAutoSettings = {
   baseBetAmount: 10000,
   autoBetting: false,
   betStrategy: 'martingale',
+  forceBetDirection: 'auto',
   baseUrl: '',
   soundEnabled: true,           // 사운드 기본 ON
 
