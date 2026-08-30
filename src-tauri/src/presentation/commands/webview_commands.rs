@@ -2274,15 +2274,23 @@ async fn monitor_page_continuously(
     var h = window.location.hash || '';
     if (h.indexOf('mwg=') !== -1 || h.indexOf('.multiplay') !== -1) {
       console.log('[BCR] 🔄 Already in multiwidget mode, need to refresh to capture WebSocket');
-      if (!window.__bcr_refresh_triggered) {
-        window.__bcr_refresh_triggered = true;
-        // 약간의 딜레이 후 새로고침
+      // ⚠️ 플래그는 반드시 sessionStorage 로 — window 변수는 리로드마다 초기화되므로
+      //   addScriptToEvaluateOnNewDocument 재주입 → mwg 해시 잔존 → 무한 새로고침 루프가 된다.
+      //   매 리로드가 Evolution 플레이어를 재인증해 서버가 Rust 세션을 logoutByPlayer 로 킥한다.
+      //   sessionStorage 플래그는 리로드에도 살아남아 "게임 세션당 딱 한 번"만 새로고침한다
+      //   (blocker 설치 후 WS 를 한 번 재생성해 캡처하면 그 뒤엔 리로드 불필요).
+      var alreadyRefreshed = false;
+      try { alreadyRefreshed = (sessionStorage.getItem('__bcr_mw_refreshed') === '1'); } catch (e) {}
+      if (!alreadyRefreshed) {
+        try { sessionStorage.setItem('__bcr_mw_refreshed', '1'); } catch (e) {}
+        // 약간의 딜레이 후 새로고침 (1회)
         setTimeout(function() {
-          console.log('[BCR] 🔄 Triggering page refresh...');
+          console.log('[BCR] 🔄 Triggering page refresh (once per session)...');
           window.location.reload();
         }, 500);
         return {refresh:true};
       }
+      console.log('[BCR] ✅ Already refreshed this session — skipping reload (Rust owns the socket)');
     }
     
     var done = false;

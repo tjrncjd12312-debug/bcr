@@ -89,9 +89,11 @@ export interface AutoModeSettings {
 export interface RoomBettingState {
   roomId: string
   roomName: string
-  martinLevel: number
-  consecutiveLosses: number
-  consecutiveWins: number
+  // 아래 세 값은 MartingaleManager에서 읽어오는 파생값이다(저장된 사본이 아님).
+  // 변경은 반드시 martingaleManager를 통해서만 — readonly라 대입은 컴파일 에러가 난다.
+  readonly martinLevel: number
+  readonly consecutiveLosses: number
+  readonly consecutiveWins: number
   totalBets: number
   totalWins: number
   totalLosses: number
@@ -597,7 +599,6 @@ class AutoModeServiceImpl {
         }
 
         this.martingaleManager.resetLevel(roomId)
-        this.syncMartinLevelFromManager(roomId, rs)
         rs.waitingForResult = false
         rs.lastPrediction = null
         rs.martinRecoveryPrediction = null
@@ -948,8 +949,6 @@ class AutoModeServiceImpl {
 
     // 2. 방별 통계 및 상태 완전 리셋
     this.state.roomStates.forEach((rs, roomId) => {
-      // ✅ MartingaleManager에서 동기화 (직접 수정 제거)
-      this.syncMartinLevelFromManager(roomId, rs)
       rs.totalBets = 0
       rs.totalWins = 0
       rs.totalLosses = 0
@@ -991,15 +990,9 @@ class AutoModeServiceImpl {
   private getOrCreateRoomState(roomId: string, roomName: string): RoomBettingState {
     let roomState = this.state.roomStates.get(roomId)
     if (!roomState) {
-      // MartingaleManager에서 기존 상태 가져오기 (있으면)
-      const martinState = this.martingaleManager.getState(roomId)
-
-      roomState = {
+      const base = {
         roomId,
         roomName,
-        martinLevel: martinState?.level ?? 0,
-        consecutiveLosses: martinState?.consecutiveLosses ?? 0,
-        consecutiveWins: martinState?.consecutiveWins ?? 0,
         totalBets: 0,
         totalWins: 0,
         totalLosses: 0,
@@ -1015,22 +1008,30 @@ class AutoModeServiceImpl {
         resultInferenceRetries: 0,
         lastInferenceRetryTime: null,
       }
+
+      // 마틴 상태는 MartingaleManager가 유일한 소스다. 예전에는 이 객체에 값을 복사해두고
+      // 매 변경마다 수동 동기화 메서드를 호출해 맞췄는데, 그 호출을 한 번이라도 빠뜨리면
+      // stale 레벨이 calculateBetAmount(roomState.martinLevel)로 흘러들어가 배팅 금액이
+      // 틀어졌다. 읽을 때마다 매니저에서 끌어오면 애초에 어긋날 수가 없다.
+      Object.defineProperties(base, {
+        martinLevel: {
+          get: () => this.martingaleManager.getLevel(roomId),
+          enumerable: true,
+        },
+        consecutiveLosses: {
+          get: () => this.martingaleManager.getState(roomId)?.consecutiveLosses ?? 0,
+          enumerable: true,
+        },
+        consecutiveWins: {
+          get: () => this.martingaleManager.getState(roomId)?.consecutiveWins ?? 0,
+          enumerable: true,
+        },
+      })
+
+      roomState = base as RoomBettingState
       this.state.roomStates.set(roomId, roomState)
     }
     return roomState
-  }
-
-  /**
-   * MartingaleManager의 상태를 RoomBettingState에 동기화
-   * 마틴 레벨 변경 시 항상 MartingaleManager를 통해 변경 후 이 메서드 호출
-   */
-  private syncMartinLevelFromManager(roomId: string, roomState: RoomBettingState): void {
-    const martinState = this.martingaleManager.getState(roomId)
-    if (martinState) {
-      roomState.martinLevel = martinState.level
-      roomState.consecutiveLosses = martinState.consecutiveLosses
-      roomState.consecutiveWins = martinState.consecutiveWins
-    }
   }
 
   // 외부에서 설정한 배팅 가능 방 ID 목록 (패턴 필터 적용 결과)
@@ -2540,7 +2541,6 @@ class AutoModeServiceImpl {
         // ✅ MartingaleManager를 Single Source of Truth로 사용
         // recordWin은 level=0, consecutiveWins++, consecutiveLosses=0 처리
         this.martingaleManager.recordWin(roomId)
-        this.syncMartinLevelFromManager(roomId, roomState)
         roomState.martinRecoveryPrediction = null
         roomState.martinRecoveryStrategy = null
         console.log(`[AutoMode] ${roomName} - 승리! 마틴 리셋, 손익: +${profit.toLocaleString()}원`)
@@ -2561,7 +2561,6 @@ class AutoModeServiceImpl {
         console.log(`[AutoMode] ${roomName} - 커스텀 전략 패배! 상태=${customTransition.status}, 다음 ${customTransition.stageIndex + 1}단계 ${customTransition.attemptIndex + 1}차`)
       } else if (effectiveStrategy === 'flat') {
         this.martingaleManager.recordLoss(roomId, false) // 연패 카운트만, 레벨 미상승
-        this.syncMartinLevelFromManager(roomId, roomState)
         roomState.martinRecoveryPrediction = null
         roomState.martinRecoveryStrategy = null
         console.log(`[AutoMode] ${roomName} - 패배(flat, 레벨 0 유지 → 슬롯 반환·회전), 손익: ${profit.toLocaleString()}원`)
@@ -2583,14 +2582,12 @@ class AutoModeServiceImpl {
           // 최대 단계에서는 금액만 cap으로 유지하고, 방 종료/리셋은 하지 않는다.
           this.martingaleManager.recordLoss(roomId)
           this.martingaleManager.decrementLevel(roomId)
-          this.syncMartinLevelFromManager(roomId, roomState)
           console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${previousMartin + 1}/${maxMartin}단계 (최대 유지), 승리까지 같은 방향으로 계속 진행, 손익: ${profit.toLocaleString()}원`)
         } else {
           // 최대 단계 미만에서 패배 → 레벨 증가
           // ✅ MartingaleManager를 Single Source of Truth로 사용
           // recordLoss는 level++, consecutiveLosses++, consecutiveWins=0 처리
           this.martingaleManager.recordLoss(roomId)
-          this.syncMartinLevelFromManager(roomId, roomState)
           console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${roomState.martinLevel + 1}/${maxMartin}단계, 손익: ${profit.toLocaleString()}원`)
         }
       }
@@ -2726,7 +2723,6 @@ class AutoModeServiceImpl {
     } else {
       // 마틴 아님: 완전 초기화
       this.martingaleManager.resetLevel(roomId)
-      this.syncMartinLevelFromManager(roomId, roomState)
       roomState.waitingForResult = false
       roomState.lastPrediction = null
       roomState.martinRecoveryPrediction = null
