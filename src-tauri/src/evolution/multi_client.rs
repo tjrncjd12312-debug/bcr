@@ -29,6 +29,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
 use wreq::ws::message::Message as WsMessage;
+use crate::evolution::crypto::MultiwidgetCrypto;
 use wreq_util::Emulation;
 
 /// 최대 구독 테이블 수 (제한 없음)
@@ -350,7 +351,7 @@ impl EvolutionMultiSocket {
             is_multiwidget
         );
 
-        // 인스턴스 ID 재생성
+        // 인스턴스 ID 재생성 (encrypted=true·nonce는 유지 — nonce가 RC4 키에 필요하다)
         let ws_url = Self::regenerate_instance_id(&ws_url, &parsed, is_multiwidget);
         let parsed = Url::parse(&ws_url)
             .map_err(|e| format!("Invalid WS URL after instance change: {}", e))?;
@@ -632,11 +633,14 @@ impl EvolutionMultiSocket {
 
                         let (mut write, mut read) = websocket.split();
 
+                        // 멀티위젯 암호화 소켓이면 RC4+zstd crypto 생성(URL의 instance·nonce 기반).
+                        let crypto = Self::build_crypto(ws_url, is_multiwidget);
+
                         // 초기화 시퀀스 전송 (lobby v2는 lobby.initLobby, 구버전은 multiwidget init)
                         if is_multiwidget {
                             let is_lobby_v2 = ws_url.contains("/lobby/socket/v2")
                                 || ws_url.contains("/lobby/socket/V2");
-                            if let Err(e) = Self::send_init_sequence(&mut write, is_lobby_v2).await
+                            if let Err(e) = Self::send_init_sequence(&mut write, &crypto, is_lobby_v2).await
                             {
                                 error!("[Evolution-Multi] ❌ Init failed: {}", e);
                                 let _ = event_tx
@@ -662,7 +666,7 @@ impl EvolutionMultiSocket {
                         connected.store(true, Ordering::SeqCst);
 
                         // 메시지 루프
-                        Self::run_message_loop(event_tx, &mut write, &mut read, msg_rx, shutdown_rx)
+                        Self::run_message_loop(event_tx, &mut write, &mut read, &crypto, msg_rx, shutdown_rx)
                             .await
                     }
                     Err(e) => {
@@ -784,8 +788,85 @@ impl EvolutionMultiSocket {
         );
     }
 
+    /// 멀티위젯 소켓용 crypto 생성. encrypted=true 이고 instance·nonce가 있으면 Some.
+    /// 그 외(lobby 등 평문 소켓)는 None → 기존 평문 Text 전송을 그대로 유지한다.
+    fn build_crypto(ws_url: &str, is_multiwidget: bool) -> Option<MultiwidgetCrypto> {
+        if !is_multiwidget {
+            return None;
+        }
+        let parsed = Url::parse(ws_url).ok()?;
+        let mut instance = None;
+        let mut nonce = None;
+        let mut encrypted = false;
+        for (k, v) in parsed.query_pairs() {
+            match k.as_ref() {
+                "instance" => instance = Some(v.into_owned()),
+                "nonce" => nonce = Some(v.into_owned()),
+                "encrypted" if v == "true" => encrypted = true,
+                _ => {}
+            }
+        }
+        if !encrypted {
+            return None;
+        }
+        match (instance, nonce) {
+            (Some(i), Some(n)) => {
+                info!("[Evolution-Multi] 🔐 Encrypted multiwidget socket — RC4+zstd enabled");
+                Some(MultiwidgetCrypto::new(&i, &n))
+            }
+            _ => {
+                warn!("[Evolution-Multi] encrypted=true but instance/nonce missing — sending plaintext");
+                None
+            }
+        }
+    }
+
+    /// crypto가 Some이면 프레임을 암호화해 Binary로, None이면 평문 Text로 전송한다.
+    async fn send_ws<W>(
+        write: &mut W,
+        crypto: &Option<MultiwidgetCrypto>,
+        text: String,
+    ) -> Result<(), W::Error>
+    where
+        W: SinkExt<WsMessage> + Unpin,
+    {
+        let msg = match crypto {
+            Some(c) => WsMessage::Binary(c.encrypt(text.as_bytes()).into()),
+            None => WsMessage::Text(text.into()),
+        };
+        write.send(msg).await
+    }
+
+    /// 수신 프레임 정규화: 암호화 소켓의 Binary 프레임을 복호화해 Text로 바꾼다.
+    /// 제어프레임(Ping/Pong/Close)과 평문 Text는 그대로 통과. 복호 실패는 Pong(no-op)으로 흘린다.
+    fn decrypt_incoming(
+        msg: Option<Result<WsMessage, wreq::Error>>,
+        crypto: &Option<MultiwidgetCrypto>,
+    ) -> Option<Result<WsMessage, wreq::Error>> {
+        match (msg, crypto) {
+            (Some(Ok(WsMessage::Binary(bin))), Some(c)) => match c.decrypt(bin.as_ref()) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => Some(Ok(WsMessage::Text(s.into()))),
+                    Err(e) => {
+                        warn!("[Evolution-Multi] decrypted frame not utf8: {}", e);
+                        Some(Ok(WsMessage::Pong(Default::default())))
+                    }
+                },
+                Err(e) => {
+                    warn!("[Evolution-Multi] frame decrypt failed: {}", e);
+                    Some(Ok(WsMessage::Pong(Default::default())))
+                }
+            },
+            (other, _) => other,
+        }
+    }
+
     /// 초기화 시퀀스 전송
-    async fn send_init_sequence<W>(write: &mut W, is_lobby_v2: bool) -> Result<(), String>
+    async fn send_init_sequence<W>(
+        write: &mut W,
+        crypto: &Option<MultiwidgetCrypto>,
+        is_lobby_v2: bool,
+    ) -> Result<(), String>
     where
         W: SinkExt<WsMessage> + Unpin,
         W::Error: std::fmt::Display,
@@ -801,7 +882,7 @@ impl EvolutionMultiSocket {
         };
 
         for (i, msg) in sequence.iter().enumerate() {
-            if let Err(e) = write.send(WsMessage::Text(msg.to_string().into())).await {
+            if let Err(e) = Self::send_ws(write, crypto, msg.to_string()).await {
                 return Err(format!("Init message {} failed: {}", i + 1, e));
             }
             jitter_sleep(INIT_GAP_MIN_MS, INIT_GAP_MAX_MS).await;
@@ -816,6 +897,7 @@ impl EvolutionMultiSocket {
         event_tx: &EventSender,
         write: &mut W,
         read: &mut R,
+        crypto: &Option<MultiwidgetCrypto>,
         msg_rx: &mut tokio::sync::mpsc::Receiver<OutboundMessage>,
         shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
     ) -> DisconnectReason
@@ -852,6 +934,9 @@ impl EvolutionMultiSocket {
                 msg = read.next() => {
                     msg_count += 1;
                     last_received = tokio::time::Instant::now();
+
+                    // 암호화 소켓이면 Binary 프레임을 복호화해 Text로 정규화한다.
+                    let msg = Self::decrypt_incoming(msg, crypto);
 
                     match msg {
                         Some(Ok(WsMessage::Text(text))) => {
@@ -942,7 +1027,7 @@ impl EvolutionMultiSocket {
                                 }
                                 Some(HandleOutcome::Subscribe(tables)) => {
                                     if !tables_subscribed {
-                                        match Self::subscribe_to_tables(write, &tables).await {
+                                        match Self::subscribe_to_tables(write, crypto, &tables).await {
                                             Ok(count) => {
                                                 tables_subscribed = true;
                                                 let _ = event_tx.send(EvolutionEvent::RoomsReady {
@@ -1047,7 +1132,7 @@ impl EvolutionMultiSocket {
 
                     match tokio::time::timeout_at(
                         expires_at,
-                        write.send(WsMessage::Text(to_send.into())),
+                        Self::send_ws(write, crypto, to_send),
                     )
                     .await
                     {
@@ -1070,7 +1155,7 @@ impl EvolutionMultiSocket {
                 }
                 _ = tokio::time::sleep_until(next_heartbeat) => {
                     let ping = ProtocolSequence::metrics_ping();
-                    if let Err(e) = write.send(WsMessage::Text(ping.to_string().into())).await {
+                    if let Err(e) = Self::send_ws(write, crypto, ping.to_string()).await {
                         warn!("[Evolution-Multi] Heartbeat failed: {}", e);
                         return DisconnectReason::NetworkError(e.to_string());
                     }
@@ -1078,7 +1163,7 @@ impl EvolutionMultiSocket {
                     // 이게 없으면 metrics.ping/게임데이터가 흘러도 서버가 ~10분 뒤 inactivity로
                     // 세션을 만료(server_closed→재연결 시 KICKOUT:inactivity)한다(라이브 확인 2026-05-31).
                     let lobby_ping = ProtocolSequence::lobby_ping();
-                    if let Err(e) = write.send(WsMessage::Text(lobby_ping.to_string().into())).await {
+                    if let Err(e) = Self::send_ws(write, crypto, lobby_ping.to_string()).await {
                         warn!("[Evolution-Multi] Lobby ping failed: {}", e);
                         return DisconnectReason::NetworkError(e.to_string());
                     }
@@ -1229,7 +1314,11 @@ impl EvolutionMultiSocket {
     }
 
     /// 테이블 구독 - 구독 성공 개수 반환
-    async fn subscribe_to_tables<W>(write: &mut W, tables: &[TableInfo]) -> Result<usize, String>
+    async fn subscribe_to_tables<W>(
+        write: &mut W,
+        crypto: &Option<MultiwidgetCrypto>,
+        tables: &[TableInfo],
+    ) -> Result<usize, String>
     where
         W: SinkExt<WsMessage> + Unpin,
         W::Error: std::fmt::Display,
@@ -1252,8 +1341,7 @@ impl EvolutionMultiSocket {
         for table_id in &targets {
             // game.open
             let open_msg = ProtocolSequence::game_open(table_id);
-            if write
-                .send(WsMessage::Text(open_msg.to_string().into()))
+            if Self::send_ws(write, crypto, open_msg.to_string())
                 .await
                 .is_err()
             {
@@ -1262,8 +1350,7 @@ impl EvolutionMultiSocket {
 
             // subscribeTable
             let sub_msg = ProtocolSequence::subscribe_table(table_id);
-            if write
-                .send(WsMessage::Text(sub_msg.to_string().into()))
+            if Self::send_ws(write, crypto, sub_msg.to_string())
                 .await
                 .is_ok()
             {
