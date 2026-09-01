@@ -2000,8 +2000,12 @@ async fn monitor_page_continuously(
                                     // 🧪 캡처 모드: Rust는 멀티위젯에 연결하지 않는다(브라우저가 유일 세션 → 베팅 UI 작동).
                                     info!("[WS-BLOCKER] 🧪 BET-CAPTURE 모드 — Rust 멀티위젯 연결 스킵(브라우저가 세션 보유)");
                                 } else if is_multiwidget_ws
-                                    && !MULTIWIDGET_CONNECTED
-                                        .load(std::sync::atomic::Ordering::SeqCst)
+                                    // 🌉 브릿지 모드는 "이미 연결됨"으로 막지 않는다. 게임이 멀티위젯 소켓을
+                                    // 다시 열면(카테고리 전환·재연결, 새 instance/nonce) 새 URL로 재부착해야
+                                    // 한다. 같은 URL 중복은 spawn 안에서 bridge_url 비교로 거른다.
+                                    && (bridge_mode_enabled()
+                                        || !MULTIWIDGET_CONNECTED
+                                            .load(std::sync::atomic::Ordering::SeqCst))
                                 {
                                     info!(
                                         "[WS-BLOCKER] Captured blocked Evolution socket for Rust (url_len={}, has_session_query={})",
@@ -2031,14 +2035,19 @@ async fn monitor_page_continuously(
                                     let write_for_bridge = write.clone();
                                     let session_for_bridge = mw_bridge_session.clone();
                                     tokio::spawn(async move {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(500))
-                                            .await;
+                                        // 🌉 브릿지는 여기서 기다리지 않는다. 부착은 즉시 해야 새 소켓의 첫
+                                        // 프레임(availableTables 포함)을 놓치지 않는다. 크립토는 첫 binary
+                                        // 프레임에서 지연 생성하며, 그때 시크릿을 기다린다(ingest_bridge_frame).
+                                        if !bridge_mode_enabled() {
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(500))
+                                                .await;
+                                        }
 
-                                        // 🔑 암호화 소켓이면 런타임 시크릿이 도착할 때까지 기다린다.
+                                        // 🔑 암호화 소켓이면 런타임 시크릿이 도착할 때까지 기다린다(레거시 직접 접속).
                                         // 브라우저의 크립토 init 은 (블로킹된) 더미 소켓 onopen 직후에 돌아서
                                         // URL 캡처보다 조금 늦다. 안 기다리면 구 시크릿 폴백으로 붙게 되고,
                                         // 서버가 1007 로 끊으면서 세션이 타 계정이 밴된다(2026-08-31 확인).
-                                        if url_for_secret_gate.contains("encrypted=true") {
+                                        if !bridge_mode_enabled() && url_for_secret_gate.contains("encrypted=true") {
                                             let waited = crate::evolution::browser_profile::wait_for_runtime_secret(
                                                 tokio::time::Duration::from_secs(5),
                                             )
@@ -2059,7 +2068,16 @@ async fn monitor_page_continuously(
                                         }
 
                                         let mut client = MULTIWIDGET_CLIENT.lock().await;
-                                        if client.is_connected() {
+                                        if bridge_mode_enabled() {
+                                            // 같은 소켓 URL이면 중복 캡처 — 무시. 다른 URL이면 게임이 소켓을
+                                            // 새로 연 것이므로 아래에서 재부착한다(attach_bridge가 옛 상태를 비운다).
+                                            if client.bridge_url() == Some(ws_url_for_connect.as_str()) {
+                                                return;
+                                            }
+                                            if client.is_bridge_active() {
+                                                info!("🌉 [BRIDGE] 새 멀티위젯 소켓 감지 — 재부착(옛 키·구독 상태 폐기)");
+                                            }
+                                        } else if client.is_connected() {
                                             return;
                                         }
 
@@ -4107,8 +4125,8 @@ async fn monitor_page_continuously(
                                         // 흘려 넣는다(binary=base64 → RC4+zstd 복호 → 파서 → 이벤트).
                                         // 아래 레거시 forward(평문 JSON 전용)와 이중 처리되지 않게 여기서 끝낸다.
                                         if bridge_mode_enabled() {
-                                            let is_mw = ws_url_by_request_id
-                                                .get(request_id)
+                                            let frame_url = ws_url_by_request_id.get(request_id);
+                                            let is_mw = frame_url
                                                 .map(|u| u.contains("multiwidget"))
                                                 .unwrap_or(false);
                                             if is_mw {
@@ -4117,7 +4135,12 @@ async fn monitor_page_continuously(
                                                     .and_then(|v| v.as_u64())
                                                     .unwrap_or(1);
                                                 let mut client = MULTIWIDGET_CLIENT.lock().await;
-                                                if client.is_bridge_active() {
+                                                // 현재 브릿지가 붙은 소켓의 프레임만 받는다. 게임이 소켓을 새로 열면
+                                                // URL(instance/nonce)이 달라지고 키도 달라진다 — 옛/다른 소켓 프레임을
+                                                // 현재 키로 복호하면 "시크릿 불일치"로 오판해 분리된다(9/2 라이브).
+                                                let is_current = client.bridge_url().is_some()
+                                                    && client.bridge_url() == frame_url.map(|s| s.as_str());
+                                                if is_current {
                                                     client.ingest_bridge_frame(opcode, payload).await;
                                                 }
                                                 continue;

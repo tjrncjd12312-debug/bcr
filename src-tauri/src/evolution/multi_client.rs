@@ -1594,6 +1594,16 @@ impl EvolutionMultiSocket {
         self.bridge.is_some()
     }
 
+    /// 현재 브릿지가 붙어 있는 소켓 URL(instance·nonce 포함). 프레임 라우팅·재부착 판단의 기준.
+    ///
+    /// 게임 클라이언트는 멀티위젯 소켓을 **여러 번** 연다(카테고리 전환·재연결 시 새 instance/nonce).
+    /// 2026-09-02 라이브: 0.5초 간격으로 소켓 2개 → 첫 URL의 키로 두 번째 소켓 프레임을 복호하다
+    /// 실패해 "시크릿 불일치"로 오판·분리됐다. 그래서 새 URL이 잡히면 재부착하고, 프레임은
+    /// 이 URL과 정확히 일치하는 소켓의 것만 받는다.
+    pub fn bridge_url(&self) -> Option<&str> {
+        self.bridge.as_ref().map(|b| b.ws_url.as_str())
+    }
+
     /// 브릿지를 떼고 Disconnected를 알린다. 재연결은 호출측(프론트 반응형 로테이션)이 판단한다.
     async fn detach_bridge(&mut self, reason: DisconnectReason) {
         let url = self
@@ -1650,6 +1660,17 @@ impl EvolutionMultiSocket {
                     return;
                 }
             };
+            // 첫 binary 프레임이 런타임 시크릿보다 먼저 올 수 있다(둘 다 소켓 open 직후). 시크릿이
+            // 아직 없으면 폴백 키로 만들었다가 오판·분리하지 말고 잠깐 기다린다.
+            if bridge.encrypted
+                && bridge.crypto.is_none()
+                && browser_profile::runtime_secret().is_none()
+            {
+                let _ = browser_profile::wait_for_runtime_secret(
+                    std::time::Duration::from_secs(3),
+                )
+                .await;
+            }
             let crypto = match Self::bridge_crypto(bridge) {
                 Ok(Some(c)) => c,
                 Ok(None) => {
@@ -1965,6 +1986,10 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_decrypts_binary_frame_then_encrypts_outbound_without_detaching() {
+        // 런타임 시크릿을 8/30 값으로 심어 첫 프레임의 3초 시크릿 대기를 건너뛴다(실행 속도).
+        browser_profile::set_runtime_secret(
+            "9e7ab238f42eebf3547861a1576efdd9f5dcfef0060cef43a52b205a68117272",
+        );
         let mut client = EvolutionMultiSocket::new();
         let _events = client.create_event_channel();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2072,5 +2097,46 @@ mod tests {
         assert!(err.contains("bridge mode"), "{}", err);
         assert!(!client.is_connected());
         browser_profile::set_bridge_mode_for_test(None);
+    }
+
+    #[tokio::test]
+    async fn bridge_reattach_on_new_socket_url_discards_old_state() {
+        // 게임이 멀티위젯 소켓을 다시 열면(새 instance/nonce) 재부착해야 하고, 옛 소켓에서
+        // 추적한 gameId·구독 상태는 버려야 한다(9/2 라이브: 소켓 2개 → 옛 키로 오판 분리).
+        let mut client = EvolutionMultiSocket::new();
+        let _events = client.create_event_channel();
+        let url_a = "wss://gate.evo-games.com.se/public/baccarat/player/game/multiwidget/socket?messageFormat=json&instance=aaaaaa-s-&EVOSESSIONID=abc".to_string();
+        let url_b = "wss://gate.evo-games.com.se/public/baccarat/player/game/multiwidget/socket?messageFormat=json&instance=bbbbbb-s-&EVOSESSIONID=abc".to_string();
+
+        let (tx_a, _rx_a) = tokio::sync::mpsc::unbounded_channel();
+        client.attach_bridge(url_a.clone(), tx_a).await.expect("attach a");
+        assert_eq!(client.bridge_url(), Some(url_a.as_str()));
+        client
+            .ingest_bridge_frame(
+                1,
+                r#"{"type":"baccarat.gameState","args":{"tableId":"table-1","gameId":"round-a"}}"#,
+            )
+            .await;
+        assert!(client.send_message(bet_message("synthetic-x")).await.is_ok());
+
+        // 새 소켓 URL 로 재부착 → 옛 gameId 추적은 사라져 synthetic 베팅은 다시 fail-closed.
+        let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
+        client.attach_bridge(url_b.clone(), tx_b).await.expect("attach b");
+        assert_eq!(client.bridge_url(), Some(url_b.as_str()));
+        assert!(client.is_connected());
+        assert!(client.send_message(bet_message("synthetic-x")).await.is_err());
+
+        // 새 소켓에서 gameId 를 다시 배우면 새 채널로 나간다.
+        client
+            .ingest_bridge_frame(
+                1,
+                r#"{"type":"baccarat.gameState","args":{"tableId":"table-1","gameId":"round-b"}}"#,
+            )
+            .await;
+        client.send_message(bet_message("synthetic-x")).await.expect("send on b");
+        match rx_b.recv().await.expect("outbound on new channel") {
+            BridgeOutbound::Text(t) => assert!(t.contains(r#""gameId":"round-b""#)),
+            other => panic!("{:?}", other),
+        }
     }
 }
