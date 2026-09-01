@@ -351,6 +351,17 @@ impl EvolutionMultiSocket {
         ws_url: String,
         mut options: MultiSocketOptions,
     ) -> Result<(), String> {
+        // 🛡️ 1인1세션 보장의 최후 방어선. 브릿지 모드에서는 어떤 호출자(캡처 핸들러, 수동 커맨드,
+        // 프론트 connect 커맨드)도 Rust 직접 소켓을 열 수 없다. 브라우저가 이미 세션을 쥔 상태에서
+        // 두 번째 소켓이 붙는 순간이 곧 킥(notAuthorised/logoutByPlayer)이고, 그 반복이 403 [G.8]이다.
+        if browser_profile::bridge_mode_enabled() {
+            return Err(
+                "bridge mode: direct multiwidget socket is disabled (browser owns the session; \
+                 set BCR_LEGACY_RUST_SOCKET=1 to use the legacy direct socket)"
+                    .to_string(),
+            );
+        }
+
         // 이미 연결 중이면 먼저 종료
         if self.is_connected() {
             info!("[Evolution-Multi] 🔄 Disconnecting existing connection first...");
@@ -2043,5 +2054,23 @@ mod tests {
             }
             other => panic!("평문 소켓은 Text: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn connect_is_refused_in_bridge_mode_so_no_second_socket_can_ever_open() {
+        // 1인1세션의 최후 방어선: 어떤 호출자가 connect()를 불러도 브릿지 모드면 직접 소켓을
+        // 열지 않는다. 두 번째 소켓 = 킥 = (반복 시) 403 [G.8].
+        browser_profile::set_bridge_mode_for_test(Some(true));
+        let mut client = EvolutionMultiSocket::new();
+        let err = client
+            .connect(
+                "wss://skylinextm.evo-games.com/public/baccarat/player/game/multiwidget/socket?instance=i-&EVOSESSIONID=abc".to_string(),
+                MultiSocketOptions::default(),
+            )
+            .await
+            .expect_err("bridge mode must refuse direct connect");
+        assert!(err.contains("bridge mode"), "{}", err);
+        assert!(!client.is_connected());
+        browser_profile::set_bridge_mode_for_test(None);
     }
 }

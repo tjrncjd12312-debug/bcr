@@ -237,6 +237,44 @@ pub async fn wait_for_runtime_secret(timeout: std::time::Duration) -> Option<Str
     }
 }
 
+/// 브릿지 모드 여부의 **단일 진실 공급원**. 0=미결정, 1=브릿지, 2=레거시(직접 소켓).
+///
+/// 이 값이 하나의 모듈에 있어야 하는 이유: 1인1세션 정책에서 킥을 막는 핵심은 "Rust가 두 번째
+/// 소켓을 절대 열지 않는 것"이고, 직접 접속 진입점이 여럿이다(캡처 핸들러, 수동 커맨드,
+/// 프론트 connect 커맨드). 각자 env를 읽게 두면 하나만 빠져도 킥이 난다. `EvolutionMultiSocket::connect`
+/// 가 이 함수를 보고 브릿지 모드면 무조건 거절한다(fail-closed).
+static BRIDGE_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// 브릿지 모드(기본 ON). `BCR_LEGACY_RUST_SOCKET=1`이면 레거시(Rust 직접 소켓).
+pub fn bridge_mode_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    match BRIDGE_MODE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let legacy = std::env::var("BCR_LEGACY_RUST_SOCKET")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            BRIDGE_MODE.store(if legacy { 2 } else { 1 }, Ordering::Relaxed);
+            !legacy
+        }
+    }
+}
+
+/// 테스트 전용: 모드를 강제한다. `None`이면 다시 env에서 읽는다.
+#[cfg(test)]
+pub fn set_bridge_mode_for_test(mode: Option<bool>) {
+    use std::sync::atomic::Ordering;
+    BRIDGE_MODE.store(
+        match mode {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        },
+        Ordering::Relaxed,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

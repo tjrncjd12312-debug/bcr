@@ -5559,9 +5559,10 @@ fn is_bet_capture_mode() -> bool {
 ///
 /// 되돌리기(진단용): `BCR_LEGACY_RUST_SOCKET=1` — Rust 직접 소켓 + 블로킹 + 주차의 옛 경로.
 fn bridge_mode_enabled() -> bool {
-    !std::env::var("BCR_LEGACY_RUST_SOCKET")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    // 단일 진실 공급원은 evolution 계층에 둔다 — EvolutionMultiSocket::connect 가 같은 값을 보고
+    // 브릿지 모드에서 직접 접속을 fail-closed 로 거절해야 하기 때문(진입점이 여럿이라 여기서만
+    // 막으면 빠지는 곳이 생긴다).
+    crate::evolution::browser_profile::bridge_mode_enabled()
 }
 
 /// 블로커/브릿지 스크립트에 현재 모드를 박아 넣은 최종본. document-start에 주입되므로
@@ -6092,6 +6093,15 @@ pub async fn park_browser_lobby() -> Result<String, String> {
 /// - If no room tab exists, create a NEW window (don't touch lobby)
 #[tauri::command]
 pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Result<(), String> {
+    // 🛡️ 브릿지 모드에서는 룸 이동을 하지 않는다. 멀티테이블 탭이 유일한 Evolution 세션이고 베팅도
+    // 그 소켓으로 나간다. 같은 탭을 룸으로 옮기면 멀티테이블 소켓이 닫혀 피드가 죽고, 다른 탭에
+    // 룸을 열면 두 번째 게임 세션이 생겨 1인1세션 정책에 킥당한다. 어느 쪽도 허용하지 않는다.
+    if bridge_mode_enabled() {
+        return Err(
+            "bridge mode: room navigation disabled (would create a second Evolution session)"
+                .to_string(),
+        );
+    }
     info!(
         "🎰 Navigating to room with WS blocker (url_len={}, has_table_id={})",
         url.len(),
@@ -6356,6 +6366,14 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
 /// Uses URL-based tab detection via HTTP API: finds existing tab with table_id= in URL and navigates it
 #[tauri::command]
 pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String> {
+    // 🛡️ 브릿지 모드: Evolution 룸을 새 탭에 열면 멀티테이블 세션과 별개의 두 번째 게임 세션이 되어
+    // 1인1세션 정책에 즉시 킥당한다. Evolution URL에 한해 차단한다(다른 사이트 탭은 무관).
+    if bridge_mode_enabled() && url.contains("evo-games") {
+        return Err(
+            "bridge mode: opening an Evolution room in a new tab disabled (second session → kick)"
+                .to_string(),
+        );
+    }
     info!(
         "🌐 Opening/navigating room tab in CDP Chrome (url_len={})",
         url.len()
