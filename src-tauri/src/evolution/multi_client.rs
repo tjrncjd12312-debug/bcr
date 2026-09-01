@@ -29,8 +29,8 @@ use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
 use wreq::ws::message::Message as WsMessage;
+use crate::evolution::browser_profile;
 use crate::evolution::crypto::MultiwidgetCrypto;
-use wreq_util::Emulation;
 
 /// 최대 구독 테이블 수 (제한 없음)
 const MAX_SUBSCRIBE_TABLES: usize = 60;
@@ -70,9 +70,13 @@ const RECONNECT_MAX_DELAY_MS: u64 = 30_000;
 // caller from seeing success when a safety gate dropped the message locally.
 const OUTBOUND_ACK_TIMEOUT_SECS: u64 = 5;
 
-/// 위장용 기본 User-Agent. TLS/HTTP2 Emulation(`Emulation::Chrome136`, single_connection_attempt)과
-/// 반드시 동일한 Chrome 버전이어야 한다 — UA가 다르면 UA-vs-JA3 불일치로 Akamai 봇 스코어링에 걸린다(ua-1).
-const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+/// 브라우저 UA를 아직 못 읽었을 때만 쓰는 최후 폴백. **정상 경로에서는 절대 쓰이지 않는다.**
+///
+/// Evolution은 1인1세션이라, 브라우저가 인증한 세션에 우리가 붙을 때 UA/TLS 지문이 다르면
+/// "같은 세션, 다른 기기"로 보여 `notAuthorised`를 맞는다. 그래서 UA는 하드코딩하지 않고
+/// `browser_profile`이 CDP로 읽어온 **그 PC의 실제 Chrome UA**를 쓴다(어떤 PC에서도 자동 일치).
+/// 이 상수는 프로필이 비어 있을 때 UA를 아예 안 보내는 것보다 나은 정도의 안전망일 뿐이다.
+const CHROME_UA_FALLBACK: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
 /// Sleep for a uniformly random duration in `[min_ms, max_ms)`.
 async fn jitter_sleep(min_ms: u64, max_ms: u64) {
@@ -361,12 +365,14 @@ impl EvolutionMultiSocket {
 
         let origin = options.origin.clone().unwrap_or_default();
         let cookie = options.cookie.clone().unwrap_or_default();
-        // Caller may override (e.g. for per-session UA pinning) but the default
-        // MUST match the TLS Emulation (Chrome136) to keep UA and TLS in lockstep.
+        // UA는 **그 PC에서 실제로 띄운 Chrome 값**을 미러링한다(CDP로 읽어온 값).
+        // 하드코딩하면 다른 PC/다른 Chrome 버전에서 곧바로 지문 불일치가 나고,
+        // 1인1세션 정책상 "같은 세션 다른 기기"로 보여 notAuthorised를 맞는다.
         let user_agent = options
             .user_agent
             .clone()
-            .unwrap_or_else(|| CHROME_UA.to_string());
+            .or_else(|| browser_profile::profile().and_then(|p| p.user_agent))
+            .unwrap_or_else(|| CHROME_UA_FALLBACK.to_string());
         let referer = options
             .referer
             .clone()
@@ -567,15 +573,29 @@ impl EvolutionMultiSocket {
         is_multiwidget: bool,
         origin: &str,
         user_agent: &str,
-        cookie: &str,
-        referer: &str,
+        // 브라우저는 멀티위젯 핸드셰이크에 Cookie/Referer를 보내지 않는다(2026-09-01 실측).
+        // 진단 로그(log_connection_info)용으로만 남기고 전송하지 않는다 — 보내면 지문이 어긋난다.
+        _cookie: &str,
+        _referer: &str,
         event_tx: &EventSender,
         msg_rx: &mut tokio::sync::mpsc::Receiver<OutboundMessage>,
         shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
         connected: &AtomicBool,
     ) -> DisconnectReason {
+        // TLS/HTTP2 지문도 그 PC의 실제 Chrome 버전에 맞춘다. UA만 맞추고 JA3가 다르면
+        // UA-vs-TLS 불일치로 곧바로 봇 스코어링에 걸린다 — 둘은 항상 같은 버전이어야 한다.
+        let chrome_major = browser_profile::profile()
+            .and_then(|p| p.chrome_major)
+            .or_else(|| browser_profile::parse_chrome_major(user_agent))
+            .unwrap_or(136);
+        let emulation = browser_profile::emulation_for(chrome_major);
+        info!(
+            "[Evolution-Multi] 🪞 지문 미러링: Chrome {} → TLS/HTTP2 {:?}",
+            chrome_major, emulation
+        );
+
         let client = match wreq::Client::builder()
-            .emulation(Emulation::Chrome136)
+            .emulation(emulation)
             .cert_verification(false)
             .connect_timeout(tokio::time::Duration::from_secs(15))
             .build()
@@ -594,17 +614,52 @@ impl EvolutionMultiSocket {
             }
         };
 
-        let mut ws_request = client
-            .websocket(ws_url)
-            .header("Origin", origin)
-            .header("User-Agent", user_agent)
-            .header("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
-            .header("Cache-Control", "no-cache")
-            .header("Pragma", "no-cache")
-            .header("Referer", referer);
+        // 핸드셰이크 헤더는 **브라우저가 실제로 보낸 것만, 보낸 순서 그대로** 재생한다.
+        //
+        // 2026-09-01 실측: 브라우저는 멀티위젯 핸드셰이크에 Referer도 Cookie도 보내지 않는다.
+        // 인증은 URL의 EVOSESSIONID 하나로만 이뤄진다. 우리가 임의로 붙이던 Referer/Cookie는
+        // 브라우저엔 존재하지 않는 헤더라 그 자체가 "브라우저가 아님"을 알리는 신호였다.
+        // 캡처가 없을 때만(최초 1회 등) 최소 헤더로 폴백한다.
+        let captured = browser_profile::profile().filter(|p| p.has_handshake());
+        let mut ws_request = client.websocket(ws_url);
 
-        if !cookie.is_empty() {
-            ws_request = ws_request.header("Cookie", cookie);
+        match &captured {
+            Some(p) => {
+                let headers = p.replayable_headers();
+                info!(
+                    "[Evolution-Multi] 🪞 브라우저 핸드셰이크 헤더 {}개 재생",
+                    headers.len()
+                );
+                for (name, value) in headers {
+                    ws_request = ws_request.header(name, value);
+                }
+            }
+            None => {
+                // 폴백이라도 값은 최대한 브라우저에서 읽어온 것을 쓴다.
+                // 게임 페이지가 보고한 origin/언어가 있으면 그게 정확하다 — 게이트 호스트로
+                // 추측한 Origin 은 프론트 오리진과 다를 수 있다(실측: spadeblackstone vs gate72_019).
+                // 헤더 이름 집합 자체는 2026-09-01 실측 핸드셰이크와 동일하다.
+                let p = browser_profile::profile();
+                let origin = p
+                    .as_ref()
+                    .and_then(|p| p.origin.clone())
+                    .unwrap_or_else(|| origin.to_string());
+                let accept_language = p
+                    .as_ref()
+                    .and_then(|p| p.accept_language.clone())
+                    .unwrap_or_else(|| "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7".to_string());
+                warn!(
+                    "[Evolution-Multi] ⚠️ 브라우저 핸드셰이크 미캡처 — 페이지 신원 기반 폴백(origin={}, lang={})",
+                    origin, accept_language
+                );
+                ws_request = ws_request
+                    .header("Origin", origin)
+                    .header("User-Agent", user_agent)
+                    .header("Accept-Language", accept_language)
+                    .header("Cache-Control", "no-cache")
+                    .header("Pragma", "no-cache")
+                    .header("Accept-Encoding", "gzip, deflate, br, zstd");
+            }
         }
 
         match ws_request.send().await {
@@ -838,26 +893,26 @@ impl EvolutionMultiSocket {
     }
 
     /// 수신 프레임 정규화: 암호화 소켓의 Binary 프레임을 복호화해 Text로 바꾼다.
-    /// 제어프레임(Ping/Pong/Close)과 평문 Text는 그대로 통과. 복호 실패는 Pong(no-op)으로 흘린다.
+    /// 제어프레임(Ping/Pong/Close)과 평문 Text는 그대로 통과.
+    ///
+    /// 복호 실패는 **절대 무시하지 않는다**. 키가 맞으면 복호는 항상 성공하므로, 한 번이라도
+    /// 실패했다면 RC4 키가 틀린 것이고 = 우리가 보내는 프레임도 서버엔 쓰레기다. 그대로 두면
+    /// 서버가 `1007 malformed data`로 끊고 재연결이 세션을 태워 계정이 밴된다(2026-08-31 확인).
+    /// 그래서 `Err(사유)`로 올려 호출측이 재연결 없이 즉시 중단하게 한다.
     fn decrypt_incoming(
         msg: Option<Result<WsMessage, wreq::Error>>,
         crypto: &Option<MultiwidgetCrypto>,
-    ) -> Option<Result<WsMessage, wreq::Error>> {
+    ) -> Result<Option<Result<WsMessage, wreq::Error>>, String> {
         match (msg, crypto) {
             (Some(Ok(WsMessage::Binary(bin))), Some(c)) => match c.decrypt(bin.as_ref()) {
                 Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(s) => Some(Ok(WsMessage::Text(s.into()))),
-                    Err(e) => {
-                        warn!("[Evolution-Multi] decrypted frame not utf8: {}", e);
-                        Some(Ok(WsMessage::Pong(Default::default())))
-                    }
+                    Ok(s) => Ok(Some(Ok(WsMessage::Text(s.into())))),
+                    // 복호는 됐는데 UTF-8이 아니다 = 키가 우연히 통과한 게 아니라 진짜 깨진 것.
+                    Err(e) => Err(format!("decrypted frame not utf8: {}", e)),
                 },
-                Err(e) => {
-                    warn!("[Evolution-Multi] frame decrypt failed: {}", e);
-                    Some(Ok(WsMessage::Pong(Default::default())))
-                }
+                Err(e) => Err(format!("frame decrypt failed: {}", e)),
             },
-            (other, _) => other,
+            (other, _) => Ok(other),
         }
     }
 
@@ -936,7 +991,18 @@ impl EvolutionMultiSocket {
                     last_received = tokio::time::Instant::now();
 
                     // 암호화 소켓이면 Binary 프레임을 복호화해 Text로 정규화한다.
-                    let msg = Self::decrypt_incoming(msg, crypto);
+                    // 복호 실패 = RC4 키 불일치 → 재연결 없이 즉시 중단(계정 보호).
+                    let msg = match Self::decrypt_incoming(msg, crypto) {
+                        Ok(m) => m,
+                        Err(detail) => {
+                            error!(
+                                "[Evolution-Multi] 🛑 {} — RC4 키 불일치. 재연결하지 않는다(반복 전송 시 계정 밴). \
+                                 크립토 시크릿 재추출이 필요하다.",
+                                detail
+                            );
+                            return DisconnectReason::CryptoMismatch(detail);
+                        }
+                    };
 
                     match msg {
                         Some(Ok(WsMessage::Text(text))) => {
@@ -1076,6 +1142,21 @@ impl EvolutionMultiSocket {
                                     "[Evolution-Multi] Server closed (no close frame, after {} msgs)",
                                     msg_count
                                 ),
+                            }
+                            // 1007(invalid payload) / 1003(unsupported data) = 서버가 우리 프레임을
+                            // 파싱조차 못 했다는 뜻 = 키·포맷 불일치. 재연결하면 규격 위반 프레임을
+                            // 반복 전송해 계정이 밴된다(2026-08-31 라이브 확인). 즉시 중단한다.
+                            if let Some(cf) = &frame {
+                                let code: u16 = cf.code.clone().into();
+                                if code == 1007 || code == 1003 {
+                                    let detail =
+                                        format!("server rejected frames: {} {}", code, cf.reason);
+                                    error!(
+                                        "[Evolution-Multi] 🛑 {} — 재연결하지 않는다(계정 보호).",
+                                        detail
+                                    );
+                                    return DisconnectReason::CryptoMismatch(detail);
+                                }
                             }
                             return DisconnectReason::ServerClosed;
                         }

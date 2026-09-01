@@ -81,6 +81,12 @@ pub enum DisconnectReason {
     Reconnecting,
     /// 서버로부터 수신 타임아웃 (좀비 연결 감지)
     ReceiveTimeout,
+    /// 멀티위젯 암복호 키 불일치 (복호 실패 또는 서버의 1007/1003 거부).
+    ///
+    /// **절대 재연결하지 않는다.** 키가 틀린 채로 재접속하면 규격 위반 프레임을 반복 전송하게 되고,
+    /// Evolution이 이를 어뷰징으로 보고 세션을 무효화(`notAuthorised`)한 뒤 계정이 차단된다
+    /// (2026-08-31 라이브에서 13초 내 3회 재연결 → 밴 확인). 크립토 시크릿 재추출이 유일한 복구다.
+    CryptoMismatch(String),
 }
 
 impl DisconnectReason {
@@ -93,6 +99,7 @@ impl DisconnectReason {
             DisconnectReason::NetworkError(err) => format!("network_error:{}", err),
             DisconnectReason::Reconnecting => "reconnecting".to_string(),
             DisconnectReason::ReceiveTimeout => "receive_timeout".to_string(),
+            DisconnectReason::CryptoMismatch(detail) => format!("crypto_mismatch:{}", detail),
         }
     }
 
@@ -148,6 +155,25 @@ mod tests {
             DisconnectReason::Kickout("duplicate".to_string()).as_str(),
             "kickout:duplicate"
         );
+        assert_eq!(
+            DisconnectReason::CryptoMismatch("flag 207".to_string()).as_str(),
+            "crypto_mismatch:flag 207"
+        );
+    }
+
+    /// 키가 틀린 채 재연결하면 규격 위반 프레임을 반복 전송해 계정이 밴된다
+    /// (2026-08-31 라이브: 13초 내 3회 재연결 → notAuthorised → 차단).
+    /// 이 회귀 방어가 깨지면 밴이 재발하므로 반드시 유지한다.
+    #[test]
+    fn crypto_mismatch_never_auto_reconnects() {
+        assert!(
+            !DisconnectReason::CryptoMismatch("frame decrypt failed".to_string())
+                .should_auto_reconnect()
+        );
+        // 킥아웃도 재연결 금지. 반대로 일시적 네트워크 오류는 재연결 대상이어야 한다.
+        assert!(!DisconnectReason::Kickout("notAuthorised".to_string()).should_auto_reconnect());
+        assert!(DisconnectReason::NetworkError("timeout".to_string()).should_auto_reconnect());
+        assert!(DisconnectReason::ServerClosed.should_auto_reconnect());
     }
 
     #[test]

@@ -34,6 +34,7 @@
 //! 🔥 IMPORTANT: Browser WebSockets are now blocked by WS_BLOCKER_SCRIPT
 //! to prevent session conflicts. Only Rust manages Evolution connections.
 
+pub mod browser_profile;
 pub mod commands;
 pub mod connection_state;
 pub mod crypto;

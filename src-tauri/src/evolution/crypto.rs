@@ -19,23 +19,51 @@
 //! RC4 S-box는 연결당 1회 KSA로 만들고, 프레임마다 사본을 써서 키스트림이 리셋된다
 //! (그래서 같은 평문 → 같은 암호문). 송·수신 동일 키.
 
-/// 프론트엔드 번들에 하드코딩된 RC4 파생 시크릿(6.20260828 기준).
-const RC4_SECRET: &str = "9e7ab238f42eebf3547861a1576efdd9f5dcfef0060cef43a52b205a68117272";
+/// 마지막으로 확인된 RC4 파생 시크릿(6.20260828 빌드). **폴백 전용**.
+///
+/// Evolution은 빌드마다 이 값을 바꾼다(6.20260828 → 6.20260901에서 로테이션 확인).
+/// 그래서 정상 경로는 CDP 훅이 게임 번들에서 런타임 추출해 `browser_profile::set_runtime_secret`
+/// 으로 넣어준 값이고, 이 상수는 추출 실패 시의 마지막 수단이다. 틀린 키로 붙으면 서버가
+/// `1007 malformed data`로 끊고 재연결이 세션을 태우므로, 호출측은 복호 실패를 치명 오류로 다뤄야 한다.
+const RC4_SECRET_FALLBACK: &str =
+    "9e7ab238f42eebf3547861a1576efdd9f5dcfef0060cef43a52b205a68117272";
 
 /// 멀티위젯 프레임 암복호기. 연결당 하나.
 #[derive(Clone)]
 pub struct MultiwidgetCrypto {
     /// KSA로 초기화된 S-box. 프레임마다 복사해서 사용한다(리셋).
     sbox: [u8; 256],
+    /// 이 크립토가 런타임 추출 시크릿으로 만들어졌는지(진단·로깅용).
+    from_runtime_secret: bool,
 }
 
 impl MultiwidgetCrypto {
     /// URL의 instance·nonce로 RC4 키를 조립해 초기화한다.
+    /// 시크릿은 런타임 추출값을 우선 쓰고, 없으면 빌트인 폴백을 쓴다.
     pub fn new(instance: &str, nonce: &str) -> Self {
-        let key = format!("{}:{}:{}", RC4_SECRET, instance, nonce);
+        match super::browser_profile::runtime_secret() {
+            Some(secret) => Self::with_secret(&secret, instance, nonce, true),
+            None => Self::with_secret(RC4_SECRET_FALLBACK, instance, nonce, false),
+        }
+    }
+
+    /// 시크릿을 명시해 초기화한다(테스트·런타임 추출 경로).
+    pub fn with_secret(
+        secret: &str,
+        instance: &str,
+        nonce: &str,
+        from_runtime_secret: bool,
+    ) -> Self {
+        let key = format!("{}:{}:{}", secret, instance, nonce);
         Self {
             sbox: rc4_ksa(key.as_bytes()),
+            from_runtime_secret,
         }
+    }
+
+    /// 런타임 추출 시크릿으로 만들어졌는지. false면 폴백이라 로테이션에 취약하다.
+    pub fn uses_runtime_secret(&self) -> bool {
+        self.from_runtime_secret
     }
 
     /// RC4 PRGA. 매 호출마다 S-box 사본을 써서 키스트림이 처음부터 시작한다.
@@ -113,6 +141,8 @@ mod tests {
     use super::*;
 
     // 2026-08-30 브라우저 실트래픽에서 캡처한 실제 프레임·키.
+    // 테스트는 그날의 시크릿을 명시적으로 고정한다 — 런타임 추출값에 영향받지 않게.
+    const SECRET_20260828: &str = RC4_SECRET_FALLBACK;
     const INSTANCE: &str = "9c1ulp-ubcgfgwsxmjqgzei-";
     const NONCE: &str = "ASHKOnDY54MI0I8G/aqycA==";
     // 송신 프레임(base64). 복호 시 settings.read JSON이 나와야 한다.
@@ -147,7 +177,7 @@ mod tests {
 
     #[test]
     fn decrypts_captured_sent_frame_to_expected_json() {
-        let crypto = MultiwidgetCrypto::new(INSTANCE, NONCE);
+        let crypto = MultiwidgetCrypto::with_secret(SECRET_20260828, INSTANCE, NONCE, false);
         let frame = b64(SENT_FRAME_B64);
         let json = crypto.decrypt(&frame).expect("decrypt");
         let text = String::from_utf8(json).expect("utf8");
@@ -160,7 +190,7 @@ mod tests {
 
     #[test]
     fn encrypt_decrypt_round_trip() {
-        let crypto = MultiwidgetCrypto::new(INSTANCE, NONCE);
+        let crypto = MultiwidgetCrypto::with_secret(SECRET_20260828, INSTANCE, NONCE, false);
         let msg = br#"{"id":"abc","type":"widget.subscribeTable","args":{"tableId":"x"}}"#;
         let frame = crypto.encrypt(msg);
         assert_eq!(&frame[..2], &[0x01, 0x03]);
@@ -172,7 +202,7 @@ mod tests {
     fn encrypt_matches_browser_shape_for_known_plaintext() {
         // 캡처된 SENT 프레임과 동일한 평문을 무압축 암호화하면 바이트가 일치해야 한다
         // (같은 키·무압축·리셋 키스트림 → 결정적).
-        let crypto = MultiwidgetCrypto::new(INSTANCE, NONCE);
+        let crypto = MultiwidgetCrypto::with_secret(SECRET_20260828, INSTANCE, NONCE, false);
         let json = br#"{"id":"1syloo4lz2","type":"settings.read","args":{"keys":["generic.common","multiplay.common","baccarat.common","generic.phone","generic.tablet"]}}"#;
         let frame = crypto.encrypt(json);
         assert_eq!(frame, b64(SENT_FRAME_B64));
