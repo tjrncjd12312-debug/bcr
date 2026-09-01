@@ -237,6 +237,35 @@ struct OutboundMessage {
     expires_at: tokio::time::Instant,
 }
 
+/// 브릿지 모드에서 **브라우저의 진짜 소켓**으로 내보낼 프레임.
+///
+/// Rust가 직접 소켓을 맺지 않고, CDP `Runtime.evaluate`로 페이지의 `__BCR_MW_SEND_*` 훅을 호출해
+/// 브라우저가 이미 열어 둔 멀티위젯 소켓으로 전송한다. 암호화 소켓이면 Rust가 RC4로 암호화한
+/// 바이트를, 평문 소켓이면 JSON 텍스트를 그대로 넘긴다.
+#[derive(Debug, Clone)]
+pub enum BridgeOutbound {
+    Binary(Vec<u8>),
+    Text(String),
+}
+
+/// 브릿지 모드 상태. 소켓 소유자는 브라우저, Rust는 CDP로 프레임을 탭·주입만 한다.
+///
+/// 왜 이 모드가 필요한가(2026-09-01~02 라이브 3회 실증): 브라우저 소켓을 더미로 막고 Rust가
+/// 세션을 대신 쓰면 클라이언트가 둘이 된다. 브라우저 게임은 데이터가 안 와서 죽었다고 판단해
+/// `/entry` 재진입이나 로그아웃을 하고, 그 순간 Rust 소켓이 킥(`notAuthorised`/`logoutByPlayer`)
+/// 당한다. 애그리게이터(HonorLink)는 "런치 → 8초 만에 킥"을 이상 행동으로 보고 `403 [G.8]`을
+/// 건다. 브라우저를 유일한 클라이언트로 두면 이 연쇄가 구조적으로 사라진다.
+struct BridgeState {
+    ws_url: String,
+    /// URL에 `encrypted=true`가 있는지. 있으면 수신 binary 프레임을 복호하고 송신을 암호화한다.
+    encrypted: bool,
+    /// 지연 생성: 첫 프레임 시점에 만든다. 브라우저의 크립토 init(=런타임 시크릿 노출)이
+    /// 소켓 open 직후에 돌기 때문에, 붙는 순간엔 시크릿이 아직 없을 수 있다.
+    crypto: Option<MultiwidgetCrypto>,
+    outbound: tokio::sync::mpsc::UnboundedSender<BridgeOutbound>,
+    tables_subscribed: bool,
+}
+
 /// `handle_incoming_message`가 메시지 루프에 돌려주는 후속 동작 신호.
 enum HandleOutcome {
     /// availableTables 수신 → 이 테이블들을 구독해야 함
@@ -269,6 +298,8 @@ pub struct EvolutionMultiSocket {
     /// giving `is_connected()` / `get_multiwidget_status()` / `resubscribe` a
     /// truthful answer (state-3).
     connected: Arc<AtomicBool>,
+    /// 브릿지 모드(브라우저가 소켓 소유, Rust는 CDP로 탭·주입). `Some`이면 직접 소켓은 없다.
+    bridge: Option<BridgeState>,
 }
 
 /// 글로벌 싱글턴 멀티위젯 클라이언트
@@ -284,6 +315,7 @@ impl EvolutionMultiSocket {
             event_tx: None,
             task_registry: Arc::new(TaskRegistry::new()),
             connected: Arc::new(AtomicBool::new(false)),
+            bridge: None,
         }
     }
 
@@ -1455,6 +1487,23 @@ impl EvolutionMultiSocket {
             return Err("Not connected".to_string());
         }
 
+        // 브릿지 모드: 브라우저의 진짜 소켓으로 내보낸다(직접 소켓 없음).
+        // 암호화 소켓이면 여기서 RC4로 암호화하고, 페이지 훅은 바이트를 그대로 send()한다.
+        if let Some(bridge) = &self.bridge {
+            let frame = if bridge.encrypted {
+                let crypto = bridge.crypto.as_ref().ok_or_else(|| {
+                    "bridge crypto not ready (no frame received yet)".to_string()
+                })?;
+                BridgeOutbound::Binary(crypto.encrypt(message.as_bytes()))
+            } else {
+                BridgeOutbound::Text(message)
+            };
+            return bridge
+                .outbound
+                .send(frame)
+                .map_err(|_| "bridge outbound channel closed".to_string());
+        }
+
         let tx = self
             .msg_tx
             .as_ref()
@@ -1480,6 +1529,205 @@ impl EvolutionMultiSocket {
             .map_err(|_| "Connection task stopped before socket send".to_string())?
     }
 
+    // ───────────────────────────── 브릿지 모드 ─────────────────────────────
+
+    /// 브라우저가 이미 연 멀티위젯 소켓에 "붙는다"(직접 접속 없음).
+    ///
+    /// `outbound`로 보낸 프레임은 CDP 태스크가 페이지의 `__BCR_MW_SEND_*` 훅을 통해
+    /// 브라우저 소켓으로 내보낸다. 이 시점에 크립토는 만들지 않는다 — 브라우저의 크립토 init
+    /// (런타임 시크릿이 노출되는 순간)은 소켓 open 직후라, 지금은 시크릿이 없을 수 있다.
+    pub async fn attach_bridge(
+        &mut self,
+        ws_url: String,
+        outbound: tokio::sync::mpsc::UnboundedSender<BridgeOutbound>,
+    ) -> Result<(), String> {
+        if self.is_connected() {
+            info!("[Evolution-Multi] 🔄 기존 연결 종료 후 브릿지 부착");
+            self.disconnect().await;
+        }
+        let encrypted = ws_url.contains("encrypted=true");
+        info!(
+            "[Evolution-Multi] 🌉 브릿지 부착 — 브라우저가 소켓 소유, Rust는 탭·주입만 (encrypted={}, endpoint={})",
+            encrypted,
+            websocket_endpoint_for_log(&ws_url)
+        );
+        self.bridge = Some(BridgeState {
+            ws_url: ws_url.clone(),
+            encrypted,
+            crypto: None,
+            outbound,
+            tables_subscribed: false,
+        });
+        self.connected.store(true, Ordering::SeqCst);
+        if let Some(tx) = &self.event_tx {
+            let _ = tx
+                .send(EvolutionEvent::Connected {
+                    url: ws_url,
+                    is_multiwidget: true,
+                })
+                .await;
+        }
+        Ok(())
+    }
+
+    pub fn is_bridge_active(&self) -> bool {
+        self.bridge.is_some()
+    }
+
+    /// 브릿지를 떼고 Disconnected를 알린다. 재연결은 호출측(프론트 반응형 로테이션)이 판단한다.
+    async fn detach_bridge(&mut self, reason: DisconnectReason) {
+        let url = self
+            .bridge
+            .take()
+            .map(|b| b.ws_url)
+            .unwrap_or_default();
+        self.connected.store(false, Ordering::SeqCst);
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(EvolutionEvent::Disconnected { url, reason }).await;
+        }
+    }
+
+    /// 브릿지용 크립토를 (필요하면 지금) 만든다. 이 시점엔 런타임 시크릿이 도착해 있어야 한다.
+    fn bridge_crypto(bridge: &mut BridgeState) -> Result<Option<&MultiwidgetCrypto>, String> {
+        if !bridge.encrypted {
+            return Ok(None);
+        }
+        if bridge.crypto.is_none() {
+            match Self::build_crypto(&bridge.ws_url, true) {
+                Some(c) => {
+                    if !c.uses_runtime_secret() {
+                        warn!(
+                            "[Evolution-Multi] ⚠️ 브릿지 크립토가 폴백 시크릿으로 생성됨 — 시크릿이 바뀌었다면 첫 복호에서 중단된다"
+                        );
+                    }
+                    bridge.crypto = Some(c);
+                }
+                None => return Err("encrypted socket but instance/nonce missing".to_string()),
+            }
+        }
+        Ok(bridge.crypto.as_ref())
+    }
+
+    /// CDP `Network.webSocketFrameReceived`로 받은 브라우저 소켓 프레임을 흘려 넣는다.
+    ///
+    /// `opcode` 2(binary)면 payload는 CDP가 준 base64 → 복호. 1(text)면 JSON 그대로.
+    /// 파싱·이벤트 방출은 직접 소켓과 **완전히 같은** `handle_incoming_message`를 탄다.
+    /// 첫 `availableTables`에는 직접 소켓처럼 바카라 테이블 구독을 (브라우저 소켓으로) 내보낸다.
+    pub async fn ingest_bridge_frame(&mut self, opcode: u64, payload: &str) {
+        let Some(event_tx) = self.event_tx.clone() else {
+            return;
+        };
+        let Some(bridge) = self.bridge.as_mut() else {
+            return;
+        };
+
+        let text: String = if opcode == 2 {
+            use base64::Engine as _;
+            let bytes = match base64::engine::general_purpose::STANDARD.decode(payload) {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!("[Evolution-Multi] 브릿지 프레임 base64 디코드 실패: {}", e);
+                    return;
+                }
+            };
+            let crypto = match Self::bridge_crypto(bridge) {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    // 평문 소켓에 binary 프레임 — 우리가 아는 포맷이 아니다. 무시.
+                    return;
+                }
+                Err(e) => {
+                    error!("[Evolution-Multi] 🛑 브릿지 크립토 생성 실패: {}", e);
+                    self.detach_bridge(DisconnectReason::CryptoMismatch(e)).await;
+                    return;
+                }
+            };
+            match crypto.decrypt(&bytes).and_then(|b| {
+                String::from_utf8(b).map_err(|e| format!("decrypted frame not utf8: {}", e))
+            }) {
+                Ok(s) => s,
+                Err(e) => {
+                    // 브릿지에선 우리가 서버로 쓰레기를 보낸 건 아니지만, 이 키로는 베팅도
+                    // 못 보내므로 계속 붙어 있을 이유가 없다. 재연결 없이 중단.
+                    error!(
+                        "[Evolution-Multi] 🛑 브릿지 프레임 복호 실패 ({}) — 시크릿 불일치, 중단",
+                        e
+                    );
+                    self.detach_bridge(DisconnectReason::CryptoMismatch(e)).await;
+                    return;
+                }
+            }
+        } else {
+            payload.to_string()
+        };
+
+        match Self::handle_incoming_message(&event_tx, &text).await {
+            Some(HandleOutcome::Kickout(reason)) => {
+                warn!(
+                    "[Evolution-Multi] ⚠️ 브릿지에서 킥아웃 수신 ({}) — 세션 종료",
+                    reason
+                );
+                self.detach_bridge(DisconnectReason::Kickout(reason)).await;
+            }
+            Some(HandleOutcome::Subscribe(tables)) => {
+                let Some(bridge) = self.bridge.as_mut() else {
+                    return;
+                };
+                if bridge.tables_subscribed {
+                    return;
+                }
+                bridge.tables_subscribed = true;
+
+                // 브라우저 게임은 화면에 보이는 몇 테이블만 구독한다. 예측·자동에 필요한
+                // 바카라 테이블 전체를 우리가 같은 소켓으로 추가 구독한다.
+                let baccarat_ids = TableFilter::filter_baccarat_tables(&tables);
+                let mut targets = TableFilter::take_tables(baccarat_ids, MAX_SUBSCRIBE_TABLES);
+                use rand::seq::SliceRandom;
+                targets.shuffle(&mut rand::thread_rng());
+
+                let crypto = match Self::bridge_crypto(bridge) {
+                    Ok(c) => c.cloned(),
+                    Err(e) => {
+                        error!("[Evolution-Multi] 🛑 구독용 브릿지 크립토 실패: {}", e);
+                        self.detach_bridge(DisconnectReason::CryptoMismatch(e)).await;
+                        return;
+                    }
+                };
+                let outbound = bridge.outbound.clone();
+                let count = targets.len();
+                info!(
+                    "[Evolution-Multi] 🎰 브릿지: {} 테이블 구독을 브라우저 소켓으로 내보낸다",
+                    count
+                );
+                // 직접 소켓과 같은 지터를 두고 순차 전송한다(60개를 한 번에 쏘면 봇 신호).
+                tokio::spawn(async move {
+                    for table_id in targets {
+                        for msg in [
+                            ProtocolSequence::game_open(&table_id).to_string(),
+                            ProtocolSequence::subscribe_table(&table_id).to_string(),
+                        ] {
+                            let frame = match &crypto {
+                                Some(c) => BridgeOutbound::Binary(c.encrypt(msg.as_bytes())),
+                                None => BridgeOutbound::Text(msg),
+                            };
+                            if outbound.send(frame).is_err() {
+                                return;
+                            }
+                        }
+                        jitter_sleep(SUBSCRIBE_GAP_MIN_MS, SUBSCRIBE_GAP_MAX_MS).await;
+                    }
+                });
+                let _ = event_tx
+                    .send(EvolutionEvent::RoomsReady {
+                        room_count: count,
+                        total_available: tables.len(),
+                    })
+                    .await;
+            }
+            Some(HandleOutcome::LobbySubscribe(_)) | None => {}
+        }
+    }
+
     /// 종료
     pub async fn disconnect(&mut self) {
         info!("[Evolution-Multi] 🔌 Disconnecting...");
@@ -1490,6 +1738,7 @@ impl EvolutionMultiSocket {
 
         self.shutdown_tx = None;
         self.msg_tx = None;
+        self.bridge = None;
         self.connected.store(false, Ordering::SeqCst);
         self.state_machine.reset();
 
@@ -1627,5 +1876,96 @@ mod tests {
         let (_, result) = tokio::join!(reject, send);
 
         assert_eq!(result.unwrap_err(), "safety gate rejected message");
+    }
+
+    // ── 브릿지 모드 ──────────────────────────────────────────────────────────
+    // 2026-08-30 실캡처 프레임(암호화 멀티위젯 SENT). 복호하면 settings.read JSON.
+    const BRIDGE_INSTANCE: &str = "9c1ulp-ubcgfgwsxmjqgzei-";
+    const BRIDGE_SENT_FRAME_B64: &str = "AQPLrqelnm1bGGnVrX5KeaWBt2lNcb5YpF0uwIVDJ1HI6KI/alDIX8CmsMgQMEWNJZAg1uGA1yIJMaOgavuQQ3ayfSHOnULt0KLX1bai5brDkF9Jcg2jQVjRSApWUgpVStDkUsCjHAI+sL5BqhBOtpb777krbv8SmZKBYjniolEKn0NpqfBhKPhqaDLMmdGQYBk5g/+O";
+
+    fn encrypted_bridge_url() -> String {
+        format!(
+            "wss://skylinextm.evo-games.com/public/baccarat/player/game/multiwidget/socket?messageFormat=json&instance={}&EVOSESSIONID=abc&encrypted=true&nonce=ASHKOnDY54MI0I8G%2FaqycA%3D%3D",
+            BRIDGE_INSTANCE
+        )
+    }
+
+    #[tokio::test]
+    async fn bridge_routes_outbound_as_text_on_plaintext_socket() {
+        let mut client = EvolutionMultiSocket::new();
+        let _events = client.create_event_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        client
+            .attach_bridge(
+                "wss://gate.evo-games.com.se/public/baccarat/player/game/multiwidget/socket?messageFormat=json&instance=8gn00p-s2ha-&EVOSESSIONID=abc".to_string(),
+                tx,
+            )
+            .await
+            .expect("attach");
+        assert!(client.is_connected(), "브릿지 부착 후엔 연결로 간주해야 send_message가 동작한다");
+        assert!(client.is_bridge_active());
+
+        client
+            .send_message(r#"{"id":"x","type":"metrics.ping","args":{}}"#.to_string())
+            .await
+            .expect("send");
+        match rx.recv().await.expect("outbound frame") {
+            BridgeOutbound::Text(t) => assert!(t.contains("metrics.ping")),
+            other => panic!("평문 소켓은 Text로 나가야 한다: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_decrypts_binary_frame_then_encrypts_outbound_without_detaching() {
+        let mut client = EvolutionMultiSocket::new();
+        let _events = client.create_event_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        client
+            .attach_bridge(encrypted_bridge_url(), tx)
+            .await
+            .expect("attach");
+
+        // 부착 직후엔 크립토가 아직 없다(런타임 시크릿은 소켓 open 뒤에 온다) → 송신은 거절.
+        assert!(client.send_message("{}".to_string()).await.is_err());
+
+        // 첫 binary 프레임에서 크립토를 만들고 복호한다. 실캡처 프레임이 정상 복호되면
+        // (= 키가 맞으면) 브릿지는 유지되어야 한다.
+        client.ingest_bridge_frame(2, BRIDGE_SENT_FRAME_B64).await;
+        assert!(
+            client.is_connected() && client.is_bridge_active(),
+            "정상 복호 프레임에서 브릿지가 떨어지면 안 된다"
+        );
+
+        // 이제 송신은 같은 키로 암호화된 Binary 로 나간다. 프레임 헤더는 브라우저와 동일하게
+        // [version=1][algo=3].
+        client
+            .send_message(r#"{"id":"y","type":"metrics.ping","args":{}}"#.to_string())
+            .await
+            .expect("send after crypto ready");
+        match rx.recv().await.expect("outbound frame") {
+            BridgeOutbound::Binary(bytes) => assert_eq!(&bytes[..2], &[0x01, 0x03]),
+            other => panic!("암호화 소켓은 Binary로 나가야 한다: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_detaches_on_undecryptable_frame_instead_of_reconnecting() {
+        let mut client = EvolutionMultiSocket::new();
+        let _events = client.create_event_channel();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        client
+            .attach_bridge(encrypted_bridge_url(), tx)
+            .await
+            .expect("attach");
+
+        // 지원하지 않는 버전 바이트 → decrypt가 결정적으로 실패한다(랜덤 flag 우연 통과 없음).
+        use base64::Engine as _;
+        let garbage = base64::engine::general_purpose::STANDARD
+            .encode([0x02u8, 0x03, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33]); // version=2: 결정적으로 거부
+        client.ingest_bridge_frame(2, &garbage).await;
+        assert!(
+            !client.is_connected() && !client.is_bridge_active(),
+            "키 불일치면 재연결 없이 즉시 떼어야 한다(계정 보호)"
+        );
     }
 }

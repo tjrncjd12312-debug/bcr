@@ -1671,6 +1671,10 @@ async fn monitor_page_continuously(
 
         // Track WebSocket requestId -> url, and capture handshake headers (Cookie/UA/Origin/Referer)
         // This allows multiwidget auto-connect even when EVOSESSIONID is not present in the URL query.
+        // 🌉 브릿지: 멀티위젯 소켓을 연 CDP 세션(iframe) id. 베팅 주입용 Runtime.evaluate는
+        // 반드시 이 세션으로 보내야 페이지 훅(__BCR_MW_SEND_*)이 있는 컨텍스트에서 실행된다.
+        let mw_bridge_session: std::sync::Arc<tokio::sync::Mutex<Option<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let mut ws_url_by_request_id: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let ws_headers_by_request_id: std::sync::Arc<
@@ -1697,7 +1701,7 @@ async fn monitor_page_continuously(
             "id": 77,
             "method": "Page.addScriptToEvaluateOnNewDocument",
             "params": {
-                "source": WS_BLOCKER_SCRIPT
+                "source": ws_blocker_script()
             }
         });
         if let Err(e) = write
@@ -2023,6 +2027,9 @@ async fn monitor_page_continuously(
 
                                     let app_handle_for_connect = app_handle.clone();
                                     let url_for_secret_gate = ws_url_for_connect.clone();
+                                    // 🌉 브릿지 드레이너용: CDP write 핸들 + 멀티위젯 소켓 세션 셀.
+                                    let write_for_bridge = write.clone();
+                                    let session_for_bridge = mw_bridge_session.clone();
                                     tokio::spawn(async move {
                                         tokio::time::sleep(tokio::time::Duration::from_millis(500))
                                             .await;
@@ -2062,17 +2069,75 @@ async fn monitor_page_continuously(
                                             event_rx,
                                         );
 
-                                        match client.connect(ws_url_for_connect.clone(), options).await {
-                                            Ok(_) => {
-                                                info!("[WS-BLOCKER] Rust multi-socket connection initiated from blocked browser URL");
-                                                // 락을 먼저 놓는다 — 주차는 CDP 왕복이라 시간이 걸리고,
-                                                // 그동안 클라이언트 락을 쥐고 있을 이유가 없다.
-                                                drop(client);
-                                                park_browser_after_capture().await;
+                                        if bridge_mode_enabled() {
+                                            // 🌉 브릿지: 직접 접속하지 않는다. 브라우저가 이미 연 진짜 소켓에 붙고,
+                                            // 내보낼 프레임은 아래 드레이너가 CDP로 페이지 훅에 넘긴다.
+                                            let (out_tx, mut out_rx) =
+                                                tokio::sync::mpsc::unbounded_channel::<
+                                                    crate::evolution::multi_client::BridgeOutbound,
+                                                >();
+                                            match client.attach_bridge(ws_url_for_connect.clone(), out_tx).await {
+                                                Ok(_) => {
+                                                    info!("🌉 [BRIDGE] 브라우저 소켓에 부착 완료 — 직접 접속·주차 없음");
+                                                    drop(client);
+                                                    let write_for_bridge = write_for_bridge.clone();
+                                                    let session_for_bridge = session_for_bridge.clone();
+                                                    tokio::spawn(async move {
+                                                        use base64::Engine as _;
+                                                        let mut seq: u64 = 0;
+                                                        while let Some(frame) = out_rx.recv().await {
+                                                            let Some(sid) = session_for_bridge.lock().await.clone() else {
+                                                                warn!("🌉 [BRIDGE] 멀티위젯 세션 미확정 — 프레임 드롭");
+                                                                continue;
+                                                            };
+                                                            let expr = match frame {
+                                                                crate::evolution::multi_client::BridgeOutbound::Binary(bytes) => {
+                                                                    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                                                                    format!("window.__BCR_MW_SEND_B64__ && window.__BCR_MW_SEND_B64__('{}')", b64)
+                                                                }
+                                                                crate::evolution::multi_client::BridgeOutbound::Text(text) => {
+                                                                    let js = serde_json::to_string(&text).unwrap_or_default();
+                                                                    format!("window.__BCR_MW_SEND_TEXT__ && window.__BCR_MW_SEND_TEXT__({})", js)
+                                                                }
+                                                            };
+                                                            seq += 1;
+                                                            let cmd = serde_json::json!({
+                                                                "id": 7_700_000 + seq,
+                                                                "sessionId": sid,
+                                                                "method": "Runtime.evaluate",
+                                                                "params": { "expression": expr, "returnByValue": true }
+                                                            });
+                                                            if let Err(e) = write_for_bridge
+                                                                .lock()
+                                                                .await
+                                                                .send(tokio_tungstenite::tungstenite::Message::Text(cmd.to_string()))
+                                                                .await
+                                                            {
+                                                                warn!("🌉 [BRIDGE] 송신 주입 실패: {}", e);
+                                                                break;
+                                                            }
+                                                        }
+                                                        info!("🌉 [BRIDGE] 드레이너 종료");
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    error!("🌉 [BRIDGE] 부착 실패: {}", e);
+                                                    MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
+                                                }
                                             }
-                                            Err(e) => {
-                                                error!("[WS-BLOCKER] Rust multi-socket connection failed: {}", e);
-                                                MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
+                                        } else {
+                                            match client.connect(ws_url_for_connect.clone(), options).await {
+                                                Ok(_) => {
+                                                    info!("[WS-BLOCKER] Rust multi-socket connection initiated from blocked browser URL");
+                                                    // 락을 먼저 놓는다 — 주차는 CDP 왕복이라 시간이 걸리고,
+                                                    // 그동안 클라이언트 락을 쥐고 있을 이유가 없다.
+                                                    drop(client);
+                                                    park_browser_after_capture().await;
+                                                }
+                                                Err(e) => {
+                                                    error!("[WS-BLOCKER] Rust multi-socket connection failed: {}", e);
+                                                    MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
+                                                }
                                             }
                                         }
                                     });
@@ -2299,7 +2364,7 @@ async fn monitor_page_continuously(
                                                     "id": 888000 + context_id,
                                                     "method": "Runtime.evaluate",
                                                     "params": {
-                                                        "expression": WS_BLOCKER_SCRIPT,
+                                                        "expression": ws_blocker_script(),
                                                         "returnByValue": true,
                                                         "contextId": context_id
                                                     }
@@ -3049,6 +3114,16 @@ async fn monitor_page_continuously(
                                 if !request_id.is_empty() && !url.is_empty() {
                                     ws_url_by_request_id
                                         .insert(request_id.to_string(), url.to_string());
+                                    // 🌉 브릿지: 멀티위젯 소켓이 열린 세션을 기억한다(베팅 주입 대상).
+                                    if url.contains("/multiwidget/") || url.contains("multiwidget") {
+                                        if let Some(sid) = &source_session_id {
+                                            *mw_bridge_session.lock().await = Some(sid.clone());
+                                            info!(
+                                                "🌉 [BRIDGE] 멀티위젯 소켓 세션 기록: {}",
+                                                sid
+                                            );
+                                        }
+                                    }
                                 }
 
                                 // Log only non-sensitive socket metadata. Evolution URLs may
@@ -4028,6 +4103,26 @@ async fn monitor_page_continuously(
                                     if let Some(payload) =
                                         response.get("payloadData").and_then(|v| v.as_str())
                                     {
+                                        // 🌉 브릿지: 브라우저의 진짜 멀티위젯 소켓 프레임은 Rust 파이프라인으로
+                                        // 흘려 넣는다(binary=base64 → RC4+zstd 복호 → 파서 → 이벤트).
+                                        // 아래 레거시 forward(평문 JSON 전용)와 이중 처리되지 않게 여기서 끝낸다.
+                                        if bridge_mode_enabled() {
+                                            let is_mw = ws_url_by_request_id
+                                                .get(request_id)
+                                                .map(|u| u.contains("multiwidget"))
+                                                .unwrap_or(false);
+                                            if is_mw {
+                                                let opcode = response
+                                                    .get("opcode")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(1);
+                                                let mut client = MULTIWIDGET_CLIENT.lock().await;
+                                                if client.is_bridge_active() {
+                                                    client.ingest_bridge_frame(opcode, payload).await;
+                                                }
+                                                continue;
+                                            }
+                                        }
                                         // 🔍 DEBUG: Log received frame info
                                         debug!(
                                             "📥 WS frame received: provider={:?}, page={}, len={}",
@@ -5063,7 +5158,7 @@ pub async fn navigate_pragmatic_room(
         "id": 2,
         "method": "Page.addScriptToEvaluateOnNewDocument",
         "params": {
-            "source": WS_BLOCKER_SCRIPT,
+            "source": ws_blocker_script(),
         }
     });
 
@@ -5454,6 +5549,35 @@ fn is_bet_capture_mode() -> bool {
         .unwrap_or(false)
 }
 
+/// 🌉 브릿지 모드(기본 ON): 브라우저가 멀티위젯 소켓을 **진짜로** 열고 유일한 클라이언트가 된다.
+/// Rust는 CDP `Network.webSocketFrameReceived`로 프레임을 탭해 복호하고, 베팅은 페이지 훅으로
+/// 브라우저 소켓에 주입한다. 직접 소켓·더미 블로킹·브라우저 주차는 모두 끈다.
+///
+/// 왜 기본인가: 2026-09-01~02 라이브 3회 모두 "브라우저 소켓을 더미로 막고 Rust가 세션을 대신
+/// 쓰는" 2-클라이언트 구조 때문에 10초 안에 킥(`notAuthorised`/`logoutByPlayer`)이 났고,
+/// 애그리게이터가 그 패턴을 이상 행동으로 봐 `403 [G.8]`을 걸었다. 클라이언트가 하나면 이 연쇄가 없다.
+///
+/// 되돌리기(진단용): `BCR_LEGACY_RUST_SOCKET=1` — Rust 직접 소켓 + 블로킹 + 주차의 옛 경로.
+fn bridge_mode_enabled() -> bool {
+    !std::env::var("BCR_LEGACY_RUST_SOCKET")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// 블로커/브릿지 스크립트에 현재 모드를 박아 넣은 최종본. document-start에 주입되므로
+/// 페이지 JS보다 먼저 `window.__BCR_BRIDGE_MODE__`가 정해진다.
+static WS_BLOCKER_SCRIPT_RESOLVED: Lazy<String> = Lazy::new(|| {
+    format!(
+        "window.__BCR_BRIDGE_MODE__ = {};\n{}",
+        bridge_mode_enabled(),
+        WS_BLOCKER_SCRIPT
+    )
+});
+
+fn ws_blocker_script() -> &'static str {
+    WS_BLOCKER_SCRIPT_RESOLVED.as_str()
+}
+
 const WS_BLOCKER_SCRIPT: &str = r#"
     (function() {
         // 🔑 멀티위젯 크립토 시크릿 런타임 추출 (document-start 에 심겨야 유효).
@@ -5618,6 +5742,39 @@ const WS_BLOCKER_SCRIPT: &str = r#"
                 }
                 var socketType = 'multiwidget';
                 try { console.log('[BCR_WS_CAPTURE]', JSON.stringify({ url: url, socketType: socketType, href: location.href })); } catch (e) {}
+
+                // 🌉 브릿지 모드(기본): 소켓을 막지 않는다. 브라우저가 진짜 소켓을 열어 유일한
+                // 클라이언트가 되고, Rust는 CDP로 프레임을 탭한다. 베팅 주입용 훅만 노출한다.
+                //   __BCR_MW_SEND_B64__(b64)  — Rust가 RC4로 암호화한 바이트(암호화 소켓)
+                //   __BCR_MW_SEND_TEXT__(str) — 평문 JSON(평문 소켓)
+                // 더미로 막던 옛 방식은 게임을 '죽은 소켓' 상태로 만들어 /entry 재진입·로그아웃을
+                // 유발했고, 그게 킥과 403 [G.8]의 직접 원인이었다(2026-09-01~02 라이브 3회).
+                if (window.__BCR_BRIDGE_MODE__ !== false) {
+                    var bridgeWs = protocols ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
+                    window.__BCR_MW_SOCKET__ = bridgeWs;
+                    window.__BCR_MW_SEND_B64__ = function(b64) {
+                        try {
+                            var s = window.__BCR_MW_SOCKET__;
+                            if (!s || s.readyState !== 1) return 'not_open';
+                            var bin = atob(b64);
+                            var bytes = new Uint8Array(bin.length);
+                            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                            s.send(bytes.buffer);
+                            return 'sent';
+                        } catch (e) { return 'err:' + e; }
+                    };
+                    window.__BCR_MW_SEND_TEXT__ = function(str) {
+                        try {
+                            var s = window.__BCR_MW_SOCKET__;
+                            if (!s || s.readyState !== 1) return 'not_open';
+                            s.send(str);
+                            return 'sent';
+                        } catch (e) { return 'err:' + e; }
+                    };
+                    console.log('[BCR] 🌉 Bridge: multiwidget socket passed through (browser owns it):', url.substring(0, 80));
+                    return bridgeWs;
+                }
+
                 console.log('[BCR] Blocked ' + socketType + ' WebSocket (Rust handles this):', url.substring(0, 80));
                 return createDummyWebSocket(url);
             }
@@ -6062,6 +6219,13 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
             window.WebSocket = function(url, protocols) {
                 url = String(url || '');
 
+                // 🌉 브릿지 모드(기본): 룸 탭에서도 아무 소켓도 막지 않는다. 브라우저가 유일한
+                // 클라이언트여야 킥·403 [G.8] 연쇄가 없다. 베팅 주입 훅은 멀티테이블 페이지 쪽
+                // 스크립트가 담당하므로 여기서는 순수 통과만 한다.
+                if (window.__BCR_BRIDGE_MODE__ !== false) {
+                    return protocols ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
+                }
+
                 // 🔥 Block lobby and multiwidget sockets only
                 // Game socket is ALLOWED so user can enter rooms and see the game
                 // Rust handles multiwidget for multi-table data
@@ -6092,6 +6256,21 @@ pub async fn navigate_to_room_with_ws_block(app: AppHandle, url: String) -> Resu
             return 'blocker_installed';
         })();
     "#;
+
+    // Step 0: 모드 플래그를 먼저 등록한다. addScriptToEvaluateOnNewDocument는 등록 순서대로
+    // 실행되므로, 아래 블로커가 읽을 `window.__BCR_BRIDGE_MODE__`가 그 전에 정해진다.
+    let mode_flag_cmd = serde_json::json!({
+        "id": 0,
+        "method": "Page.addScriptToEvaluateOnNewDocument",
+        "params": {
+            "source": format!("window.__BCR_BRIDGE_MODE__ = {};", bridge_mode_enabled()),
+        }
+    });
+    let _ = ws_stream
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            mode_flag_cmd.to_string(),
+        ))
+        .await;
 
     // Step 1: Register script to run on every new document load
     let add_script_cmd = serde_json::json!({
@@ -6258,7 +6437,7 @@ pub async fn open_new_tab_cdp(app: AppHandle, url: String) -> Result<(), String>
         }
 
         // ✅ Step 2: Inject WebSocket blocker script (Same as navigate_to_room_with_ws_block)
-        let ws_blocker_script = WS_BLOCKER_SCRIPT;
+        let ws_blocker_script = ws_blocker_script();
 
         let add_script_cmd = serde_json::json!({
             "id": 2,
@@ -6456,7 +6635,7 @@ async fn create_new_room_tab_via_browser(app: AppHandle, url: String) -> Result<
                             "id": 100,
                             "method": "Page.addScriptToEvaluateOnNewDocument",
                             "params": {
-                                "source": WS_BLOCKER_SCRIPT,
+                                "source": ws_blocker_script(),
                             }
                         });
                         let _ = target_ws
@@ -6470,7 +6649,7 @@ async fn create_new_room_tab_via_browser(app: AppHandle, url: String) -> Result<
                             "id": 101,
                             "method": "Runtime.evaluate",
                             "params": {
-                                "expression": WS_BLOCKER_SCRIPT,
+                                "expression": ws_blocker_script(),
                                 "returnByValue": true
                             }
                         });
@@ -6571,7 +6750,7 @@ async fn create_new_room_tab_with_ws_block(app: AppHandle, url: String) -> Resul
                             "id": 100,
                             "method": "Page.addScriptToEvaluateOnNewDocument",
                             "params": {
-                                "source": WS_BLOCKER_SCRIPT,
+                                "source": ws_blocker_script(),
                             }
                         });
                         let _ = target_ws
@@ -6585,7 +6764,7 @@ async fn create_new_room_tab_with_ws_block(app: AppHandle, url: String) -> Resul
                             "id": 101,
                             "method": "Runtime.evaluate",
                             "params": {
-                                "expression": WS_BLOCKER_SCRIPT,
+                                "expression": ws_blocker_script(),
                                 "returnByValue": true
                             }
                         });
