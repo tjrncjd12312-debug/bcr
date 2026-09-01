@@ -154,6 +154,68 @@ describe('Evolution session lifecycle helpers', () => {
     expect(scheduler.isRunning()).toBe(false)
   })
 
+  it('classifies crypto mismatch separately so rotation is not attempted', () => {
+    // 암복호 키 불일치는 로테이션(=런치)으로 못 고친다 — network 로 뭉뚱그리면
+    // 반응형 로테이션이 걸려 런치만 쌓이고 403 [G.8] 을 앞당긴다.
+    expect(
+      classifyEvolutionDisconnect({ reason: 'crypto_mismatch:frame decrypt failed' }),
+    ).toBe('crypto_mismatch')
+  })
+
+  it('rotateNow enforces a minimum interval so reactive rotation cannot storm launches', async () => {
+    vi.useFakeTimers()
+    let clock = 1_000_000
+    const rotate = vi.fn(async () => undefined)
+    const scheduler = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 10,
+      nextDelayMs: 10_000,
+      minIntervalMs: 1_000,
+      now: () => clock,
+    })
+
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(rotate).toHaveBeenCalledTimes(1)
+
+    // 방금 로테이션했는데 곧바로 끊긴 경우: 즉시 재런치하면 안 되고 최소 간격을 채워야 한다.
+    clock += 100
+    scheduler.rotateNow()
+    expect(rotate).toHaveBeenCalledTimes(1)
+
+    clock += 900
+    await vi.advanceTimersByTimeAsync(900)
+    expect(rotate).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up rotating when the session keeps dying inside the minimum interval', async () => {
+    vi.useFakeTimers()
+    let clock = 1_000_000
+    const rotate = vi.fn(async () => undefined)
+    const onGaveUp = vi.fn()
+    const scheduler = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 10,
+      nextDelayMs: 10_000,
+      minIntervalMs: 1_000,
+      maxRapidRotations: 2,
+      onGaveUp,
+      now: () => clock,
+    })
+
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(rotate).toHaveBeenCalledTimes(1)
+
+    // 최소 간격 안에서 계속 끊기면 런치를 더 해봐야 밴만 앞당긴다 → 포기해야 한다.
+    scheduler.rotateNow()
+    scheduler.rotateNow()
+    scheduler.rotateNow()
+    expect(onGaveUp).toHaveBeenCalledTimes(1)
+    expect(scheduler.isRunning()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(rotate).toHaveBeenCalledTimes(1)
+  })
+
   it('defers rotation while a real bet is pending and retries on the short interval', async () => {
     vi.useFakeTimers()
     let hasPendingBet = true

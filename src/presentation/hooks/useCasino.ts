@@ -92,6 +92,7 @@ export type EvolutionDisconnectKind =
   | 'session_expired'
   | 'intentional'
   | 'reconnect_exhausted'
+  | 'crypto_mismatch'
   | 'network'
 
 export function classifyEvolutionDisconnect(payload?: { reason?: string; type?: string }): EvolutionDisconnectKind {
@@ -104,6 +105,11 @@ export function classifyEvolutionDisconnect(payload?: { reason?: string; type?: 
   }
   if (combined.includes('user_requested')) {
     return 'intentional'
+  }
+  // 멀티위젯 암복호 키 불일치(Evolution이 빌드에서 시크릿을 바꾼 경우). 재연결도 재로그인도
+  // 해결책이 아니라 시크릿 재추출이 필요하므로, 다른 사유와 반드시 구분해야 한다.
+  if (combined.includes('crypto_mismatch')) {
+    return 'crypto_mismatch'
   }
   if (
     combined.includes('kickout') ||
@@ -118,10 +124,46 @@ export function classifyEvolutionDisconnect(payload?: { reason?: string; type?: 
   return 'network'
 }
 
+/**
+ * 세션 로테이션 주기(ms).
+ *
+ * 로테이션 1회 = 아너링크 `api/hl/launch` 1회다(`rotate_evolution_session` →
+ * `click_evolution_launch`). 짧은 시간에 런치가 몰리면 애그리게이터가 `403 [G.8]`로
+ * 계정을 막는다(2026-09-01 실측: 90분에 10여 회 → 차단).
+ *
+ * 기본 5분/7분은 "Evolution 세션은 단명"이라는 가정에서 나왔는데, 그 가정은 아직 실측된 적이
+ * 없다 — 지금까지 세션이 일찍 죽은 건 만료가 아니라 브라우저 `/entry` 재진입 경합 때문이었다
+ * (2026-09-01: 연결 6초 뒤 Broken pipe → `/entry` → notAuthorised). 브라우저 파킹으로 그
+ * 경합을 없앤 뒤 실제 수명을 재고, 그 값으로 주기를 정해야 한다.
+ *
+ * 그때까지는 기본값을 유지하되 여기서 조절할 수 있게 한다(코드 상수 대신 한 곳에서 관리).
+ */
+export const SESSION_ROTATION_DEFAULTS = {
+  /** 연결 성공 후 첫 로테이션까지. */
+  firstDelayMs: 300_000,
+  /** 이후 로테이션 간격. */
+  nextDelayMs: 420_000,
+  /** 배팅이 진행 중이면 이만큼 미뤘다 재시도(로테이션이 배팅을 끊지 않게). */
+  deferDelayMs: 12_000,
+  /**
+   * 로테이션 사이 최소 간격. 반응형 로테이션(`rotateNow`)이 런치 폭주가 되지 않게 막는다.
+   * 소켓이 붙자마자 죽는 상황에서 즉시 재로테이션을 반복하면 런치가 초 단위로 쌓여
+   * 곧바로 `403 [G.8]`이 난다 — 고치려던 문제를 더 악화시키는 경로다.
+   */
+  minIntervalMs: 60_000,
+  /**
+   * 최소 간격 안에 반복해서 죽는 경우를 몇 번까지 봐줄지. 넘으면 로테이션을 멈춘다
+   * (계속 런치해봐야 밴만 앞당긴다 — 사람이 개입해야 하는 상황).
+   */
+  maxRapidRotations: 3,
+} as const
+
 export interface SessionRotationScheduler {
   start: () => void
   stop: () => void
   isRunning: () => boolean
+  /** 타이머를 기다리지 않고 즉시 1회 로테이션한다(소켓이 죽었을 때의 반응형 복구). */
+  rotateNow: () => void
 }
 
 export function createSessionRotationScheduler(
@@ -131,15 +173,26 @@ export function createSessionRotationScheduler(
     nextDelayMs?: number
     shouldDefer?: () => boolean
     deferDelayMs?: number
+    minIntervalMs?: number
+    maxRapidRotations?: number
     onError?: (error: unknown) => void
+    /** 짧은 간격 재로테이션이 한계를 넘어 로테이션을 포기했을 때. */
+    onGaveUp?: () => void
+    /** 테스트용 시계 주입. */
+    now?: () => number
   } = {},
 ): SessionRotationScheduler {
-  const firstDelayMs = options.firstDelayMs ?? 300_000
-  const nextDelayMs = options.nextDelayMs ?? 420_000
-  const deferDelayMs = options.deferDelayMs ?? 12_000
+  const firstDelayMs = options.firstDelayMs ?? SESSION_ROTATION_DEFAULTS.firstDelayMs
+  const nextDelayMs = options.nextDelayMs ?? SESSION_ROTATION_DEFAULTS.nextDelayMs
+  const deferDelayMs = options.deferDelayMs ?? SESSION_ROTATION_DEFAULTS.deferDelayMs
+  const minIntervalMs = options.minIntervalMs ?? SESSION_ROTATION_DEFAULTS.minIntervalMs
+  const maxRapidRotations = options.maxRapidRotations ?? SESSION_ROTATION_DEFAULTS.maxRapidRotations
+  const now = options.now ?? (() => Date.now())
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = true
   let inFlight = false
+  let lastRotateAt: number | null = null
+  let rapidRotations = 0
 
   const schedule = (delayMs: number) => {
     if (stopped || timer !== null) return
@@ -156,6 +209,7 @@ export function createSessionRotationScheduler(
       return
     }
     inFlight = true
+    lastRotateAt = now()
     try {
       await rotate()
     } catch (error) {
@@ -180,6 +234,42 @@ export function createSessionRotationScheduler(
       }
     },
     isRunning: () => !stopped,
+    // 소켓이 예기치 않게 죽었을 때 타이머를 기다리지 않고 바로 새 세션을 잡는다.
+    // 이 반응형 경로가 있어야 주기적 로테이션을 길게 잡아도 안전하다(= 런치 횟수를 줄일 수 있다).
+    //
+    // 단, 무조건 즉시 실행하면 안 된다: 소켓이 붙자마자 죽는 상황에서는 런치 폭주가 되어
+    // 오히려 403 [G.8]을 앞당긴다. 최소 간격을 강제하고, 그 안에서 반복되면 포기한다.
+    rotateNow: () => {
+      if (inFlight) return
+
+      const since = lastRotateAt === null ? Number.POSITIVE_INFINITY : now() - lastRotateAt
+      if (since < minIntervalMs) {
+        rapidRotations += 1
+        if (rapidRotations > maxRapidRotations) {
+          stopped = true
+          if (timer !== null) {
+            clearTimeout(timer)
+            timer = null
+          }
+          options.onGaveUp?.()
+          return
+        }
+      } else {
+        rapidRotations = 0
+      }
+
+      stopped = false
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      // 최소 간격이 남았으면 즉시 실행하지 않고 남은 시간만큼 미룬다.
+      if (since < minIntervalMs) {
+        schedule(minIntervalMs - since)
+        return
+      }
+      void run()
+    },
   }
 }
 
@@ -572,8 +662,12 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
           },
           {
             shouldDefer: () => AutoBettingService.getPendingBetCount() > 0,
-            deferDelayMs: 12_000,
             onError: (error) => console.warn('[useCasino] Session rotation failed:', error),
+            onGaveUp: () => {
+              // 짧은 간격으로 계속 끊긴다 = 런치를 더 해봐야 밴만 앞당긴다. 사람이 개입해야 한다.
+              console.error('[useCasino] ❌ 세션이 반복해서 즉시 끊겨 로테이션을 중단했습니다.')
+              showWarning('연결이 반복해서 끊어져 자동 복구를 중단했습니다. 잠시 후 다시 시도해주세요.')
+            },
           },
         )
       }
@@ -623,9 +717,27 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         evolutionBaseUrlLockedRef.current = false
         setRoomsReady(false)
 
-        if (disconnectKind === 'session_expired') {
+        // 암복호 키 불일치는 재연결·재로그인으로 못 고친다(Evolution이 빌드에서 시크릿을 바꾼 것).
+        // 로테이션을 돌리면 런치만 늘어 애그리게이터 403 [G.8]을 부르므로 반드시 멈춘다.
+        if (disconnectKind === 'crypto_mismatch') {
           sessionRotationSchedulerRef.current?.stop()
-          console.warn('[useCasino] Session expired. A fresh login or lobby launch is required.', reason)
+          console.error('[useCasino] ❌ Evolution 멀티위젯 암복호 키 불일치. 시크릿 재추출 필요.', reason)
+          showWarning('에볼루션 암호화 방식이 변경되어 연결할 수 없습니다. 앱 업데이트가 필요합니다.')
+          return
+        }
+
+        if (disconnectKind === 'session_expired') {
+          // 세션 만료는 새 세션을 잡으면 복구된다 — 사용자에게 재로그인을 시키는 대신
+          // 반응형 로테이션 1회로 자동 복구한다. 이 경로가 있어야 주기적 로테이션을 길게 잡아
+          // 런치 횟수(= 밴 리스크)를 줄일 수 있다.
+          const scheduler = sessionRotationSchedulerRef.current
+          if (scheduler) {
+            console.warn('[useCasino] Session expired — rotating now to capture a fresh session.', reason)
+            scheduler.rotateNow()
+            setStatus('launching')
+            return
+          }
+          console.warn('[useCasino] Session expired and no scheduler is active. A fresh login is required.', reason)
           showWarning('카지노 세션이 만료되었습니다. 다시 로그인하거나 로비를 새로 열어주세요.')
           return
         }
@@ -648,8 +760,18 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
             })
           }, 3000)
         } else {
-          console.log('[useCasino] 📊 Multiwidget disconnected in auto mode:', reason)
-          showWarning('멀티테이블 연결이 끊어졌습니다.')
+          // auto 모드는 지금까지 경고만 띄우고 죽은 채로 있었다 — 그래서 5/7분 주기 로테이션이
+          // 세션을 살리는 유일한 수단이 됐고, 그 잦은 런치가 403 [G.8]을 불렀다.
+          // 여기서 1회 복구하면 주기를 길게 가져갈 수 있다.
+          const scheduler = sessionRotationSchedulerRef.current
+          if (scheduler) {
+            console.log('[useCasino] 🔄 Multiwidget disconnected in auto mode — rotating now:', reason)
+            scheduler.rotateNow()
+            setStatus('launching')
+          } else {
+            console.log('[useCasino] 📊 Multiwidget disconnected in auto mode:', reason)
+            showWarning('멀티테이블 연결이 끊어졌습니다.')
+          }
         }
       },
       'evolution')
