@@ -1934,6 +1934,45 @@ async fn monitor_page_continuously(
                                 if first.starts_with("[BCR]") {
                                     info!("[BCR-CONSOLE] {} {}", first, second);
                                 }
+                                // 🪞 이 PC의 실제 Chrome 신원(UA/origin/언어).
+                                // Rust 가 User-Agent·Origin·Accept-Language 와 TLS 지문을 여기 맞춘다.
+                                if first == "[BCR_UA]" {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(second)
+                                    {
+                                        if let Some(ua) = v.get("ua").and_then(|x| x.as_str()) {
+                                            let origin =
+                                                v.get("origin").and_then(|x| x.as_str());
+                                            let langs: Vec<String> = v
+                                                .get("langs")
+                                                .and_then(|x| x.as_array())
+                                                .map(|a| {
+                                                    a.iter()
+                                                        .filter_map(|x| x.as_str())
+                                                        .map(str::to_string)
+                                                        .collect()
+                                                })
+                                                .unwrap_or_default();
+                                            crate::evolution::browser_profile::set_page_identity(
+                                                ua, origin, &langs,
+                                            );
+                                        }
+                                    }
+                                }
+                                // 🔑 멀티위젯 크립토 시크릿 런타임 추출.
+                                // Evolution이 빌드마다 시크릿을 바꾸므로(6.20260828 → 6.20260901 확인)
+                                // 하드코딩 대신 게임이 init할 때 만드는 키 문자열을 가로채 쓴다.
+                                // 시크릿 자체는 로그에 남기지 않는다 — 저장소에만 넣는다.
+                                if first == "[BCR_CRYPTO_SECRET]" {
+                                    if let Some(secret) = second.split(':').next() {
+                                        if secret.len() >= 32
+                                            && secret.chars().all(|c| c.is_ascii_hexdigit())
+                                        {
+                                            crate::evolution::browser_profile::set_runtime_secret(
+                                                secret,
+                                            );
+                                        }
+                                    }
+                                }
                                 if first == "[BCR_WS_CAPTURE]" {
                                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(second)
                                     {
@@ -1983,9 +2022,27 @@ async fn monitor_page_continuously(
                                         .await;
 
                                     let app_handle_for_connect = app_handle.clone();
+                                    let url_for_secret_gate = ws_url_for_connect.clone();
                                     tokio::spawn(async move {
                                         tokio::time::sleep(tokio::time::Duration::from_millis(500))
                                             .await;
+
+                                        // 🔑 암호화 소켓이면 런타임 시크릿이 도착할 때까지 기다린다.
+                                        // 브라우저의 크립토 init 은 (블로킹된) 더미 소켓 onopen 직후에 돌아서
+                                        // URL 캡처보다 조금 늦다. 안 기다리면 구 시크릿 폴백으로 붙게 되고,
+                                        // 서버가 1007 로 끊으면서 세션이 타 계정이 밴된다(2026-08-31 확인).
+                                        if url_for_secret_gate.contains("encrypted=true") {
+                                            let waited = crate::evolution::browser_profile::wait_for_runtime_secret(
+                                                tokio::time::Duration::from_secs(5),
+                                            )
+                                            .await;
+                                            if waited.is_none() {
+                                                warn!(
+                                                    "[WS-BLOCKER] ⚠️ 런타임 크립토 시크릿 미확보 — 빌트인 폴백으로 진행한다. \
+                                                     Evolution 이 시크릿을 바꿨다면 복호 실패로 즉시 중단된다(재연결 없음)."
+                                                );
+                                            }
+                                        }
 
                                         let mut options = MultiSocketOptions::default();
                                         if let Some(all_cookies) =
@@ -2006,7 +2063,13 @@ async fn monitor_page_continuously(
                                         );
 
                                         match client.connect(ws_url_for_connect.clone(), options).await {
-                                            Ok(_) => info!("[WS-BLOCKER] Rust multi-socket connection initiated from blocked browser URL"),
+                                            Ok(_) => {
+                                                info!("[WS-BLOCKER] Rust multi-socket connection initiated from blocked browser URL");
+                                                // 락을 먼저 놓는다 — 주차는 CDP 왕복이라 시간이 걸리고,
+                                                // 그동안 클라이언트 락을 쥐고 있을 이유가 없다.
+                                                drop(client);
+                                                park_browser_after_capture().await;
+                                            }
                                             Err(e) => {
                                                 error!("[WS-BLOCKER] Rust multi-socket connection failed: {}", e);
                                                 MULTIWIDGET_CONNECTED.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -2930,6 +2993,22 @@ async fn monitor_page_continuously(
 
                                         // Log multiwidget handshakes at info level for debugging
                                         if let Some(url) = ws_url_by_request_id.get(request_id) {
+                                            // 지문 캡처는 evo-games 호스트의 **모든** 소켓에서 한다.
+                                            // 멀티위젯은 블로커가 더미로 막아 실제 핸드셰이크가 안 나갈 수 있는데,
+                                            // 같은 호스트로 나가는 다른 소켓(로비 등)의 헤더 집합이 동일하므로
+                                            // 그걸로도 파리티를 확보할 수 있다.
+                                            if url.contains("evo-games") {
+                                                let ordered: Vec<(String, String)> = headers
+                                                    .iter()
+                                                    .filter_map(|(k, v)| {
+                                                        v.as_str()
+                                                            .map(|s| (k.clone(), s.to_string()))
+                                                    })
+                                                    .collect();
+                                                crate::evolution::browser_profile::set_handshake_headers(
+                                                    ordered,
+                                                );
+                                            }
                                             if url.contains("multiwidget")
                                                 || url.contains("multiplay")
                                             {
@@ -5377,6 +5456,50 @@ fn is_bet_capture_mode() -> bool {
 
 const WS_BLOCKER_SCRIPT: &str = r#"
     (function() {
+        // 🔑 멀티위젯 크립토 시크릿 런타임 추출 (document-start 에 심겨야 유효).
+        //
+        // Evolution 의 크립토 init 은 다음 한 줄로 RC4 키를 만든다:
+        //     new TextEncoder().encode(SECRET + ":" + instance + ":" + nonce)
+        // 시크릿은 난독화된 문자열 배열에서 나오므로 번들 grep 으로는 못 찾고, 빌드마다 바뀐다
+        // (6.20260828 → 6.20260901 로테이션 확인). 그래서 encode() 를 감싸 그 순간의 입력을 가로챈다.
+        // 이러면 시크릿이 또 바뀌어도 코드 수정 없이 자동으로 따라간다 = 재크래킹 불필요.
+        //
+        // 블로커보다 먼저 설치한다 — 블로커가 이미 설치돼 조기 return 되면 훅이 안 걸린다.
+        if (!window.__BCR_CRYPTO_HOOKED__) {
+            window.__BCR_CRYPTO_HOOKED__ = true;
+            // 🪞 UA 미러링: 이 PC의 실제 Chrome UA를 Rust로 넘긴다. Rust 는 이 값으로
+            // User-Agent 헤더와 TLS/HTTP2 지문 버전을 함께 맞춘다(둘이 어긋나면 즉시 봇 판정).
+            // 멀티위젯 소켓은 블로커가 더미로 막아 실제 핸드셰이크가 안 나가므로,
+            // 헤더 캡처에만 의존할 수 없다 — 페이지가 직접 보고하는 이 경로가 1차다.
+            // Origin/Accept-Language 도 함께 보고한다. 게임 프론트 오리진은 게이트 호스트와
+            // 다를 수 있고(예: spadeblackstone… vs gate72_019…), Accept-Language 는 그 PC의
+            // 브라우저 언어 설정을 따른다 — 둘 다 추측하면 어긋난다.
+            try {
+                console.log('[BCR_UA]', JSON.stringify({
+                    ua: navigator.userAgent,
+                    origin: location.origin,
+                    langs: navigator.languages || [navigator.language]
+                }));
+            } catch (e) {}
+            try {
+                var origEncode = TextEncoder.prototype.encode;
+                TextEncoder.prototype.encode = function(str) {
+                    try {
+                        if (typeof str === 'string' && str.length < 400 && str.indexOf(':') > 0) {
+                            var head = str.split(':')[0];
+                            // 32자 이상 hex = 크립토 시크릿. 그 외(일반 문자열)는 무시한다.
+                            if (head.length >= 32 && /^[0-9a-fA-F]+$/.test(head)
+                                && window.__BCR_LAST_SECRET__ !== head) {
+                                window.__BCR_LAST_SECRET__ = head;
+                                console.log('[BCR_CRYPTO_SECRET]', str);
+                            }
+                        }
+                    } catch (e) {}
+                    return origEncode.apply(this, arguments);
+                };
+            } catch (e) {}
+        }
+
         if (window.__BCR_ALL_WS_BLOCKED__) return 'already_blocked';
         window.__BCR_ALL_WS_BLOCKED__ = true;
 
@@ -5606,6 +5729,96 @@ pub async fn navigate_chrome(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 한 브라우저 탭을 주차(about:blank)해야 하는지에 대한 판정. 로그·테스트를 위해 사유를 남긴다.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParkingDecision {
+    /// URL이 Evolution 로비/릴레이로 보인다.
+    ParkByUrl,
+    /// 앱이 이미 Evolution 로비로 식별해 둔 페이지(LOBBY_PAGE_ID)다.
+    ParkByTrackedLobby,
+    /// 방 탭 — 세션/베팅이 걸려 있어 절대 건드리면 안 된다.
+    SkipRoomTab,
+    /// 이미 비어 있다.
+    SkipBlank,
+    /// Evolution과 무관한 탭(카지노 사이트 로그인 등) — 비우면 로그인이 날아간다.
+    SkipUnrelated,
+}
+
+impl ParkingDecision {
+    pub fn should_park(&self) -> bool {
+        matches!(self, Self::ParkByUrl | Self::ParkByTrackedLobby)
+    }
+
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::ParkByUrl => "url_match",
+            Self::ParkByTrackedLobby => "tracked_lobby",
+            Self::SkipRoomTab => "room_tab",
+            Self::SkipBlank => "blank",
+            Self::SkipUnrelated => "unrelated",
+        }
+    }
+}
+
+/// 탭 하나를 주차 대상으로 볼지 판정한다.
+///
+/// 게임은 **릴레이 위젯 페이지의 iframe 안**에서 돈다. 그래서 최상위 page URL에는 `evo-games`가
+/// 안 나온다 — 2026-09-01 라이브에서 최상위 탭은
+/// `widget.xma8riyvac.com/widget?game_id=evolution_game_shows&vendor=evolution&…` 이었고,
+/// `evo-games`만 찾던 기존 휴리스틱은 이걸 놓쳐 `주차 대상 0개`로 아무것도 못 비웠다.
+/// 그 결과 브라우저 게임이 살아남아 세션을 가져갔다(`KICKOUT: logoutByPlayer`).
+///
+/// 그래서 릴레이 URL의 `evolution` 마커와, 앱이 이미 잡아둔 `LOBBY_PAGE_ID` 두 경로로 보완한다.
+/// 카지노 사이트 루트(예: `https://el011.com/`)는 두 조건 어디에도 안 걸려 로그인이 유지된다.
+pub fn classify_parking_target(
+    page_url: &str,
+    page_id: &str,
+    lobby_page_id: Option<&str>,
+) -> ParkingDecision {
+    // 방 탭은 베팅 세션이 걸려 있어 어떤 경우에도 건드리지 않는다(가장 먼저 판단).
+    if page_url.contains("table_id=") {
+        return ParkingDecision::SkipRoomTab;
+    }
+    if page_url.is_empty() || page_url.starts_with("about:blank") {
+        return ParkingDecision::SkipBlank;
+    }
+
+    let lower = page_url.to_lowercase();
+    let url_looks_like_lobby = lower.contains("/frontend/evo")
+        || lower.contains("evolutiongaming")
+        || lower.contains("evo-games")
+        || lower.contains("/lobby")
+        || lower.contains("evolution");
+    if url_looks_like_lobby {
+        return ParkingDecision::ParkByUrl;
+    }
+    if !page_id.is_empty() && lobby_page_id == Some(page_id) {
+        return ParkingDecision::ParkByTrackedLobby;
+    }
+    ParkingDecision::SkipUnrelated
+}
+
+/// Rust 멀티위젯 연결 직후 브라우저 게임 탭을 주차한다.
+///
+/// **왜 필요한가 (2026-09-01 라이브에서 실증):** 브라우저의 멀티위젯 소켓은 WS-블로커가 더미로
+/// 막는데, 더미는 onopen만 흉내낼 뿐 데이터를 주지 않는다. 그러면 게임 클라이언트가 연결이
+/// 죽었다고 판단해 `/entry`로 **재인증**하고, 새 EVOSESSIONID가 발급되면서 Rust가 쓰던 세션이
+/// 무효화된다. 실제 로그: `Subscribed to 30/60` → 6초 뒤 `Broken pipe` → `V7 LOADED /entry`
+/// → 재연결 시 `notAuthorised`. 게임 탭을 비워 게임 JS를 언로드하면 이 재진입 자체가 사라진다.
+///
+/// Rust는 멀티위젯 소켓만 쓰고 브라우저의 로비 소켓에 의존하지 않으므로 탭을 비워도 무방하다.
+///
+/// 유예 시간을 두는 이유: 배팅 한도(`CLIENT_BET_CHIP`)는 게임 로드 때 브라우저 CDP가 캡처하는데,
+/// 너무 일찍 비우면 늦게 오는 한도를 놓친다. 반대로 너무 늦으면 위의 재진입에 진다(실측 ~6초).
+async fn park_browser_after_capture() {
+    const GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+    tokio::time::sleep(GRACE).await;
+    match park_browser_lobby().await {
+        Ok(msg) => info!("🅿️ [PARK] 연결 후 자동 주차: {}", msg),
+        Err(e) => warn!("🅿️ [PARK] 연결 후 자동 주차 실패: {}", e),
+    }
+}
+
 /// 🧪 [실험 — 라이브 검증 필수] 브라우저 로비 탭을 about:blank로 '주차'한다.
 ///
 /// 목적: lobby v2는 단일 세션(EVOSESSIONID) 소켓이라, 브라우저 로비와 Rust 멀티소켓이 같은 세션을
@@ -5633,29 +5846,27 @@ pub async fn park_browser_lobby() -> Result<String, String> {
     let mut all_page_urls: Vec<String> = Vec::new();
     let mut targets: Vec<(String, String)> = Vec::new(); // (webSocketDebuggerUrl, page_url)
 
+    // 앱이 이미 식별해 둔 Evolution/릴레이 로비 페이지. URL 휴리스틱이 못 맞히는 릴레이도 잡는다.
+    let lobby_page_id = LOBBY_PAGE_ID.lock().unwrap().clone();
+
     for page in &pages {
         let page_type = page.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if page_type != "page" {
             continue;
         }
         let page_url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let page_id = page.get("id").and_then(|v| v.as_str()).unwrap_or("");
         all_page_urls.push(page_url.to_string());
 
-        // 룸 탭·이미 주차된 탭·빈 URL은 건드리지 않는다(세션/베팅 보호).
-        if page_url.contains("table_id=")
-            || page_url.is_empty()
-            || page_url.starts_with("about:blank")
-        {
+        let decision = classify_parking_target(page_url, page_id, lobby_page_id.as_deref());
+        if !decision.should_park() {
             continue;
         }
-        // Evolution 로비/릴레이로 보이는 페이지만 주차 대상.
-        let is_lobby = page_url.contains("/frontend/evo")
-            || page_url.contains("evolutiongaming")
-            || page_url.contains("evo-games")
-            || page_url.contains("/lobby");
-        if !is_lobby {
-            continue;
-        }
+        info!(
+            "🅿️ [PARK] 주차 대상 발견 ({}): {}",
+            decision.reason(),
+            page_url.chars().take(80).collect::<String>()
+        );
         if let Some(ws_dbg) = page.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
             targets.push((ws_dbg.to_string(), page_url.to_string()));
         }
@@ -6493,7 +6704,35 @@ pub async fn click_evolution_launch() -> Result<bool, String> {
     //    세션 회전이 통째로 실패한다. 그래서 findIn()이 (1) top document를 보고, (2) 같은 출처
     //    중첩 iframe(contentDocument 접근 가능)을 재귀로 들어간다. 교차 출처 OOPIF는 별도 CDP
     //    타깃(type:"iframe")으로 분리되므로 아래 루프에서 type을 "page"+"iframe" 둘 다 받아 커버한다.
-    let click_js = r#"(function(){function findIn(doc){try{var a=[].slice.call(doc.querySelectorAll('div,a,button,span,li,p'));var c=a.filter(function(e){var t=(e.innerText||e.textContent||'').replace(/\s+/g,'');return t.indexOf('게임입장')>=0&&t.indexOf('에볼루션')>=0;});c.sort(function(x,y){return (x.innerText||x.textContent||'').length-(y.innerText||y.textContent||'').length;});if(c.length){c[0].click();return true;}}catch(e){}try{var fr=[].slice.call(doc.querySelectorAll('iframe'));for(var i=0;i<fr.length;i++){try{var d=fr[i].contentDocument;if(d&&findIn(d))return true;}catch(e){}}}catch(e){}return false;}return findIn(document)?'CLICKED':'NONE';})()"#;
+    // 사이트마다 런처 마크업이 다르다. 두 패턴을 모두 본다:
+    //  (1) "게임입장 … 에볼루션" 텍스트 — 기존 중계사이트.
+    //  (2) onclick 에 launchHL(/launch 가 있고 텍스트에 에볼루션 — el011 류
+    //      (실측: `<div class="live-card" onclick="launchHL('evolution','evolution_game_shows','evolution')">`).
+    // (2)를 빼먹으면 브라우저 주차 후 로테이션이 런처를 못 찾아 세션 재획득이 통째로 실패한다.
+    let click_js = r#"(function(){
+function txt(e){return (e.innerText||e.textContent||'').replace(/\s+/g,'');}
+function pick(list){if(!list.length)return null;list.sort(function(x,y){return txt(x).length-txt(y).length;});return list[0];}
+function findIn(doc){
+  try{
+    var a=[].slice.call(doc.querySelectorAll('div,a,button,span,li,p'));
+    var c=pick(a.filter(function(e){var t=txt(e);return t.indexOf('게임입장')>=0&&t.indexOf('에볼루션')>=0;}));
+    if(!c){
+      c=pick(a.filter(function(e){
+        var oc=(e.getAttribute&&e.getAttribute('onclick'))||'';
+        if(oc.indexOf('launchHL')<0&&oc.indexOf('launch')<0)return false;
+        var t=txt(e);
+        return t.indexOf('에볼루션')>=0||oc.toLowerCase().indexOf('evolution')>=0;
+      }));
+    }
+    if(c){c.click();return true;}
+  }catch(e){}
+  try{
+    var fr=[].slice.call(doc.querySelectorAll('iframe'));
+    for(var i=0;i<fr.length;i++){try{var d=fr[i].contentDocument;if(d&&findIn(d))return true;}catch(e){}}
+  }catch(e){}
+  return false;
+}
+return findIn(document)?'CLICKED':'NONE';})()"#;
 
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
@@ -6848,5 +7087,74 @@ mod session_rotation_tests {
 
         drop(first);
         assert!(try_acquire_atomic_flag(&flag).is_some());
+    }
+
+    // 2026-09-01 라이브에서 실제로 열려 있던 탭들. 파킹이 이 중 무엇을 비우고 무엇을 남기는지가
+    // 세션 유지와 카지노 로그인 유지를 동시에 좌우한다.
+    const RELAY_WIDGET_URL: &str = "https://widget.xma8riyvac.com/widget?game_id=evolution_game_shows&vendor=evolution&token=0kEjbCsujF3CMvivqTAxDvACoMOu7lFJAL1WQ0Ih&h=0e415ea4e29b17a7dfc0c185acb78fd7";
+    const CASINO_SITE_URL: &str = "https://el011.com/";
+    const EVO_GAME_URL: &str =
+        "https://skylinextm.evo-games.com/frontend/evo/r2/#mwg=5!23-7a9b!baccarat";
+
+    #[test]
+    fn parks_relay_widget_that_hosts_the_game_iframe() {
+        // 게임은 이 페이지의 iframe 안에서 돈다. 최상위 URL에 evo-games 가 없어서
+        // 예전 휴리스틱이 놓쳤고, 그래서 브라우저가 세션을 가져갔다(logoutByPlayer).
+        assert_eq!(
+            classify_parking_target(RELAY_WIDGET_URL, "P1", None),
+            ParkingDecision::ParkByUrl
+        );
+    }
+
+    #[test]
+    fn parks_direct_evolution_game_page() {
+        assert_eq!(
+            classify_parking_target(EVO_GAME_URL, "P2", None),
+            ParkingDecision::ParkByUrl
+        );
+    }
+
+    #[test]
+    fn never_parks_the_casino_site_so_login_survives() {
+        // 이 탭을 비우면 로그인과 런처가 날아가 로테이션까지 죽는다.
+        assert_eq!(
+            classify_parking_target(CASINO_SITE_URL, "P3", None),
+            ParkingDecision::SkipUnrelated
+        );
+        // LOBBY_PAGE_ID 가 다른 탭을 가리켜도 마찬가지다.
+        assert_eq!(
+            classify_parking_target(CASINO_SITE_URL, "P3", Some("P1")),
+            ParkingDecision::SkipUnrelated
+        );
+    }
+
+    #[test]
+    fn parks_tracked_lobby_even_when_url_has_no_evolution_marker() {
+        // 릴레이가 URL 에 evolution 마커를 안 남기는 경우의 보완 경로.
+        assert_eq!(
+            classify_parking_target("https://relay.example/play?t=abc", "P9", Some("P9")),
+            ParkingDecision::ParkByTrackedLobby
+        );
+    }
+
+    #[test]
+    fn never_parks_room_tabs_or_blank_tabs() {
+        // 방 탭은 베팅 세션이 걸려 있다 — LOBBY_PAGE_ID 로 지목돼도 건드리면 안 된다.
+        assert_eq!(
+            classify_parking_target(
+                "https://skylinextm.evo-games.com/frontend/evo/r2/?table_id=abc",
+                "P4",
+                Some("P4")
+            ),
+            ParkingDecision::SkipRoomTab
+        );
+        assert_eq!(
+            classify_parking_target("about:blank", "P5", Some("P5")),
+            ParkingDecision::SkipBlank
+        );
+        assert_eq!(
+            classify_parking_target("", "P6", Some("P6")),
+            ParkingDecision::SkipBlank
+        );
     }
 }
