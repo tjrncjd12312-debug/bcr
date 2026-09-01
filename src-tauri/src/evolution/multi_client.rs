@@ -264,6 +264,10 @@ struct BridgeState {
     crypto: Option<MultiwidgetCrypto>,
     outbound: tokio::sync::mpsc::UnboundedSender<BridgeOutbound>,
     tables_subscribed: bool,
+    /// 테이블별 실시간 gameId(tableId → 현재 라운드). 직접 소켓의 메시지 루프가 하던 BET-FIX와
+    /// 같은 역할: 프론트가 넣은 `synthetic-…` gameId를 실제 값으로 치환해야 Evolution이 베팅을
+    /// 등록한다. 브릿지는 메시지 루프를 타지 않으므로 여기서 직접 추적한다.
+    table_game_ids: std::collections::HashMap<String, String>,
 }
 
 /// `handle_incoming_message`가 메시지 루프에 돌려주는 후속 동작 신호.
@@ -1490,6 +1494,10 @@ impl EvolutionMultiSocket {
         // 브릿지 모드: 브라우저의 진짜 소켓으로 내보낸다(직접 소켓 없음).
         // 암호화 소켓이면 여기서 RC4로 암호화하고, 페이지 훅은 바이트를 그대로 send()한다.
         if let Some(bridge) = &self.bridge {
+            // 직접 소켓과 동일한 BET-FIX 게이트: playerBetRequest의 synthetic gameId를 추적된
+            // 실제 gameId로 치환하고, 치환할 값이 없으면 fail-closed(서버로 안 보냄).
+            // 이 단계가 빠지면 베팅이 "보내진 것처럼" 보이지만 Evolution은 무시한다.
+            let message = prepare_outgoing_message(message, &bridge.table_game_ids)?;
             let frame = if bridge.encrypted {
                 let crypto = bridge.crypto.as_ref().ok_or_else(|| {
                     "bridge crypto not ready (no frame received yet)".to_string()
@@ -1557,6 +1565,7 @@ impl EvolutionMultiSocket {
             crypto: None,
             outbound,
             tables_subscribed: false,
+            table_game_ids: std::collections::HashMap::new(),
         });
         self.connected.store(true, Ordering::SeqCst);
         if let Some(tx) = &self.event_tx {
@@ -1660,6 +1669,34 @@ impl EvolutionMultiSocket {
         } else {
             payload.to_string()
         };
+
+        // BET-FIX(브릿지판): 게임 프레임의 실제 gameId를 테이블별로 추적한다. 두 경로로 온다
+        // (라이브 덤프 확인) — baccarat.gameState/newGame은 args.gameId, tableState는
+        // args.currentGame.gameId. 직접 소켓의 메시지 루프와 동일 규칙.
+        if text.contains("\"gameId\"") && text.contains("\"tableId\"") {
+            if let Some(bridge) = self.bridge.as_mut() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(args) = v.get("args") {
+                        let tid = args.get("tableId").and_then(|x| x.as_str());
+                        let gid = args
+                            .get("gameId")
+                            .and_then(|x| x.as_str())
+                            .or_else(|| {
+                                args.get("currentGame")
+                                    .and_then(|c| c.get("gameId"))
+                                    .and_then(|x| x.as_str())
+                            });
+                        if let (Some(tid), Some(gid)) = (tid, gid) {
+                            if !gid.is_empty() && !gid.starts_with("synthetic-") {
+                                bridge
+                                    .table_game_ids
+                                    .insert(tid.to_string(), gid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         match Self::handle_incoming_message(&event_tx, &text).await {
             Some(HandleOutcome::Kickout(reason)) => {
@@ -1967,5 +2004,44 @@ mod tests {
             !client.is_connected() && !client.is_bridge_active(),
             "키 불일치면 재연결 없이 즉시 떼어야 한다(계정 보호)"
         );
+    }
+
+    #[tokio::test]
+    async fn bridge_substitutes_real_game_id_into_player_bet_before_sending() {
+        // 브릿지도 직접 소켓의 BET-FIX와 같아야 한다: 게임 프레임에서 추적한 실제 gameId로
+        // 프론트의 synthetic gameId를 치환해야 Evolution이 베팅을 등록한다.
+        let mut client = EvolutionMultiSocket::new();
+        let _events = client.create_event_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        client
+            .attach_bridge(
+                "wss://gate.evo-games.com.se/public/baccarat/player/game/multiwidget/socket?messageFormat=json&instance=i-&EVOSESSIONID=abc".to_string(),
+                tx,
+            )
+            .await
+            .expect("attach");
+
+        // 추적된 gameId가 없으면 synthetic 베팅은 fail-closed(서버로 나가면 안 된다).
+        assert!(client.send_message(bet_message("synthetic-abc")).await.is_err());
+
+        // 게임 프레임(평문)이 tableId+gameId를 알려준다.
+        client
+            .ingest_bridge_frame(
+                1,
+                r#"{"type":"baccarat.gameState","args":{"tableId":"table-1","gameId":"current-round"}}"#,
+            )
+            .await;
+
+        client
+            .send_message(bet_message("synthetic-abc"))
+            .await
+            .expect("bet with tracked game id");
+        match rx.recv().await.expect("outbound") {
+            BridgeOutbound::Text(t) => {
+                assert!(t.contains(r#""gameId":"current-round""#), "치환 안 됨: {}", t);
+                assert!(!t.contains("synthetic-"));
+            }
+            other => panic!("평문 소켓은 Text: {:?}", other),
+        }
     }
 }
