@@ -1675,6 +1675,12 @@ async fn monitor_page_continuously(
         // 반드시 이 세션으로 보내야 페이지 훅(__BCR_MW_SEND_*)이 있는 컨텍스트에서 실행된다.
         let mw_bridge_session: std::sync::Arc<tokio::sync::Mutex<Option<String>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        // 🌉 브릿지 송신 훅(__BCR_MW_SEND_*)이 정의된 실행 컨텍스트 id. evo 게임 타깃은 한 세션 안에
+        // 동일 출처 중첩 프레임(컨텍스트)이 여럿이고 소켓·훅은 그중 하나에만 있다. sessionId만으로
+        // Runtime.evaluate하면 메인 프레임 컨텍스트에서 돌아 훅이 undefined → 구독·베팅 전부 조용히
+        // 드롭됐다(2026-09-02 라이브 120/120 확정). passed-through 콘솔 이벤트의 executionContextId로 채운다.
+        let mw_bridge_context: std::sync::Arc<tokio::sync::Mutex<Option<i64>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let mut ws_url_by_request_id: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let ws_headers_by_request_id: std::sync::Arc<
@@ -1937,6 +1943,18 @@ async fn monitor_page_continuously(
                                     .unwrap_or("");
                                 if first.starts_with("[BCR]") {
                                     info!("[BCR-CONSOLE] {} {}", first, second);
+                                    // 🌉 이 콘솔은 멀티위젯 소켓을 만든 바로 그 window에서 찍힌다 →
+                                    // executionContextId가 곧 __BCR_MW_SEND_* 훅이 있는 컨텍스트다.
+                                    if first.contains("multiwidget socket passed through") {
+                                        if let Some(ctx) = json
+                                            .get("params")
+                                            .and_then(|p| p.get("executionContextId"))
+                                            .and_then(|v| v.as_i64())
+                                        {
+                                            *mw_bridge_context.lock().await = Some(ctx);
+                                            info!("🌉 [BRIDGE] 송신 훅 컨텍스트 기록: contextId={}", ctx);
+                                        }
+                                    }
                                 }
                                 // 🪞 이 PC의 실제 Chrome 신원(UA/origin/언어).
                                 // Rust 가 User-Agent·Origin·Accept-Language 와 TLS 지문을 여기 맞춘다.
@@ -2034,6 +2052,7 @@ async fn monitor_page_continuously(
                                     // 🌉 브릿지 드레이너용: CDP write 핸들 + 멀티위젯 소켓 세션 셀.
                                     let write_for_bridge = write.clone();
                                     let session_for_bridge = mw_bridge_session.clone();
+                                    let context_for_bridge = mw_bridge_context.clone();
                                     tokio::spawn(async move {
                                         // 🌉 브릿지는 여기서 기다리지 않는다. 부착은 즉시 해야 새 소켓의 첫
                                         // 프레임(availableTables 포함)을 놓치지 않는다. 크립토는 첫 binary
@@ -2100,6 +2119,7 @@ async fn monitor_page_continuously(
                                                     drop(client);
                                                     let write_for_bridge = write_for_bridge.clone();
                                                     let session_for_bridge = session_for_bridge.clone();
+                                                    let context_for_bridge = context_for_bridge.clone();
                                                     tokio::spawn(async move {
                                                         use base64::Engine as _;
                                                         let mut seq: u64 = 0;
@@ -2107,6 +2127,10 @@ async fn monitor_page_continuously(
                                                             let Some(sid) = session_for_bridge.lock().await.clone() else {
                                                                 warn!("🌉 [BRIDGE] 멀티위젯 세션 미확정 — 프레임 드롭");
                                                                 continue;
+                                                            };
+                                                            let (kind, len) = match &frame {
+                                                                crate::evolution::multi_client::BridgeOutbound::Binary(b) => ("binary", b.len()),
+                                                                crate::evolution::multi_client::BridgeOutbound::Text(t) => ("text", t.len()),
                                                             };
                                                             let expr = match frame {
                                                                 crate::evolution::multi_client::BridgeOutbound::Binary(bytes) => {
@@ -2119,12 +2143,28 @@ async fn monitor_page_continuously(
                                                                 }
                                                             };
                                                             seq += 1;
-                                                            let cmd = serde_json::json!({
+                                                            let ctx = *context_for_bridge.lock().await;
+                                                            info!(
+                                                                "🌉 [BRIDGE-INJECT] seq={} kind={} len={} session={} contextId={:?}",
+                                                                seq,
+                                                                kind,
+                                                                len,
+                                                                if sid.is_empty() { "<main page>" } else { sid.as_str() },
+                                                                ctx
+                                                            );
+                                                            let mut cmd = serde_json::json!({
                                                                 "id": 7_700_000 + seq,
-                                                                "sessionId": sid,
                                                                 "method": "Runtime.evaluate",
                                                                 "params": { "expression": expr, "returnByValue": true }
                                                             });
+                                                            if !sid.is_empty() {
+                                                                cmd["sessionId"] = serde_json::Value::String(sid.clone());
+                                                            }
+                                                            // 🌉 훅이 사는 컨텍스트로 보낸다. 없으면 메인 프레임에서 돌아
+                                                            // 훅 undefined → 프레임이 조용히 사라진다(2026-09-02 라이브 확정).
+                                                            if let Some(ctx) = ctx {
+                                                                cmd["params"]["contextId"] = serde_json::Value::from(ctx);
+                                                            }
                                                             if let Err(e) = write_for_bridge
                                                                 .lock()
                                                                 .await
@@ -2165,6 +2205,35 @@ async fn monitor_page_continuously(
 
                         // ✅ Handle CDP response (for WebSocket URL queries and cookie requests)
                         if let Some(response_id) = json.get("id").and_then(|v| v.as_u64()) {
+                            // 🌉 브릿지 주입(Runtime.evaluate) 응답. 페이지 훅의 반환값이 프레임이 실제로
+                            // 브라우저 소켓에 실렸는지 알려준다: 'sent' 정상 / 'not_open' 소켓 닫힘·교체 /
+                            // undefined = 이 CDP 세션 메인 컨텍스트에 훅이 없음(다른 프레임·월드) / exception.
+                            // 이전엔 이 응답을 아무도 읽지 않아 베팅이 조용히 사라져도 알 수 없었다.
+                            if (7_700_000..7_800_000).contains(&response_id) {
+                                let seq = response_id - 7_700_000;
+                                if let Some(exc) = json.get("result").and_then(|r| r.get("exceptionDetails")) {
+                                    warn!(
+                                        "🌉 [BRIDGE-INJECT-RESULT] seq={} ⚠️ exception: {}",
+                                        seq,
+                                        exc.get("text").and_then(|t| t.as_str()).unwrap_or("?")
+                                    );
+                                } else if let Some(err) = json.get("error") {
+                                    warn!("🌉 [BRIDGE-INJECT-RESULT] seq={} ⚠️ cdp_error: {}", seq, err);
+                                } else {
+                                    let res = json.get("result").and_then(|r| r.get("result"));
+                                    let value = res.and_then(|r| r.get("value")).and_then(|v| v.as_str());
+                                    let ty = res.and_then(|r| r.get("type")).and_then(|v| v.as_str()).unwrap_or("?");
+                                    match value {
+                                        Some("sent") => info!("🌉 [BRIDGE-INJECT-RESULT] seq={} sent", seq),
+                                        Some(v) => warn!("🌉 [BRIDGE-INJECT-RESULT] seq={} ⚠️ hook returned '{}'", seq, v),
+                                        None => warn!(
+                                            "🌉 [BRIDGE-INJECT-RESULT] seq={} ⚠️ 훅 없음 (result type={}) — 이 세션의 메인 컨텍스트에 __BCR_MW_SEND_*가 없다(소켓이 다른 프레임에서 열림?)",
+                                            seq, ty
+                                        ),
+                                    }
+                                }
+                                continue;
+                            }
                             // 🍪 Handle Network.getAllCookies response (id=88888)
                             if response_id == 88888 {
                                 if let Some(cookies) = json
@@ -3134,13 +3203,15 @@ async fn monitor_page_continuously(
                                         .insert(request_id.to_string(), url.to_string());
                                     // 🌉 브릿지: 멀티위젯 소켓이 열린 세션을 기억한다(베팅 주입 대상).
                                     if url.contains("/multiwidget/") || url.contains("multiwidget") {
-                                        if let Some(sid) = &source_session_id {
-                                            *mw_bridge_session.lock().await = Some(sid.clone());
-                                            info!(
-                                                "🌉 [BRIDGE] 멀티위젯 소켓 세션 기록: {}",
-                                                sid
-                                            );
-                                        }
+                                        // 최상위 페이지가 직접 연 소켓이면 sessionId가 없다 — 빈 문자열로 기록해
+                                        // 드레이너가 sessionId 없이(=이 페이지 타깃으로) 주입하게 한다. 전에는 이
+                                        // 경우 "세션 미확정"으로 주입 프레임(구독·베팅)이 전부 드롭됐다.
+                                        let sid = source_session_id.clone().unwrap_or_default();
+                                        *mw_bridge_session.lock().await = Some(sid.clone());
+                                        info!(
+                                            "🌉 [BRIDGE] 멀티위젯 소켓 세션 기록: {}",
+                                            if sid.is_empty() { "<main page>" } else { sid.as_str() }
+                                        );
                                     }
                                 }
 

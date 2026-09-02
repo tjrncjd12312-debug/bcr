@@ -103,6 +103,49 @@ fn diagnostics_enabled() -> bool {
     *ENABLED
 }
 
+/// 🔬 베팅 경로 추적(env `BCR_BET_TRACE=1`, 진단 세션 전용). 브릿지 소켓에서 **브라우저가 실제로
+/// 보낸** 프레임 전부(게임 자체 + 우리가 주입한 것)와 베팅 관련 **수신** 프레임의 복호화 평문을
+/// 로그에 남긴다. "우리 베팅이 정말 소켓을 떠났는가", "게임은 베팅을 어떤 포맷으로 보내는가"를
+/// 같은 자리에서 비교하기 위한 것. 기본 OFF — 평소엔 원문을 절대 남기지 않는다.
+fn bet_trace_enabled() -> bool {
+    static ENABLED: Lazy<bool> = Lazy::new(|| env_flag_enabled("BCR_BET_TRACE"));
+    *ENABLED
+}
+
+fn trace_clip(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max {
+        text.to_string()
+    } else {
+        format!(
+            "{}…(+{} chars)",
+            text.chars().take(max).collect::<String>(),
+            total - max
+        )
+    }
+}
+
+fn frame_type_of(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "<unknown>".to_string())
+}
+
+/// 베팅 관련 프레임인가(평문 기준). 원문 로깅 대상 선별용.
+fn is_bet_related_frame(text: &str) -> bool {
+    text.contains("playerBetRequest")
+        || text.contains("playerBetResponse")
+        || text.contains("playerBettingState")
+        || text.contains("acceptedBets")
+        || text.contains("rejectedBets")
+        || text.contains("betResponse")
+        || text.contains("BetDenied")
+        || text.contains("notAuthorised")
+        || text.contains("\"type\":\"error\"")
+        || text.contains("connection.kickout")
+}
+
 /// Return a credential-free endpoint for logs. Query strings and fragments can
 /// contain EVOSESSIONID, tokens, and browser instance identifiers.
 fn websocket_endpoint_for_log(ws_url: &str) -> String {
@@ -268,6 +311,9 @@ struct BridgeState {
     /// 같은 역할: 프론트가 넣은 `synthetic-…` gameId를 실제 값으로 치환해야 Evolution이 베팅을
     /// 등록한다. 브릿지는 메시지 루프를 타지 않으므로 여기서 직접 추적한다.
     table_game_ids: std::collections::HashMap<String, String>,
+    /// 🔬 BCR_BET_TRACE 전용: 최근 주입 평문. CDP `webSocketFrameSent`에서 본 프레임이 우리 것인지
+    /// (origin=app) 게임 자체 송신인지(origin=browser) 구분하는 데 쓴다. 평소엔 비어 있다.
+    recent_tx: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
 /// `handle_incoming_message`가 메시지 루프에 돌려주는 후속 동작 신호.
@@ -1508,7 +1554,39 @@ impl EvolutionMultiSocket {
             // 직접 소켓과 동일한 BET-FIX 게이트: playerBetRequest의 synthetic gameId를 추적된
             // 실제 gameId로 치환하고, 치환할 값이 없으면 fail-closed(서버로 안 보냄).
             // 이 단계가 빠지면 베팅이 "보내진 것처럼" 보이지만 Evolution은 무시한다.
-            let message = prepare_outgoing_message(message, &bridge.table_game_ids)?;
+            let is_bet = message.contains("playerBetRequest");
+            let message = match prepare_outgoing_message(message, &bridge.table_game_ids) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(
+                        "[BRIDGE-TX] 🛑 송신 차단(BET-FIX): {} (gameId 추적 중인 테이블 {}개)",
+                        e,
+                        bridge.table_game_ids.len()
+                    );
+                    return Err(e);
+                }
+            };
+            if is_bet {
+                info!(
+                    "[BRIDGE-TX] 📤 playerBetRequest → 브라우저 소켓 주입 요청 (len={}, encrypted={}, crypto_ready={})",
+                    message.len(),
+                    bridge.encrypted,
+                    bridge.crypto.is_some()
+                );
+            }
+            if bet_trace_enabled() {
+                info!(
+                    "[BET-TRACE][TX app→socket] type={} {}",
+                    frame_type_of(&message),
+                    trace_clip(&message, 3000)
+                );
+                if let Ok(mut q) = bridge.recent_tx.lock() {
+                    q.push_back(message.clone());
+                    while q.len() > 128 {
+                        q.pop_front();
+                    }
+                }
+            }
             let frame = if bridge.encrypted {
                 let crypto = bridge.crypto.as_ref().ok_or_else(|| {
                     "bridge crypto not ready (no frame received yet)".to_string()
@@ -1577,6 +1655,7 @@ impl EvolutionMultiSocket {
             outbound,
             tables_subscribed: false,
             table_game_ids: std::collections::HashMap::new(),
+            recent_tx: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         self.connected.store(true, Ordering::SeqCst);
         if let Some(tx) = &self.event_tx {
@@ -1602,6 +1681,88 @@ impl EvolutionMultiSocket {
     /// 이 URL과 정확히 일치하는 소켓의 것만 받는다.
     pub fn bridge_url(&self) -> Option<&str> {
         self.bridge.as_ref().map(|b| b.ws_url.as_str())
+    }
+
+    /// 🔬 CDP `Network.webSocketFrameSent`로 본 **브라우저가 실제로 보낸** 프레임을 추적한다
+    /// (BCR_BET_TRACE=1일 때만). 게임 자체의 송신(사용자 수동 베팅 포함)과 우리가 주입한 프레임이
+    /// 모두 같은 소켓을 지나므로, 여기서 origin(app/browser)을 붙여 평문을 남긴다.
+    /// RC4는 프레임마다 S-box를 리셋하고 양방향이 같은 키를 쓰므로 수신용 `decrypt`로 그대로 복호된다.
+    /// 브라우저가 현재 브릿지 소켓으로 **보낸** 프레임의 평문을 돌려준다(암호화면 복호).
+    ///
+    /// 두 용도: (1) 게임이 같은 소켓으로 보내는 `{"log":{"type":"CLIENT_BALANCE_UPDATED",…}}` 류에서
+    /// 실잔액을 뽑아 프론트로 포워딩(호출측), (2) BCR_BET_TRACE 시 origin(app/browser) 붙여 로깅.
+    /// 암호화 소켓에선 payload가 base64라 그대로 JSON 파싱이 안 된다 — 브릿지 모드에서 실잔액이
+    /// 한 번도 갱신되지 않던 원인(2026-09-02). RC4는 양방향 같은 키·프레임마다 리셋이라 `decrypt`로 된다.
+    pub fn observe_bridge_sent_frame(&self, opcode: u64, payload: &str) -> Option<String> {
+        let bridge = self.bridge.as_ref()?;
+        let text: String = if opcode == 2 {
+            use base64::Engine as _;
+            let bytes = match base64::engine::general_purpose::STANDARD.decode(payload) {
+                Ok(b) => b,
+                Err(e) => {
+                    if bet_trace_enabled() {
+                        warn!("[BET-TRACE][SENT] base64 디코드 실패 len={}: {}", payload.len(), e);
+                    }
+                    return None;
+                }
+            };
+            let Some(crypto) = bridge.crypto.as_ref() else {
+                if bet_trace_enabled() {
+                    info!(
+                        "[BET-TRACE][SENT] binary len={} (브릿지 크립토 미준비 — 복호 생략)",
+                        bytes.len()
+                    );
+                }
+                return None;
+            };
+            match crypto
+                .decrypt(&bytes)
+                .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    if bet_trace_enabled() {
+                        warn!(
+                            "[BET-TRACE][SENT] binary len={} 복호 실패: {} (송신 방향 키가 다르거나 다른 소켓)",
+                            bytes.len(),
+                            e
+                        );
+                    }
+                    return None;
+                }
+            }
+        } else {
+            payload.to_string()
+        };
+        if !bet_trace_enabled() {
+            return Some(text);
+        }
+        let origin = bridge
+            .recent_tx
+            .lock()
+            .ok()
+            .map(|mut q| {
+                if let Some(pos) = q.iter().position(|m| m == &text) {
+                    q.remove(pos);
+                    "app"
+                } else {
+                    "browser"
+                }
+            })
+            .unwrap_or("?");
+        let msg_type = frame_type_of(&text);
+        if msg_type == "metrics.ping" || msg_type == "ping" {
+            debug!("[BET-TRACE][SENT origin={}] type={}", origin, msg_type);
+            return Some(text);
+        }
+        let clip = if is_bet_related_frame(&text) { 4000 } else { 1500 };
+        info!(
+            "[BET-TRACE][SENT socket→server origin={}] type={} {}",
+            origin,
+            msg_type,
+            trace_clip(&text, clip)
+        );
+        Some(text)
     }
 
     /// 브릿지를 떼고 Disconnected를 알린다. 재연결은 호출측(프론트 반응형 로테이션)이 판단한다.
@@ -1701,6 +1862,71 @@ impl EvolutionMultiSocket {
         } else {
             payload.to_string()
         };
+
+        // 🔬 BET-TRACE: 베팅 관련 수신 프레임은 평문 전체, 그 외 드문 제어 프레임(widget./connection./error)은
+        // 타입만 남긴다. lobby.*/baccarat.* 상태 프레임은 초당 수십 건이라 제외.
+        if bet_trace_enabled() {
+            let msg_type = frame_type_of(&text);
+            if is_bet_related_frame(&text) {
+                info!(
+                    "[BET-TRACE][RX server→socket] type={} {}",
+                    msg_type,
+                    trace_clip(&text, 4000)
+                );
+            } else if msg_type.starts_with("widget.")
+                || msg_type.starts_with("connection.")
+                || msg_type == "error"
+            {
+                info!("[BET-TRACE][RX] type={} len={}", msg_type, text.len());
+            }
+            // ⏱️ 타이머 진단: 라운드 타이머/베팅 상태 필드를 실제로 가진 프레임만 압축 로깅.
+            // 멀티위젯이 남은 시간을 어떤 필드(timeRemaining/timeInitial/betting…)로 주는지 확정용.
+            if text.contains("timeRemaining")
+                || text.contains("timeInitial")
+                || text.contains("\"betting\"")
+                || text.contains("BetsOpen")
+                || text.contains("BetsClosed")
+                || msg_type.contains("tableState")
+                || msg_type.contains("newGame")
+            {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let a = v.get("args");
+                    let cg = a.and_then(|x| x.get("currentGame"));
+                    let pick = |k: &str| -> serde_json::Value {
+                        cg.and_then(|c| c.get(k))
+                            .or_else(|| a.and_then(|x| x.get(k)))
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null)
+                    };
+                    let picks = [
+                        ("gameId", pick("gameId")),
+                        ("betting", pick("betting")),
+                        ("dealing", pick("dealing")),
+                        ("timeRemaining", pick("timeRemaining")),
+                        ("timeInitial", pick("timeInitial")),
+                        ("timeRemainingMs", pick("timeRemainingMs")),
+                        ("status", pick("status")),
+                    ];
+                    if picks.iter().any(|(_, val)| !val.is_null()) {
+                        let tid = a
+                            .and_then(|x| x.get("tableId"))
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("?");
+                        let fields: Vec<String> = picks
+                            .iter()
+                            .filter(|(_, val)| !val.is_null())
+                            .map(|(k, val)| format!("{}={}", k, val))
+                            .collect();
+                        info!(
+                            "[BET-TRACE][TIMING] type={} table={} {}",
+                            msg_type,
+                            tid,
+                            fields.join(" ")
+                        );
+                    }
+                }
+            }
+        }
 
         // BET-FIX(브릿지판): 게임 프레임의 실제 gameId를 테이블별로 추적한다. 두 경로로 온다
         // (라이브 덤프 확인) — baccarat.gameState/newGame은 args.gameId, tableState는
