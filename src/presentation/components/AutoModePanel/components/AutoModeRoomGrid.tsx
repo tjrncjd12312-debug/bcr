@@ -75,7 +75,9 @@ export function AutoModeRoomGrid({
       .filter(room => {
         if (isLockedAutoModeRoom(room.id)) return true
         const name = (room.koreanName || room.name || '').toLowerCase()
-        if (name.includes('salon') || name.includes('lightning')) return false
+        // 수수료 자동부착 테이블 제외(2026-09-03 라이브 확정): 프라그마틱 Amazing/Mega Baccarat은 본배팅의 20%를
+        // 필수 보너스 배팅(betcode 1000)으로 서버가 붙여 1,000원이 1,200원으로 나간다(에볼 라이트닝 수수료와 동일 구조).
+        if (name.includes('salon') || name.includes('lightning') || name.includes('amazing') || name.includes('mega')) return false
         if (!name.includes('baccarat') && !name.includes('바카라')) return false
         return true
       })
