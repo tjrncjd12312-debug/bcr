@@ -377,7 +377,7 @@ describe('AutoModeService — Tie bet propagation', () => {
     expect(requestPredictionForRoom).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps betting the locked tie-auto room at the max martingale level until a Tie win', async () => {
+  it('resets the tie-auto room to base bet after the max martingale stage is exhausted (설정대로 재시작)', async () => {
     FilterThresholdsService.set({
       tieFrequentStart: 1,
       tieFrequentWindow: 5,
@@ -429,9 +429,11 @@ describe('AutoModeService — Tie bet propagation', () => {
     await flush()
     unsub()
 
+    // maxMartin=2 소진(1000→2000 모두 패) 후: 최고액 무한 유지가 아니라 레벨 0으로 리셋 →
+    // 방향(Tie)은 패턴이 계속 매칭되므로 유지하되, 금액은 base(BASE_BET)로 처음부터 재시작한다.
     expect(bets).toHaveLength(3)
     expect(bets[2].betType).toBe('Tie')
-    expect(bets[2].betAmount).toBe(BASE_BET * 2)
+    expect(bets[2].betAmount).toBe(BASE_BET)
   })
 
   it('keeps losing tie-auto rooms active even if a refreshed filter list omits them', async () => {

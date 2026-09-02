@@ -2627,19 +2627,19 @@ class AutoModeServiceImpl {
         // maxMartin=3 설정 시:
         //   - martinLevel=0(1단계) 패배 → martinLevel=1(2단계)
         //   - martinLevel=1(2단계) 패배 → martinLevel=2(3단계)
-        //   - martinLevel=2(3단계) 패배 → 같은 최대 금액으로 계속 진행
+        //   - martinLevel=2(3단계, 최대) 패배 → 레벨0으로 리셋해 1단계부터 다시 진행
         const maxMartin = this.settings.maxMartin
         const currentLevel = this.martingaleManager.getLevel(roomId)
 
         if (currentLevel >= maxMartin - 1) {
-          // 최대 단계에서 패배 → 최대 금액 유지
-          const previousMartin = currentLevel
-
-          // 한 번 진입한 마틴은 승리 전까지 같은 방/같은 방향으로 계속 간다.
-          // 최대 단계에서는 금액만 cap으로 유지하고, 방 종료/리셋은 하지 않는다.
-          this.martingaleManager.recordLoss(roomId)
-          this.martingaleManager.decrementLevel(roomId)
-          console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${previousMartin + 1}/${maxMartin}단계 (최대 유지), 승리까지 같은 방향으로 계속 진행, 손익: ${profit.toLocaleString()}원`)
+          // 🆕 2026-09-03(사용자 지시): 최대 마틴 단계 소진 시 '최고액 무한 유지'를 중단하고
+          //   레벨 0으로 리셋해 처음부터(base 금액) 새 진행을 시작한다. 방향 잠금(recovery)도 해제해
+          //   다음 라운드는 예측/패턴을 새로 매칭한다. 세션 중지는 로스컷/윈컷(checkCutConditions)이 담당.
+          //   승리처럼 지속하지 않으므로, 설정한 마틴 단계만큼만 진행 후 사이클이 재시작된다.
+          this.martingaleManager.resetLevel(roomId)
+          roomState.martinRecoveryPrediction = null
+          roomState.martinRecoveryStrategy = null
+          console.log(`[AutoMode] ${roomName} - 패배! 마틴 ${maxMartin}단계 소진 → 레벨0 리셋(처음부터 재시작), 손익: ${profit.toLocaleString()}원`)
         } else {
           // 최대 단계 미만에서 패배 → 레벨 증가
           // ✅ MartingaleManager를 Single Source of Truth로 사용
