@@ -27,7 +27,8 @@ type GameResultCallback = (event: GameResultEvent) => void
 type BettingPhaseCallback = (event: BettingPhaseEvent) => void
 type HistoryUpdateCallback = (roomId: string, history: RoadResult[]) => void
 
-const PRAGMATIC_BETTING_SECONDS = 15
+/** 실배팅 체결 확인 대기(ms). 브릿지 ACK(`command success`)는 라이브 실측 ~0.2초. */
+const PRAGMATIC_BET_ACK_TIMEOUT_MS = 2500
 
 // Rust Event Types (Normalized)
 type RustCasinoEvent =
@@ -63,6 +64,38 @@ interface NormalizedGameResult {
 interface NormalizedBettingPhase {
     room_id: string
     remaining_seconds: number
+    /** 브릿지: 서버 마감 절대시각(epoch ms) = betsopen 수신 + betting_time − 1s */
+    deadline_at_ms?: number | null
+    /** 브릿지: 배팅 창 길이(ms) */
+    window_ms?: number | null
+    /** 브릿지: 현재 라운드 gameId */
+    game_id?: string | null
+    /** 브릿지: betsclosed 프레임 */
+    closed?: boolean
+}
+
+/** 브릿지 체결/정산 이벤트(Rust `pragmatic_bet_event`) */
+interface PragmaticBetEvent {
+    type: 'command_ack' | 'bet_confirmed' | 'bets_confirmed' | 'bets_cleared' | 'settled'
+    table?: string | null
+    status?: string
+    amount?: string | null
+    betcode?: string | null
+    game_id?: string | null
+    win?: number
+    nwb?: number
+}
+
+export interface PragmaticBetAck {
+    status: 'accepted' | 'rejected' | 'unknown'
+    error?: string
+}
+
+export interface PragmaticSettlement {
+    roomId: string
+    gameId?: string | null
+    win: number
+    netWin: number
 }
 
 interface NormalizedBalanceUpdate {
@@ -108,7 +141,10 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
 
     // State
     private rooms: Map<string, Room> = new Map()
-    private requestedRooms: Set<string> = new Set()
+    /** 테이블별 현재 라운드 gameId(betsopen/game/timer 프레임에서) */
+    private currentGameIds: Map<string, string> = new Map()
+    private betAckWaiters: Map<string, { resolve: (ack: PragmaticBetAck) => void; timeoutId: ReturnType<typeof setTimeout> }> = new Map()
+    private betSettledCallbacks: Array<(s: PragmaticSettlement) => void> = []
 
     // Callbacks
     private roomUpdateCallbacks: RoomUpdateCallback[] = []
@@ -159,6 +195,84 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
             this.connected = false
         })
         this.unlistenValues.push(unlistenError)
+
+        // 5. 브릿지 부착 상태 — 브라우저 게임 소켓에 붙었는지(= 실배팅 가능)
+        const unlistenBridge = await listen<{ attached: boolean; reason?: string }>('pragmatic_bridge_status', (event) => {
+            this.connected = !!event.payload?.attached
+            console.log(`[PragmaticAdapter] bridge ${this.connected ? 'attached' : `detached (${event.payload?.reason ?? ''})`}`)
+            if (!this.connected) this.rejectAllAckWaiters('브릿지 분리')
+        })
+        this.unlistenValues.push(unlistenBridge)
+
+        // 6. 체결/정산 이벤트 — command ACK, 마감 후 bet/bets 확정, win 정산
+        const unlistenBet = await listen<PragmaticBetEvent>('pragmatic_bet_event', (event) => {
+            this.handleBetEvent(event.payload)
+        })
+        this.unlistenValues.push(unlistenBet)
+    }
+
+    private handleBetEvent(ev: PragmaticBetEvent) {
+        const table = (ev.table ?? '').replace(/^table-/, '')
+        if (!table) return
+        switch (ev.type) {
+            case 'command_ack': {
+                const waiter = this.betAckWaiters.get(table)
+                if (waiter) {
+                    this.betAckWaiters.delete(table)
+                    clearTimeout(waiter.timeoutId)
+                    waiter.resolve(ev.status === 'success'
+                        ? { status: 'accepted' }
+                        : { status: 'rejected', error: `Pragmatic 명령 거절 (${ev.status ?? '?'})` })
+                }
+                break
+            }
+            case 'bet_confirmed':
+            case 'bets_confirmed': {
+                const waiter = this.betAckWaiters.get(table)
+                if (waiter) {
+                    this.betAckWaiters.delete(table)
+                    clearTimeout(waiter.timeoutId)
+                    waiter.resolve({ status: 'accepted' })
+                }
+                break
+            }
+            case 'settled': {
+                const s: PragmaticSettlement = { roomId: table, gameId: ev.game_id ?? null, win: Number(ev.win ?? 0), netWin: Number(ev.nwb ?? 0) }
+                this.betSettledCallbacks.forEach(cb => { try { cb(s) } catch (e) { console.warn('[PragmaticAdapter] settled cb error', e) } })
+                break
+            }
+            default:
+                break
+        }
+    }
+
+    private rejectAllAckWaiters(error: string) {
+        this.betAckWaiters.forEach((w) => { clearTimeout(w.timeoutId); w.resolve({ status: 'unknown', error }) })
+        this.betAckWaiters.clear()
+    }
+
+    /** 실배팅 체결 확인: command ACK(success) 또는 bet/bets 확정을 기다린다. 타임아웃이면 unknown. */
+    waitForBetAck(roomId: string, timeoutMs = PRAGMATIC_BET_ACK_TIMEOUT_MS): Promise<PragmaticBetAck> {
+        const table = roomId.replace(/^pragmatic:/, '')
+        return new Promise((resolve) => {
+            const prev = this.betAckWaiters.get(table)
+            if (prev) { clearTimeout(prev.timeoutId); prev.resolve({ status: 'unknown', error: '새 배팅으로 대체' }) }
+            const timeoutId = setTimeout(() => {
+                this.betAckWaiters.delete(table)
+                resolve({ status: 'unknown', error: '실제 베팅 체결 확인 시간 초과' })
+            }, timeoutMs)
+            this.betAckWaiters.set(table, { resolve, timeoutId })
+        })
+    }
+
+    onBetSettled(callback: (s: PragmaticSettlement) => void): () => void {
+        this.betSettledCallbacks.push(callback)
+        return () => { this.betSettledCallbacks = this.betSettledCallbacks.filter(cb => cb !== callback) }
+    }
+
+    /** 현재 라운드 gameId(브릿지가 betsopen/game/timer에서 추적). 없으면 null. */
+    getCurrentGameId(roomId: string): string | null {
+        return this.currentGameIds.get(roomId.replace(/^pragmatic:/, '')) ?? null
     }
 
     private handleRustEvent(event: RustCasinoEvent) {
@@ -215,24 +329,25 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
         this.rooms.clear()
     }
 
+    /** 실배팅 전송(브릿지). Rust가 마감 여유·gameId·사용자 id·훅 컨텍스트를 검사해 fail-closed로 거절할 수 있다(throw). */
     async placeBet(roomId: string, betType: string, amount: number): Promise<void> {
         if (!this.connected) {
-            console.warn('[PragmaticAdapter] Cannot place bet: Not connected')
-            return
+            throw new Error('프라그마틱 게임 소켓에 붙어 있지 않아요 (멀티플레이 진입 필요)')
         }
+        const tableId = roomId.replace(/^pragmatic:/, '')
+        console.log(`[PragmaticAdapter] Placing Real Bet: ${betType} ${amount} on ${tableId}`)
+        const receipt = await invoke<PragmaticBetReceipt>('place_pragmatic_bet', {
+            tableId,
+            betType,
+            amount: Math.trunc(amount)
+        })
+        console.log('[PragmaticAdapter] Pragmatic bet sent:', receipt)
+    }
 
-        try {
-            console.log(`[PragmaticAdapter] Placing Real Bet: ${betType} ${amount} on ${roomId}`)
-            const receipt = await invoke<PragmaticBetReceipt>('place_pragmatic_bet', {
-                tableId: roomId,
-                betType,
-                amount: Math.trunc(amount)
-            })
-            console.log('[PragmaticAdapter] Pragmatic bet sent:', receipt)
-        } catch (error) {
-            console.error('[PragmaticAdapter] Failed to place bet:', error)
-            throw error
-        }
+    /** 배팅 취소(전체). 마감 전에만 가능. */
+    async cancelBet(roomId: string): Promise<void> {
+        const tableId = roomId.replace(/^pragmatic:/, '')
+        await invoke<string>('cancel_pragmatic_bet', { tableId })
     }
 
     isConnected(): boolean {
@@ -278,15 +393,7 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
             this.emitRoomUpdate(Array.from(this.rooms.values()))
         }
 
-        // 방 소켓 병렬 연결: 로비 통계에서 받은 tableId 기준으로 실제 룸 소켓을 붙인다.
-        updatedRooms.forEach(room => {
-            if (!this.requestedRooms.has(room.id)) {
-                this.requestedRooms.add(room.id)
-                invoke('connect_pragmatic_table', { tableId: room.id }).catch((error) => {
-                    console.warn('[PragmaticAdapter] Failed to connect table socket:', error)
-                })
-            }
-        })
+        // 브릿지 모드: 테이블 소켓은 브라우저(멀티플레이)가 스스로 열고 구독한다. Rust 직접 소켓은 열지 않는다.
     }
 
     private handleGameResult(data: NormalizedGameResult) {
@@ -294,16 +401,12 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
         const isPlayerPair = Boolean(data.is_player_pair)
         const isBankerPair = Boolean(data.is_banker_pair)
         const displayName = getPragmaticRoomName(data.room_id, data.table_name || this.rooms.get(data.room_id)?.name)
-        this.emitGameResult({
-            roomId: data.room_id,
-            winner: winner,
-            isPlayerPair,
-            isBankerPair,
-            playerScore: data.player_score ?? undefined,
-            bankerScore: data.banker_score ?? undefined
-        })
 
-        // Also update history in room
+        // ⚠️ 순서 중요(2026-09-03): 방 히스토리를 먼저 키운 뒤 결과 콜백을 발화한다.
+        //   종전엔 emitGameResult를 먼저 쏴서, AutoModeService가 결과를 받는 순간 resolveRoom이
+        //   아직 안 자란 히스토리를 보고 hist-not-grown으로 무시 → 폴링(~1초)까지 정산이 밀렸다.
+        //   그 사이 바로 다음 라운드 betsopen이 지나가 마틴 배팅이 '한 판 씹히는' 원인이었다.
+        //   서버 gameresult는 라운드별 확정 승패이므로 히스토리 성장과 동시에 즉시 정산되게 한다.
         const existing = this.rooms.get(data.room_id)
         const history = existing?.history ?? []
         const updatedHistory: RoadResult[] = [{
@@ -318,7 +421,10 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
             koreanName: displayName,
             history: updatedHistory,
             gameCount: updatedHistory.length,
-            lastResultTime: Date.now()
+            lastResultTime: Date.now(),
+            phase: 'result',
+            remainingSeconds: 0,
+            bettingDeadlineAt: undefined,
         } : {
             id: data.room_id,
             name: displayName,
@@ -326,26 +432,49 @@ export class PragmaticAdapterImpl implements ICasinoAdapter {
             history: updatedHistory,
             gameCount: updatedHistory.length,
             lastResultTime: Date.now(),
+            phase: 'result',
+            remainingSeconds: 0,
             provider: 'pragmatic'
         }
 
         this.lastHistoryLengthPerRoom.set(data.room_id, updatedHistory.length)
         this.rooms.set(data.room_id, room)
+
+        // 히스토리를 키운 뒤 결과 콜백 발화 → AutoModeService가 즉시(같은 tick) 정산한다.
+        this.emitGameResult({
+            roomId: data.room_id,
+            winner: winner,
+            isPlayerPair,
+            isBankerPair,
+            playerScore: data.player_score ?? undefined,
+            bankerScore: data.banker_score ?? undefined
+        })
         this.emitRoomUpdate(Array.from(this.rooms.values()))
 
-        // Pragmatic은 타이머 이벤트가 없으므로 결과 시점에 베팅 페이즈를 시작시켜 타이머를 보여준다.
-        this.emitBettingPhase({
-            roomId: data.room_id,
-            remainingSeconds: PRAGMATIC_BETTING_SECONDS,
-            phase: 'start'
-        })
+        // ⛔ 결과 시점에 가짜 배팅 시작(15초)을 쏘지 않는다. 브릿지가 실제 betsopen 프레임으로
+        //   마감 시각과 gameId를 실어 보낸다(에볼루션에서 가짜 12초가 끝난 라운드 gameId 배팅을 만든 것과 같은 함정).
     }
 
     private handleBettingPhase(data: NormalizedBettingPhase) {
+        const isStart = !data.closed && data.remaining_seconds > 0
+        if (data.game_id) this.currentGameIds.set(data.room_id, data.game_id)
+        const deadlineAt = isStart ? (data.deadline_at_ms ?? Date.now() + data.remaining_seconds * 1000) : undefined
+        const existing = this.rooms.get(data.room_id)
+        if (existing) {
+            this.rooms.set(data.room_id, {
+                ...existing,
+                phase: isStart ? 'betting' : 'dealing',
+                remainingSeconds: isStart ? data.remaining_seconds : 0,
+                bettingDeadlineAt: deadlineAt,
+                bettingWindowMs: data.window_ms ?? existing.bettingWindowMs,
+            })
+        }
         this.emitBettingPhase({
             roomId: data.room_id,
-            remainingSeconds: data.remaining_seconds,
-            phase: data.remaining_seconds > 0 ? 'start' : 'end'
+            remainingSeconds: isStart ? data.remaining_seconds : 0,
+            phase: isStart ? 'start' : 'end',
+            deadlineAt,
+            windowMs: data.window_ms ?? undefined,
         })
     }
 

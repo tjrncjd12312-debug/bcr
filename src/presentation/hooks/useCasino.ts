@@ -983,33 +983,41 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
                 }
               })
 
-              // Pragmatic은 별도 타이머 이벤트가 없어 결과 직후 베팅 페이즈를 합성한다.
-              // Pragmatic은 결과 수신 직후 다음 베팅 페이즈가 시작됨
-              const PRAGMATIC_BETTING_SECONDS = 15
-              const syntheticBettingEvent: BettingPhaseEvent = {
-                roomId,
-                remainingSeconds: PRAGMATIC_BETTING_SECONDS,
-                phase: 'start',
+              // ⛔ 결과 직후 합성 배팅 페이즈(15초)를 쏘지 않는다. 브릿지가 실제 betsopen(마감 시각·gameId 포함)을
+              //   보낸다. 가짜 시작은 끝난 라운드 gameId로 배팅을 내보내는 함정(에볼루션 2026-09-02와 동일).
+              const resultRoom = roomsRef.current.get(roomId)
+              if (resultRoom) {
+                roomsRef.current.set(roomId, { ...resultRoom, phase: 'result', remainingSeconds: 0, bettingDeadlineAt: undefined })
+                pendingRoomUpdatesRef.current.add(roomId)
+                flushRoomUpdates()
               }
-
-              // 등록된 bettingPhase 콜백을 호출해 예측을 트리거한다.
-              bettingPhaseCallbacksRef.current.forEach((callback) => {
-                try {
-                  callback(syntheticBettingEvent)
-                } catch (e) {
-                  console.error('[useCasino] Error in synthetic betting phase callback:', e)
-                }
-              })
               break
             }
 
             case 'betting_phase': {
               // 베팅 페이즈 이벤트를 등록된 콜백들에 전달
               const pragmaticRoomId = `${PRAGMATIC_ROOM_PREFIX}${pragmaticEvent.data.room_id}`
+              // 브릿지 확장 필드: deadline_at_ms(서버 마감 절대시각), window_ms, game_id, closed
+              const bp = pragmaticEvent.data as { remaining_seconds: number; deadline_at_ms?: number | null; window_ms?: number | null; closed?: boolean }
+              const isStart = !bp.closed && bp.remaining_seconds > 0
               const bettingEvent: BettingPhaseEvent = {
                 roomId: pragmaticRoomId,
-                remainingSeconds: pragmaticEvent.data.remaining_seconds,
-                phase: pragmaticEvent.data.remaining_seconds > 0 ? 'start' : 'end',
+                remainingSeconds: isStart ? bp.remaining_seconds : 0,
+                phase: isStart ? 'start' : 'end',
+                deadlineAt: isStart ? (bp.deadline_at_ms ?? undefined) : undefined,
+                windowMs: bp.window_ms ?? undefined,
+              }
+              const phaseRoom = roomsRef.current.get(pragmaticRoomId)
+              if (phaseRoom) {
+                roomsRef.current.set(pragmaticRoomId, {
+                  ...phaseRoom,
+                  phase: isStart ? 'betting' : 'dealing',
+                  remainingSeconds: bettingEvent.remainingSeconds,
+                  bettingDeadlineAt: bettingEvent.deadlineAt,
+                  bettingWindowMs: bettingEvent.windowMs ?? phaseRoom.bettingWindowMs,
+                })
+                pendingRoomUpdatesRef.current.add(pragmaticRoomId)
+                flushRoomUpdates()
               }
 
               // 등록된 모든 콜백 호출
@@ -1024,7 +1032,12 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
             }
 
             case 'balance_update': {
-              // Pragmatic 잔액은 별도 경로에서 관리한다.
+              // 프라그마틱 실보유금: 게임 소켓엔 잔액이 없어 Rust가 멀티바카라 클라이언트 DOM
+              // "보유잔액"을 주기 스캔해 보내준다 → 실잔액 표시(realBalance)에 즉시 반영.
+              const bal = (pragmaticEvent.data as { balance?: number })?.balance
+              if (typeof bal === 'number' && isFinite(bal)) {
+                setRealBalance(bal)
+              }
               break
             }
           }

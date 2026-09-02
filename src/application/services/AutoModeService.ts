@@ -28,6 +28,10 @@ import { container } from '../di'
 import { CallbackManager } from '../utils'
 import { VirtualBettingService } from './VirtualBettingService'
 import { AutoBettingService, type BetExecutionStatus } from './AutoBettingService'
+import { PragmaticAdapter } from '../../infrastructure/adapters/PragmaticAdapter'
+
+/** 프라그마틱 방 id prefix. useCasino가 병합할 때 붙인다. */
+const PRAGMATIC_PREFIX = 'pragmatic:'
 import { MultiRoomPredictionService } from './MultiRoomPredictionService'
 import { PatternBettingService } from './PatternBettingService'
 import FilterThresholdsService from './FilterThresholdsService'
@@ -376,6 +380,24 @@ class AutoModeServiceImpl {
   private _patternPredictionService: IPatternPredictionService | null = null
   private repository: IAutoModeRepository = getAutoModeRepository()
 
+  /**
+   * 방 조회를 제공자별로 분기한다. DI의 casinoAdapter는 에볼루션 전용이라 프라그마틱 방을 모른다 —
+   * 그 상태로는 자동배팅이 프라그마틱 방을 "없는 방"으로 보고 전부 건너뛴다(2026-09-03).
+   */
+  private resolveRoom(roomId: string): Room | null {
+    if (roomId.startsWith(PRAGMATIC_PREFIX)) {
+      const raw = PragmaticAdapter.getRoom(roomId.slice(PRAGMATIC_PREFIX.length))
+      return raw ? { ...raw, id: roomId, provider: 'pragmatic' } : null
+    }
+    return this.casinoAdapter.getRoom(roomId)
+  }
+
+  private allRoomIds(): string[] {
+    const evo = Array.from(this.casinoAdapter.getRooms().keys())
+    const prag = Array.from(PragmaticAdapter.getRooms().keys()).map((id) => `${PRAGMATIC_PREFIX}${id}`)
+    return [...evo, ...prag]
+  }
+
   private get casinoAdapter(): ICasinoAdapter {
     if (!this._casinoAdapter) {
       this._casinoAdapter = container.get('casinoAdapter')
@@ -410,6 +432,15 @@ class AutoModeServiceImpl {
     })
     this.adapterUnsubscribers.push(unsubBetting)
 
+    // 🎲 프라그마틱(브릿지) 이벤트도 같은 파이프라인으로 — roomId는 prefix를 붙여 UI/설정과 맞춘다.
+    const prefix = PRAGMATIC_PREFIX
+    this.adapterUnsubscribers.push(PragmaticAdapter.onBettingPhase((event) => {
+      void this.onBettingPhase({ ...event, roomId: `${prefix}${event.roomId}` })
+    }))
+    this.adapterUnsubscribers.push(PragmaticAdapter.onGameResult((event) => {
+      this.onGameResult({ ...event, roomId: `${prefix}${event.roomId}` })
+    }))
+
     // 게임 결과 구독
     const unsubResult = this.casinoAdapter.onGameResult((event) => {
       console.log(`[AutoMode] 📥 GameResult event received: ${event.roomId}, winner: ${event.winner}`)
@@ -429,22 +460,11 @@ class AutoModeServiceImpl {
     if (unsubShoe) this.adapterUnsubscribers.push(unsubShoe)
 
     // 🆕 v3.7.0: 실제 잔액 업데이트 구독
-    const unsubBalance = this.casinoAdapter.onBalanceUpdate?.((balance) => {
-      this.realBalance = balance
-      // 실배팅 시작 후 첫 실잔액을 기준선으로 캡처(시작 시점에 잔액을 아직 못 받은 경우 대비).
-      // 🆕 2026-06-23: 중계 실잔액이 늦게(베팅 몇 판 후) 처음 도착할 수 있으므로, 그 시점의 누적손익·
-      //   진행중배팅을 역산해 기준선을 잡는다 → 표시잔고(getRealDisplayBalance=기준선+누적−pending)가
-      //   캡처 순간 실잔액과 정확히 일치(이중계산 방지). 이후엔 베팅 결과로 즉시 투영(중계 지연 회피).
-      if (!this.settings.isVirtualMode && this.settings.enabled
-        && this.realStartBalance === null && typeof balance === 'number' && balance > 0) {
-        this.realStartBalance = balance - this.state.cumulativeProfit + this.getRealPendingBetAmount()
-        console.log(`[AutoMode] 💰 실배팅 기준선 캡처: 실잔액 ${balance.toLocaleString()} → 기준선 ${this.realStartBalance.toLocaleString()}원`)
-      }
-      console.log(`[AutoMode] 💰 Balance updated: ${balance?.toLocaleString()}원`)
-      // 실잔액이 정산될 때마다 실배팅 윈컷/로스컷을 '진짜 돈' 기준으로 재확인(자체 추정 아님).
-      this.checkRealBalanceCuts()
-    })
+    const unsubBalance = this.casinoAdapter.onBalanceUpdate?.((balance) => this.onRealBalanceUpdate(balance))
     if (unsubBalance) this.adapterUnsubscribers.push(unsubBalance)
+
+    // 🎲 프라그마틱 실보유금(클라이언트 DOM "보유잔액" 스캔)도 같은 실잔액 파이프라인으로.
+    this.adapterUnsubscribers.push(PragmaticAdapter.onBalanceUpdate((balance) => this.onRealBalanceUpdate(balance)))
 
     // 🛡️ 초기화 시 AutoBettingService 가상모드 동기화
     // localStorage에서 로드한 설정과 동기화 (start() 전에도 일관성 유지)
@@ -452,6 +472,23 @@ class AutoModeServiceImpl {
     console.log(`[AutoMode] 🛡️ AutoBettingService virtual mode synced on init: ${this.settings.isVirtualMode}`)
 
     console.log('[AutoMode] ✅ Service initialized - subscribed to betting phase and game result events')
+  }
+
+  // 🆕 실잔액 갱신 공통 처리(에볼 중계 + 프라그마틱 DOM 스캔 공유).
+  private onRealBalanceUpdate(balance: number): void {
+    this.realBalance = balance
+    // 실배팅 시작 후 첫 실잔액을 기준선으로 캡처(시작 시점에 잔액을 아직 못 받은 경우 대비).
+    // 🆕 2026-06-23: 중계 실잔액이 늦게(베팅 몇 판 후) 처음 도착할 수 있으므로, 그 시점의 누적손익·
+    //   진행중배팅을 역산해 기준선을 잡는다 → 표시잔고(getRealDisplayBalance=기준선+누적−pending)가
+    //   캡처 순간 실잔액과 정확히 일치(이중계산 방지). 이후엔 베팅 결과로 즉시 투영(중계 지연 회피).
+    if (!this.settings.isVirtualMode && this.settings.enabled
+      && this.realStartBalance === null && typeof balance === 'number' && balance > 0) {
+      this.realStartBalance = balance - this.state.cumulativeProfit + this.getRealPendingBetAmount()
+      console.log(`[AutoMode] 💰 실배팅 기준선 캡처: 실잔액 ${balance.toLocaleString()} → 기준선 ${this.realStartBalance.toLocaleString()}원`)
+    }
+    console.log(`[AutoMode] 💰 Balance updated: ${balance?.toLocaleString()}원`)
+    // 실잔액이 정산될 때마다 실배팅 윈컷/로스컷을 '진짜 돈' 기준으로 재확인(자체 추정 아님).
+    this.checkRealBalanceCuts()
   }
 
   private cleanupAdapterSubscriptions(): void {
@@ -678,7 +715,7 @@ class AutoModeServiceImpl {
     this.state.roomStates.forEach((roomState, roomId) => {
       if (!roomState.waitingForResult) return
 
-      const room = this.casinoAdapter.getRoom(roomId)
+      const room = this.resolveRoom(roomId)
       if (!room) return
 
       const inferredWinner = this.getPendingBetResultWinnerFromHistory(room, roomState)
@@ -749,7 +786,7 @@ class AutoModeServiceImpl {
       if (waiting || martin || lock) {
         if (waiting) waitingCount++
         if (martin) martinCount++
-        const room = this.casinoAdapter.getRoom(roomId)
+        const room = this.resolveRoom(roomId)
         const age = s.lastBetTime ? Math.round((now - s.lastBetTime) / 1000) : -1
         holders.push(`${room?.koreanName || roomId}{w:${waiting ? 'Y' : 'N'},m:${s.martinLevel ?? 0},lock:${lock ? 'Y' : 'N'},${age}s}`)
       }
@@ -1289,7 +1326,7 @@ class AutoModeServiceImpl {
 
   private async onBettingPhase(event: BettingPhaseEvent, source: 'adapter' | 'poll' = 'adapter'): Promise<void> {
     const { roomId, phase, remainingSeconds } = event
-    const roomForDebug = this.casinoAdapter.getRoom(roomId)
+    const roomForDebug = this.resolveRoom(roomId)
     const roomNameForDebug = roomForDebug?.koreanName || roomId
 
     // ✅ 오토 OFF 상태에서도 "현재 배팅 페이즈" 스냅샷을 저장해,
@@ -1298,7 +1335,7 @@ class AutoModeServiceImpl {
       // 마감 절대시각을 함께 보관한다 — 이후 남은 시간 계산은 전부 이 값으로(초 감산 금지).
       //   우선순위: 이벤트의 서버 마감 시각 → 방의 서버 마감 시각 → (둘 다 없으면) 이벤트 수신 시각 + 남은 초.
       const deadlineAt = event.deadlineAt
-        ?? this.casinoAdapter.getRoom(roomId)?.bettingDeadlineAt
+        ?? this.resolveRoom(roomId)?.bettingDeadlineAt
         ?? (Date.now() + remainingSeconds * 1000)
       this.lastBettingPhaseByRoom.set(roomId, { startedAt: Date.now(), initialSeconds: remainingSeconds, deadlineAt })
       if (this.settings.enabled && this.isRoomEnabled(roomId)) {
@@ -1364,7 +1401,7 @@ class AutoModeServiceImpl {
     try {
       // ========== Bug Fix: waitingForResult 타임아웃 체크를 isRoomEnabled보다 먼저 실행 ==========
       // 방이 비활성화되어도 stuck 상태를 해제할 수 있도록 함
-      const liveRoom = this.casinoAdapter.getRoom(roomId)
+      const liveRoom = this.resolveRoom(roomId)
       const room = liveRoom || this.getMissingLockedMartinRoom(roomId, remainingSeconds)
       if (!room) return
       const hasReliableHistory = !!liveRoom
@@ -1408,7 +1445,7 @@ class AutoModeServiceImpl {
         console.log(`[AutoMode] ⏳ 결과 대기 중 - ${roomNameForDebug}: betHistoryLen=${baseLength}, currentLen=${currentLength}, retry=${roomState.resultInferenceRetries}`)
 
         // 최신 room 데이터로 다시 시도
-        const freshRoom = this.casinoAdapter.getRoom(roomId)
+        const freshRoom = this.resolveRoom(roomId)
         const targetRoom = freshRoom || room
 
         const inferredWinner = this.getPendingBetResultWinnerFromHistory(targetRoom, roomState)
@@ -1985,7 +2022,7 @@ class AutoModeServiceImpl {
         //   지연분(REAL_BET_MIN_LEAD_MS)만큼 여유가 없거나, 마감 시각을 모르면(BetsOpen 프레임 미수신) 보내지 않는다.
         //   마감 뒤 도착한 베팅은 Evolution이 응답 없이 무시해 '체결 미확인'만 남긴다(3차 라이브: 7초 창, 마감 10초 뒤 전송).
         const REAL_BET_MIN_LEAD_MS = 1000
-        const liveRoom = this.casinoAdapter.getRoom(roomId)
+        const liveRoom = this.resolveRoom(roomId)
         const deadlineAt = liveRoom?.bettingDeadlineAt ?? this.lastBettingPhaseByRoom.get(roomId)?.deadlineAt
         const msLeft = deadlineAt !== undefined ? deadlineAt - Date.now() : null
         const windowClosed = !!liveRoom && (liveRoom.phase === 'dealing' || liveRoom.phase === 'result')
@@ -2130,7 +2167,7 @@ class AutoModeServiceImpl {
       if (configured.length > 0) return configured
 
       // 마지막 fallback: 모든 방
-      return Array.from(this.casinoAdapter.getRooms().keys())
+      return this.allRoomIds()
     })()
 
     // 🔒 마틴 진행 중(martinLevel>0 / waitingForResult)인 방은 필터/activeBettingRoomIds에서
@@ -2154,7 +2191,7 @@ class AutoModeServiceImpl {
 
         // 🆕 v2.24: 실시간 방 데이터에서 배팅 가능 여부 확인 (스냅샷보다 우선)
         const roomState = this.state.roomStates.get(roomId)
-        const room = this.casinoAdapter.getRoom(roomId)
+        const room = this.resolveRoom(roomId)
         const missingLockedMartinRoom = !room ? this.getMissingLockedMartinRoom(roomId) : null
         if (!room && !missingLockedMartinRoom) return
 
@@ -2273,7 +2310,7 @@ class AutoModeServiceImpl {
 
   private handleGameResult(roomId: string, winnerFromEvent: Winner, eventPlayerScore?: number, eventBankerScore?: number, betOutcome?: BetOutcome): void {
     const roomState = this.state.roomStates.get(roomId)
-    const room = this.casinoAdapter.getRoom(roomId)
+    const room = this.resolveRoom(roomId)
     const roomName = room?.koreanName || roomState?.roomName || roomId
 
     console.log(`[AutoMode] handleGameResult - room: ${roomName}, winner: ${winnerFromEvent}, waitingForResult: ${roomState?.waitingForResult}, lastPrediction: ${roomState?.lastPrediction?.prediction}`)

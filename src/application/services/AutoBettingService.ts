@@ -12,6 +12,7 @@ import type { BetType, Prediction, PendingBetInfo, TableBettingConfig } from '..
 import { winProfit } from '../../domain/betting/payout'
 import { TauriAdapter } from '../../infrastructure/adapters/TauriAdapter'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
+import { PragmaticAdapter } from '../../infrastructure/adapters/PragmaticAdapter'
 
 /** 실배팅 전송에 필요한 최소 여유(ms). 서버 마감 절대시각 기준. 라이브 응답 지연 ~250ms + 안전분. */
 const REAL_BET_MIN_LEAD_MS = 800
@@ -170,6 +171,11 @@ class AutoBettingServiceImpl {
     if (this.virtualModeEnabled) {
       console.log(`[AutoBetting] 🛡️ BLOCKED - Virtual mode enabled, no socket message sent`)
       return { success: false, placementStatus: 'not_sent', error: '가상 모드 활성화됨 - 실제 배팅 차단' }
+    }
+
+    // 🎲 프라그마틱 방(prefix 'pragmatic:')은 브릿지 경로로 분기한다(게임 소켓 XML 주입).
+    if (tableId.startsWith('pragmatic:')) {
+      return this.placePragmaticBet(tableId, betType, amount, isRealBetting)
     }
 
     // Check if can place bet
@@ -383,6 +389,70 @@ class AutoBettingServiceImpl {
       }
       return { success: false, placementStatus: 'not_sent', error: errorMsg }
     }
+  }
+
+  /**
+   * 🎲 프라그마틱 실배팅(브릿지). 라이브 프로토콜(2026-09-03): 마감 = betsopen + betting_time − 1s,
+   * ACK `command success` ~0.2초, 마감 후 `bet/bets` 확정, `win` 정산. Rust가 마감 여유·gameId·uId·
+   * 훅 컨텍스트를 fail-closed로 검사하므로 여기서는 중복·연결·확인만 다룬다.
+   */
+  private async placePragmaticBet(
+    tableId: string,
+    betType: BetType,
+    amount: number,
+    isRealBetting: boolean
+  ): Promise<BetExecutionResult> {
+    const gameId = PragmaticAdapter.getCurrentGameId(tableId) ?? `unknown-${Date.now()}`
+    const pendingBet = this.pendingBets.get(tableId)
+    if (pendingBet?.gameId === gameId) {
+      return { success: false, placementStatus: 'not_sent', error: '이미 배팅됨' }
+    }
+
+    if (!isRealBetting) {
+      // 가상/로그 배팅: 소켓 전송 없음
+      this.pendingBets.set(tableId, { tableId, betType, amount, gameId, timestamp: Date.now(), placementStatus: 'sent' })
+      this.emitBetPlaced({ tableId, betType, amount, gameId, timestamp: Date.now() })
+      return { success: true, placementStatus: 'sent' }
+    }
+
+    if (!PragmaticAdapter.isConnected()) {
+      this.feDiag(`REAL-BET-BLOCKED-NOT-CONNECTED provider=pragmatic table=${tableId} bet=${betType} amount=${amount}`)
+      return { success: false, placementStatus: 'not_sent', error: '프라그마틱 게임 소켓에 붙어 있지 않아요 (멀티플레이 진입 필요)' }
+    }
+    const room = PragmaticAdapter.getRoom(tableId.replace(/^pragmatic:/, ''))
+    const msLeft = room?.bettingDeadlineAt !== undefined ? room.bettingDeadlineAt - Date.now() : null
+    if (msLeft === null || msLeft < REAL_BET_MIN_LEAD_MS) {
+      this.feDiag(`REAL-BET-BLOCKED-TIMING provider=pragmatic table=${tableId} bet=${betType} amount=${amount} msLeft=${msLeft ?? 'unknown'}`)
+      return { success: false, placementStatus: 'not_sent', error: '배팅창이 마감됐거나 남은 시간이 부족해요 — 이번 판은 건너뜁니다' }
+    }
+
+    this.pendingBets.set(tableId, { tableId, betType, amount, gameId, timestamp: Date.now(), placementStatus: 'attempted' })
+    this.feDiag(`REAL-BET-SEND provider=pragmatic table=${tableId} bet=${betType} amount=${amount} gameId=${gameId} msLeft=${msLeft}`)
+    const ackPromise = PragmaticAdapter.waitForBetAck(tableId)
+    try {
+      await PragmaticAdapter.placeBet(tableId, betType, amount)
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      this.pendingBets.delete(tableId)
+      this.feDiag(`REAL-BET-SEND-ERROR provider=pragmatic table=${tableId} err=${errorMsg}`)
+      return { success: false, placementStatus: 'not_sent', error: errorMsg }
+    }
+
+    const ack = await ackPromise
+    this.feDiag(`REAL-BET-CONFIRM provider=pragmatic table=${tableId} status=${ack.status} gameId=${gameId} bet=${betType} amount=${amount} err=${ack.error ?? ''}`)
+    if (ack.status === 'rejected') {
+      this.pendingBets.delete(tableId)
+      return { success: false, placementStatus: 'rejected', error: ack.error || '프라그마틱이 배팅을 거절했어요' }
+    }
+    if (ack.status === 'unknown') {
+      const pending = this.pendingBets.get(tableId)
+      if (pending) this.pendingBets.set(tableId, { ...pending, placementStatus: 'unknown', placementError: ack.error })
+      return { success: false, placementStatus: 'unknown', error: ack.error || '실제 베팅 체결 여부를 확인할 수 없습니다' }
+    }
+    const pending = this.pendingBets.get(tableId)
+    if (pending) this.pendingBets.set(tableId, { ...pending, placementStatus: 'accepted' })
+    this.emitBetPlaced({ tableId, betType, amount, gameId, timestamp: Date.now() })
+    return { success: true, placementStatus: 'confirmed' }
   }
 
   /** 🔬 실배팅 핵심 단계를 Rust 로그(bcr-runtime.log)로 포워딩한다. 웹뷰 콘솔은 파일로 남지 않는다. */
