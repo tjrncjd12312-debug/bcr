@@ -249,7 +249,7 @@ fn normalize_game_result(
     }))
 }
 
-fn parse_statistics_grid(grid: &[Vec<String>]) -> Vec<NormalizedRoadResult> {
+pub(crate) fn parse_statistics_grid(grid: &[Vec<String>]) -> Vec<NormalizedRoadResult> {
     let mut results: Vec<NormalizedRoadResult> = Vec::new();
 
     // Pragmatic statistics grid: outer = columns, inner = rows (6)

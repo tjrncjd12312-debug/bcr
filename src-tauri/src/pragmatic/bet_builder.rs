@@ -7,6 +7,10 @@ impl BetCode {
     pub fn as_u8(self) -> u8 {
         self.0
     }
+    /// 전체 취소 코드(라이브 캡처 2026-09-03: `<bet amt="0" bc="8"/>`).
+    pub fn cancel() -> Self {
+        BetCode(8)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

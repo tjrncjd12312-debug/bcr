@@ -29,7 +29,8 @@ use evolution::commands::{
 };
 use pragmatic::commands::{
     connect_pragmatic, connect_pragmatic_room, connect_pragmatic_table, disconnect_all_pragmatic,
-    disconnect_pragmatic, disconnect_pragmatic_room, place_pragmatic_bet, send_pragmatic_message,
+    cancel_pragmatic_bet, disconnect_pragmatic, disconnect_pragmatic_room,
+    get_pragmatic_bridge_snapshot, place_pragmatic_bet, send_pragmatic_message,
     set_pragmatic_user_id,
 };
 use pragmatic::manager::{PragmaticConnectionManager, PragmaticManagerState};
@@ -330,6 +331,8 @@ pub fn run() {
             send_pragmatic_message,
             set_pragmatic_user_id,
             place_pragmatic_bet,
+            cancel_pragmatic_bet,
+            get_pragmatic_bridge_snapshot,
             // Multiwidget auto-connection commands (CDP auto-connect)
             get_multiwidget_status,
             get_evolution_base_url,

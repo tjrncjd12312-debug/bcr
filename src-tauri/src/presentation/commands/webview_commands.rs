@@ -1683,6 +1683,9 @@ async fn monitor_page_continuously(
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let mut ws_url_by_request_id: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // 🔬 BCR_BET_TRACE: 소켓(requestId)별 트레이스 프레임 수 — 로비 피드 홍수 방지용 상한(키워드 프레임은 예외)
+        let mut trace_frame_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
         let ws_headers_by_request_id: std::sync::Arc<
             TokioMutex<std::collections::HashMap<String, WsHandshakeHeaders>>,
         > = std::sync::Arc::new(TokioMutex::new(std::collections::HashMap::new()));
@@ -1995,6 +1998,20 @@ async fn monitor_page_continuously(
                                         }
                                     }
                                 }
+                                // 🎲 프라그마틱 게임 소켓 훅이 정의된 실행 컨텍스트(iframe 안의 iframe)
+                                if first == "[BCR_PRAG_WS]" {
+                                    if let Some(ctx) = json
+                                        .get("params")
+                                        .and_then(|p| p.get("executionContextId"))
+                                        .and_then(|v| v.as_i64())
+                                    {
+                                        let sid = json.get("sessionId").and_then(|v| v.as_str());
+                                        crate::pragmatic::bridge::PRAGMATIC_BRIDGE
+                                            .lock()
+                                            .await
+                                            .set_hook_context(sid, ctx);
+                                    }
+                                }
                                 if first == "[BCR_WS_CAPTURE]" {
                                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(second)
                                     {
@@ -2209,6 +2226,53 @@ async fn monitor_page_continuously(
                             // 브라우저 소켓에 실렸는지 알려준다: 'sent' 정상 / 'not_open' 소켓 닫힘·교체 /
                             // undefined = 이 CDP 세션 메인 컨텍스트에 훅이 없음(다른 프레임·월드) / exception.
                             // 이전엔 이 응답을 아무도 읽지 않아 베팅이 조용히 사라져도 알 수 없었다.
+                            if (7_900_000..7_950_000).contains(&response_id) {
+                                let value = json.get("result").and_then(|r| r.get("result")).and_then(|r| r.get("value")).and_then(|v| v.as_str()).unwrap_or("none");
+                                if value.starts_with("ppc") && value.len() >= 13 && value[3..].chars().all(|c| c.is_ascii_digit()) {
+                                    info!("🎲 [PRAG-BRIDGE] 🔎 게임 iframe에서 사용자 id 탐색 성공: {}", value);
+                                    crate::pragmatic::bridge::PRAGMATIC_BRIDGE.lock().await.set_user_id(value);
+                                } else {
+                                    debug!("🎲 [PRAG-BRIDGE] 사용자 id 탐색 시도 #{}: {}", response_id - 7_900_000, value);
+                                }
+                                continue;
+                            }
+                            // 💰 실보유금 스캔 응답 → pragmatic_event(balance_update) forward.
+                            if (7_950_000..7_960_000).contains(&response_id) {
+                                // 값은 문자열("41820") 기대. 예외/미매치도 반드시 로깅해 원인 파악 가능하게.
+                                let rr = json.get("result").and_then(|r| r.get("result"));
+                                let value = rr.and_then(|r| r.get("value")).and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                                    .or_else(|| rr.and_then(|r| r.get("value")).and_then(|v| v.as_f64()).map(|n| n.to_string()))
+                                    .unwrap_or_else(|| "none".to_string());
+                                if let Ok(bal) = value.parse::<f64>() {
+                                    if bal >= 0.0 {
+                                        info!("💰 [PRAG-BAL] 보유잔액 스캔 = {}", bal);
+                                        if let Some(main_window) = app_handle.get_webview_window("main") {
+                                            let _ = main_window.emit("pragmatic_event", serde_json::json!({
+                                                "type": "balance_update",
+                                                "data": { "balance": bal, "currency": "KRW" }
+                                            }));
+                                        }
+                                    }
+                                } else if let Some(err) = json.get("error") {
+                                    warn!("💰 [PRAG-BAL] cdp_error: {}", err.to_string().chars().take(160).collect::<String>());
+                                } else {
+                                    warn!("💰 [PRAG-BAL] 미매치/None value='{}' raw={}", value,
+                                        json.get("result").map(|r| r.to_string()).unwrap_or_default().chars().take(200).collect::<String>());
+                                }
+                                continue;
+                            }
+                            if (7_800_000..7_900_000).contains(&response_id) {
+                                let seq = response_id - 7_800_000;
+                                let value = json.get("result").and_then(|r| r.get("result")).and_then(|r| r.get("value")).and_then(|v| v.as_str());
+                                match (json.get("error"), value) {
+                                    (Some(err), _) => warn!("🎲 [PRAG-INJECT-RESULT] seq={} ⚠️ cdp_error: {}", seq, err),
+                                    (_, Some("sent")) => info!("🎲 [PRAG-INJECT-RESULT] seq={} sent", seq),
+                                    (_, Some(v)) => warn!("🎲 [PRAG-INJECT-RESULT] seq={} ⚠️ {}", seq, v),
+                                    (_, None) => warn!("🎲 [PRAG-INJECT-RESULT] seq={} ⚠️ 훅 없음/예외: {}", seq, json.get("result").map(|r| r.to_string()).unwrap_or_default().chars().take(200).collect::<String>()),
+                                }
+                                continue;
+                            }
                             if (7_700_000..7_800_000).contains(&response_id) {
                                 let seq = response_id - 7_700_000;
                                 if let Some(exc) = json.get("result").and_then(|r| r.get("exceptionDetails")) {
@@ -2469,6 +2533,31 @@ async fn monitor_page_continuously(
                                                     ))
                                                     .await;
                                                 info!("[WS-BLOCKER] Injected to context {} (origin: {}, session: {:?})",
+                                                      context_id, origin, context_session_id);
+                                            }
+                                            // 🎲 프라그마틱 전용 훅(에볼루션 블로커와 완전 분리): evo가 아닌 *부착된 iframe* 컨텍스트에만
+                                            //   `/game?…multiTable=true` 소켓 훅(`__BCR_PRAG_SEND__`)을 심는다. 게임 iframe 도메인이 매번
+                                            //   바뀌어(ytlvvulh.biz, fcxlljmmbqtczjya.net…) 오리진으로는 못 고르고, 이 스크립트는 그 URL 패턴
+                                            //   외의 소켓은 건드리지 않는다. 에볼루션 경로(위 블로커·조건)는 그대로다.
+                                            else if context_session_id.is_some() {
+                                                let mut prag_hook_msg = serde_json::json!({
+                                                    "id": 889000 + context_id,
+                                                    "method": "Runtime.evaluate",
+                                                    "params": {
+                                                        "expression": PRAG_WS_HOOK_SCRIPT,
+                                                        "returnByValue": true,
+                                                        "contextId": context_id
+                                                    }
+                                                });
+                                                if let Some(ref sid) = context_session_id {
+                                                    prag_hook_msg["sessionId"] = serde_json::json!(sid);
+                                                }
+                                                let _ = write.lock().await
+                                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                                        prag_hook_msg.to_string(),
+                                                    ))
+                                                    .await;
+                                                info!("[PRAG-HOOK] Injected to context {} (origin: {}, session: {:?})",
                                                       context_id, origin, context_session_id);
                                             }
 
@@ -2964,6 +3053,10 @@ async fn monitor_page_continuously(
                                     target_url.len(),
                                     is_evo_iframe
                                 );
+                                if frame_trace_enabled() {
+                                    // 세션 ↔ 페이지 매핑용(호스트+경로만, 토큰 값은 감춤)
+                                    info!("[WS-TRACE][TARGET] session={} type={} {}", session_id, target_type, trace_url_summary(target_url));
+                                }
 
                                 // Enable Network AND Runtime for iframe to capture WebSockets and inject scripts
                                 if !session_id.is_empty()
@@ -3004,6 +3097,27 @@ async fn monitor_page_continuously(
                                         "✅ Network + Runtime enabled for session: {} (isEvo={})",
                                         session_id, is_evo_iframe
                                     );
+
+                                    // 🪆 재귀 자동 부착: setAutoAttach는 그 세션의 *직계* 자식만 붙인다. 프라그마틱은
+                                    //   로더 iframe 안에 게임 테이블 iframe이 또 있어(iframe 안의 iframe) 배팅 소켓이 거기서
+                                    //   열린다. 자식 세션에도 setAutoAttach를 걸어야 손자 타깃이 붙는다(2026-09-03 라이브:
+                                    //   테이블 iframe 6BC626…이 targetCreated만 뜨고 attached가 없어 배팅 프레임 0건).
+                                    //   에볼루션 iframe에는 걸지 않는다(멀티위젯 소켓은 evo iframe 자체에서 열려 불필요, 경로 격리).
+                                    if !is_evo_iframe {
+                                        let auto_attach_child = serde_json::json!({
+                                            "id": 102,
+                                            "sessionId": session_id,
+                                            "method": "Target.setAutoAttach",
+                                            "params": { "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }
+                                        });
+                                        let _ = write
+                                            .lock()
+                                            .await
+                                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                                auto_attach_child.to_string(),
+                                            ))
+                                            .await;
+                                    }
 
                                     // 🎯 NOTE: 스크립트 주입은 Runtime.executionContextCreated에서 처리
                                     // Target.attachedToTarget 시점에는 document가 아직 없으므로 여기서 주입하지 않음
@@ -3185,6 +3299,27 @@ async fn monitor_page_continuously(
                             }
                         }
                         // Monitor WebSocket created
+                        // 🔬 HTTP POST 트레이스(BCR_BET_TRACE): 배팅/취소가 WebSocket이 아니라 REST로 나가는 경우 대비.
+                        //   게임 관련 호스트의 POST만, 본문은 2000자까지.
+                        else if method == "Network.requestWillBeSent" && frame_trace_enabled() {
+                            if let Some(req) = json.get("params").and_then(|p| p.get("request")) {
+                                let url = req.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                                let m = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                                let lower = url.to_ascii_lowercase();
+                                let gamey = lower.contains("gs2c") || lower.contains("pragmatic") || lower.contains("dga")
+                                    || lower.contains("ytlvvulh") || lower.contains("bet") || lower.contains("game") || lower.contains("wager");
+                                if m != "GET" && m != "OPTIONS" && gamey {
+                                    let body = req.get("postData").and_then(|v| v.as_str()).unwrap_or("");
+                                    info!(
+                                        "[HTTP-TRACE][{}] session={} {} body={}",
+                                        m,
+                                        json.get("sessionId").and_then(|v| v.as_str()).unwrap_or("-"),
+                                        trace_url_summary(url),
+                                        trace_clip_text(body, 2000)
+                                    );
+                                }
+                            }
+                        }
                         else if method == "Network.webSocketCreated" {
                             if let Some(params) = json.get("params") {
                                 let request_id = params
@@ -3201,6 +3336,119 @@ async fn monitor_page_continuously(
                                 if !request_id.is_empty() && !url.is_empty() {
                                     ws_url_by_request_id
                                         .insert(request_id.to_string(), url.to_string());
+                                    // 🎲 프라그마틱 브릿지: 게임 소켓(/game?…multiTable=true)이 열리면 붙고, 주입 드레이너를 띄운다.
+                                    if crate::pragmatic::bridge::bridge_mode_enabled()
+                                        && crate::pragmatic::bridge::is_game_socket_url(url)
+                                    {
+                                        let (prag_tx, mut prag_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                        crate::pragmatic::bridge::PRAGMATIC_BRIDGE
+                                            .lock()
+                                            .await
+                                            .attach(&app_handle, request_id, source_session_id.as_deref(), url, prag_tx);
+                                        let write_for_prag = write.clone();
+                                        tokio::spawn(async move {
+                                            let mut seq: u64 = 0;
+                                            let mut discover_attempts: u64 = 0;
+                                            let mut balance_seq: u64 = 0;
+                                            let mut discover_tick = tokio::time::interval(std::time::Duration::from_secs(2));
+                                            loop {
+                                                tokio::select! {
+                                                    maybe = prag_rx.recv() => {
+                                                        let Some(xml) = maybe else { break; };
+                                                        let (sid, ctx) = {
+                                                            let b = crate::pragmatic::bridge::PRAGMATIC_BRIDGE.lock().await;
+                                                            (b.session_id().map(|s| s.to_string()), b.context_id())
+                                                        };
+                                                        let Some(ctx) = ctx else {
+                                                            warn!("🎲 [PRAG-INJECT] 훅 컨텍스트 미확정 — 프레임 드롭(len={})", xml.len());
+                                                            continue;
+                                                        };
+                                                        seq += 1;
+                                                        let js = serde_json::to_string(&xml).unwrap_or_default();
+                                                        let expr = format!(
+                                                            "window.__BCR_PRAG_SEND__ ? window.__BCR_PRAG_SEND__({}) : 'no_hook'",
+                                                            js
+                                                        );
+                                                        let mut cmd = serde_json::json!({
+                                                            "id": 7_800_000 + seq,
+                                                            "method": "Runtime.evaluate",
+                                                            "params": { "expression": expr, "returnByValue": true, "contextId": ctx }
+                                                        });
+                                                        if let Some(s) = sid {
+                                                            cmd["sessionId"] = serde_json::Value::String(s);
+                                                        }
+                                                        info!("🎲 [PRAG-INJECT] seq={} len={} ctx={}", seq, xml.len(), ctx);
+                                                        if write_for_prag
+                                                            .lock()
+                                                            .await
+                                                            .send(tokio_tungstenite::tungstenite::Message::Text(cmd.to_string()))
+                                                            .await
+                                                            .is_err()
+                                                        {
+                                                            warn!("🎲 [PRAG-INJECT] 송신 주입 실패(CDP 쓰기)");
+                                                            break;
+                                                        }
+                                                    }
+                                                    _ = discover_tick.tick() => {
+                                                        // 💰 실보유금 주기 스캔: 멀티바카라 클라이언트 iframe DOM(게임 소켓과 같은 컨텍스트)의
+                                                        //    "보유잔액" 값을 읽어 pragmatic_event(balance_update)로 forward한다. 부착돼 있고
+                                                        //    훅 컨텍스트가 있으면 uId 확보 여부와 무관하게 매 틱 실행.
+                                                        let (bsid, battached) = {
+                                                            let b = crate::pragmatic::bridge::PRAGMATIC_BRIDGE.lock().await;
+                                                            (b.session_id().map(|s| s.to_string()), b.is_attached())
+                                                        };
+                                                        if battached {
+                                                            if let Some(s) = bsid {
+                                                                // 잔액은 훅 컨텍스트(격리 월드일 수 있음)가 아니라 세션 프레임의
+                                                                // 기본 컨텍스트(메인 월드)에서 읽는다 — 여기에 "보유잔액" DOM이 있다.
+                                                                balance_seq += 1;
+                                                                let cmd = serde_json::json!({
+                                                                    "id": 7_950_000 + (balance_seq % 10_000),
+                                                                    "method": "Runtime.evaluate",
+                                                                    "sessionId": s,
+                                                                    "params": { "expression": PRAG_FIND_BALANCE_SCRIPT, "returnByValue": true }
+                                                                });
+                                                                let _ = write_for_prag
+                                                                    .lock()
+                                                                    .await
+                                                                    .send(tokio_tungstenite::tungstenite::Message::Text(cmd.to_string()))
+                                                                    .await;
+                                                            }
+                                                        }
+
+                                                        // 🔎 사용자 id(uId) 자동 탐색: 로비 좌석 프레임이 안 오면 게임 iframe에서 직접 찾는다.
+                                                        let (sid, ctx, need) = {
+                                                            let b = crate::pragmatic::bridge::PRAGMATIC_BRIDGE.lock().await;
+                                                            (b.session_id().map(|s| s.to_string()), b.context_id(), b.is_attached() && b.user_id().is_none())
+                                                        };
+                                                        if !need { continue; }
+                                                        let Some(ctx) = ctx else { continue; };
+                                                        if discover_attempts >= 20 { continue; }
+                                                        discover_attempts += 1;
+                                                        let mut cmd = serde_json::json!({
+                                                            "id": 7_900_000 + discover_attempts,
+                                                            "method": "Runtime.evaluate",
+                                                            "params": { "expression": PRAG_FIND_USER_SCRIPT, "returnByValue": true, "contextId": ctx }
+                                                        });
+                                                        if let Some(s) = sid {
+                                                            cmd["sessionId"] = serde_json::Value::String(s);
+                                                        }
+                                                        if write_for_prag
+                                                            .lock()
+                                                            .await
+                                                            .send(tokio_tungstenite::tungstenite::Message::Text(cmd.to_string()))
+                                                            .await
+                                                            .is_err()
+                                                        {
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            info!("🎲 [PRAG-INJECT] 드레이너 종료");
+                                        });
+                                    }
+
                                     // 🌉 브릿지: 멀티위젯 소켓이 열린 세션을 기억한다(베팅 주입 대상).
                                     if url.contains("/multiwidget/") || url.contains("multiwidget") {
                                         // 최상위 페이지가 직접 연 소켓이면 sessionId가 없다 — 빈 문자열로 기록해
@@ -3228,6 +3476,10 @@ async fn monitor_page_continuously(
                                     info!("🔌 [IFRAME] session={} url_len={}", sid, url.len());
                                 } else {
                                     info!("🔌 [MAIN] page={} url_len={}", page_id_owned, url.len());
+                                }
+
+                                if frame_trace_enabled() && is_pragmatic_url(url) {
+                                    info!("[PRAG-TRACE][WS-CREATED] session={:?} {}", source_session_id, trace_url_summary(url));
                                 }
 
                                 // Check Evolution FIRST (more specific patterns)
@@ -4098,6 +4350,30 @@ async fn monitor_page_continuously(
                                         // Keep only the size for diagnostics.
                                         debug!("📤 [BROWSER-SENT] payload_len={}", payload.len());
 
+                                        // 🔬 전 소켓 송신 트레이스(BCR_BET_TRACE): 게임이 보내는 명령(입장·구독·베팅·취소) 원문.
+                                        if frame_trace_enabled() {
+                                            let rid = params.get("requestId").and_then(|v| v.as_str()).unwrap_or("");
+                                            let url_known = ws_url_by_request_id.get(rid).cloned();
+                                            let is_evo_mw = url_known
+                                                .as_deref()
+                                                .map(|u| u.contains("multiwidget") || u.contains("evo-games"))
+                                                .unwrap_or(false);
+                                            if !is_evo_mw {
+                                                let n = trace_frame_counts.entry(format!("tx:{}", rid)).or_insert(0);
+                                                *n += 1;
+                                                if *n <= 400 || payload.len() > 40 {
+                                                    info!(
+                                                        "[WS-TRACE][SENT] rid={} session={} url={} opcode={} {}",
+                                                        rid,
+                                                        json.get("sessionId").and_then(|v| v.as_str()).unwrap_or("-"),
+                                                        url_known.as_deref().map(trace_url_summary).unwrap_or_else(|| "<unknown>".to_string()),
+                                                        response.get("opcode").and_then(|v| v.as_u64()).unwrap_or(1),
+                                                        trace_clip_text(payload, 2500)
+                                                    );
+                                                }
+                                            }
+                                        }
+
                                         // 🌉 브릿지: 현재 붙어 있는 멀티위젯 소켓의 송신 프레임은 암호화(binary)라 그대로는
                                         // 파싱이 안 된다. 복호화 평문을 얻어 아래 CLIENT_* 파서(실잔액·칩 설정)에 넣는다.
                                         // 이전엔 base64를 JSON으로 파싱하려다 조용히 실패해 브릿지 모드에서 실잔액이
@@ -4130,6 +4406,33 @@ async fn monitor_page_continuously(
                                         } else {
                                             payload
                                         };
+
+                                        // 🎲 프라그마틱: 게임 자체 송신(<lpbet uId="…">)에서 사용자 id를 확보한다(수동 배팅 1회면 충분).
+                                        {
+                                            let rid_p = params.get("requestId").and_then(|v| v.as_str()).unwrap_or("");
+                                            if crate::pragmatic::bridge::is_game_socket_request(rid_p) {
+                                                if let Some(pos) = payload.find("uId=\"") {
+                                                    let rest = &payload[pos + 5..];
+                                                    if let Some(end) = rest.find('"') {
+                                                        crate::pragmatic::bridge::PRAGMATIC_BRIDGE.lock().await.set_user_id(&rest[..end]);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 🔬 프라그마틱 송신 원문(BCR_BET_TRACE): 게임이 보내는 명령(베팅 XML 등) 포맷 확정용
+                                        if frame_trace_enabled() {
+                                            let rid = params.get("requestId").and_then(|v| v.as_str()).unwrap_or("");
+                                            if let Some(u) = ws_url_by_request_id.get(rid) {
+                                                if is_pragmatic_url(u) {
+                                                    let opcode = response.get("opcode").and_then(|v| v.as_u64()).unwrap_or(1);
+                                                    info!(
+                                                        "[PRAG-TRACE][SENT] {} opcode={} {}",
+                                                        trace_url_summary(u), opcode, trace_clip_text(payload, 3000)
+                                                    );
+                                                }
+                                            }
+                                        }
 
                                         // Parse CLIENT_* messages for auto-betting config capture
                                         if let Ok(json_msg) =
@@ -4229,6 +4532,44 @@ async fn monitor_page_continuously(
                                     if let Some(payload) =
                                         response.get("payloadData").and_then(|v| v.as_str())
                                     {
+                                        // 🔬 전 소켓 수신 트레이스(BCR_BET_TRACE): 모니터 부착 전에 열려 URL을 못 잡은 소켓까지
+                                        //   포함해 에볼루션 멀티위젯 이외의 모든 프레임을 남긴다(소켓당 400건, 키워드 프레임은 무제한).
+                                        //   프라그마틱 파서/브릿지는 이 원문을 근거로 만든다 — 1차 캡처에서 내용 기반 판정만으로는
+                                        //   로비 피드만 잡히고 테이블 소켓·송신이 전부 빠졌다(2026-09-03).
+                                        if frame_trace_enabled() {
+                                            let url_known = ws_url_by_request_id.get(request_id).cloned();
+                                            let is_evo_mw = url_known
+                                                .as_deref()
+                                                .map(|u| u.contains("multiwidget") || u.contains("evo-games"))
+                                                .unwrap_or(false);
+                                            if !is_evo_mw {
+                                                let n = trace_frame_counts.entry(format!("rx:{}", request_id)).or_insert(0);
+                                                *n += 1;
+                                                let hot = payload.contains("bet") || payload.contains("Bet") || payload.contains("balance")
+                                                    || payload.contains("Balance") || payload.contains("gameId") || payload.contains("command")
+                                                    || payload.contains("error") || payload.contains("Error");
+                                                if *n <= 400 || hot {
+                                                    info!(
+                                                        "[WS-TRACE][RX] rid={} session={} url={} opcode={} {}",
+                                                        request_id,
+                                                        json.get("sessionId").and_then(|v| v.as_str()).unwrap_or("-"),
+                                                        url_known.as_deref().map(trace_url_summary).unwrap_or_else(|| "<unknown>".to_string()),
+                                                        response.get("opcode").and_then(|v| v.as_u64()).unwrap_or(1),
+                                                        trace_clip_text(payload, 2500)
+                                                    );
+                                                }
+                                            }
+                                        }
+
+                                        // 🎲 프라그마틱 브릿지: 게임 소켓 프레임은 브릿지가 파싱·이벤트화한다(레거시 파서 경유 안 함).
+                                        if crate::pragmatic::bridge::is_game_socket_request(request_id) {
+                                            crate::pragmatic::bridge::PRAGMATIC_BRIDGE
+                                                .lock()
+                                                .await
+                                                .ingest(&app_handle, payload);
+                                            continue;
+                                        }
+
                                         // 🌉 브릿지: 브라우저의 진짜 멀티위젯 소켓 프레임은 Rust 파이프라인으로
                                         // 흘려 넣는다(binary=base64 → RC4+zstd 복호 → 파서 → 이벤트).
                                         // 아래 레거시 forward(평문 JSON 전용)와 이중 처리되지 않게 여기서 끝낸다.
@@ -4331,6 +4672,22 @@ async fn monitor_page_continuously(
 
                                         if is_pragmatic_by_url || is_pragmatic_by_content {
                                             handled_as_pragmatic = true;
+
+                                            // 🎲 로비 좌석 프레임의 currentUserId = 배팅 XML의 uId
+                                            if let Some(uid) = parsed_json.as_ref().and_then(|j| j.get("currentUserId")).and_then(|v| v.as_str()) {
+                                                crate::pragmatic::bridge::PRAGMATIC_BRIDGE.lock().await.set_user_id(uid);
+                                            }
+
+                                            // 🔬 프라그마틱 수신 원문(BCR_BET_TRACE): 로비/테이블/베팅 응답 프레임 포맷 확정용
+                                            if frame_trace_enabled() {
+                                                let opcode = response.get("opcode").and_then(|v| v.as_u64()).unwrap_or(1);
+                                                info!(
+                                                    "[PRAG-TRACE][RX] {} opcode={} by_url={} by_content={} {}",
+                                                    ws_url_by_request_id.get(request_id).map(|u| trace_url_summary(u)).unwrap_or_else(|| "<no-url>".to_string()),
+                                                    opcode, is_pragmatic_by_url, is_pragmatic_by_content,
+                                                    trace_clip_text(payload, 3000)
+                                                );
+                                            }
 
                                             if is_pragmatic_by_content && !is_pragmatic_by_url {
                                                 info!("🎰 Pragmatic message detected by content (tableId+tableType pattern)");
@@ -5672,6 +6029,43 @@ pub fn fe_diag(line: String) {
     tracing::info!("[FE-DIAG] {}", line.chars().take(600).collect::<String>());
 }
 
+/// 🔬 프레임 트레이스(env `BCR_BET_TRACE=1`, 진단 세션 전용). 프라그마틱 소켓의 생성·송신·수신 원문을
+/// 로그에 남긴다. 파서를 추측으로 만들지 않고 실제 프레임을 먼저 보기 위한 스위치. 기본 OFF.
+fn frame_trace_enabled() -> bool {
+    static ENABLED: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
+        std::env::var("BCR_BET_TRACE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    });
+    *ENABLED
+}
+
+/// 트레이스용 URL 요약: 호스트+경로+쿼리 키(값은 tableId·gameId 계열만 노출, 세션 토큰은 감춤).
+fn trace_url_summary(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) => {
+            let keys: Vec<String> = u
+                .query_pairs()
+                .map(|(k, v)| {
+                    let kl = k.to_ascii_lowercase();
+                    if kl.contains("table") || kl.contains("game") || kl == "type" || kl == "lang" {
+                        format!("{}={}", k, v)
+                    } else {
+                        format!("{}=<{}>", k, v.len())
+                    }
+                })
+                .collect();
+            format!("{}{} ?{}", u.host_str().unwrap_or("?"), u.path(), keys.join("&"))
+        }
+        Err(_) => "<unparsable>".to_string(),
+    }
+}
+
+fn trace_clip_text(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max { text.to_string() } else { format!("{}…(+{} chars)", text.chars().take(max).collect::<String>(), total - max) }
+}
+
 /// 🧪 베팅 포맷 캡처 모드 여부(env `BCR_BET_CAPTURE=1`). 켜지면 Rust는 멀티위젯에 연결하지 않아
 /// 브라우저가 유일 세션이 되어 Evolution 베팅 UI가 정상 작동한다(중복세션 킥 방지). 캡처 후엔 변수 빼고 재실행.
 fn is_bet_capture_mode() -> bool {
@@ -5705,6 +6099,80 @@ static WS_BLOCKER_SCRIPT_RESOLVED: Lazy<String> = Lazy::new(|| {
         WS_BLOCKER_SCRIPT
     )
 });
+
+/// 🎲 프라그마틱 플레이어 id(`ppc…`) 탐색 — 게임 iframe 컨텍스트에서 쿠키·스토리지·인라인 스크립트·전역 설정·
+/// 리소스 URL을 훑어 첫 매치를 돌려준다. 로비 좌석 프레임(currentUserId)이 안 올 때의 대안(세션마다 id가 바뀜).
+const PRAG_FIND_USER_SCRIPT: &str = r#"
+    (function() {
+        var re = /ppc\d{10,16}/;
+        function scan(s) { if (!s) return null; var m = String(s).match(re); return m ? m[0] : null; }
+        var hit = scan(document.cookie) || scan(location.href);
+        try { for (var i = 0; i < localStorage.length && !hit; i++) hit = scan(localStorage.getItem(localStorage.key(i))); } catch (e) {}
+        try { for (var j = 0; j < sessionStorage.length && !hit; j++) hit = scan(sessionStorage.getItem(sessionStorage.key(j))); } catch (e) {}
+        if (!hit) { var sc = document.scripts; for (var k = 0; k < sc.length && !hit; k++) hit = scan(sc[k].textContent); }
+        if (!hit) {
+            try {
+                var keys = Object.keys(window);
+                for (var n = 0; n < keys.length && !hit; n++) {
+                    var v; try { v = window[keys[n]]; } catch (e) { continue; }
+                    if (typeof v === 'string') hit = scan(v);
+                    else if (v && typeof v === 'object' && !(v instanceof Node) && v !== window) {
+                        try { hit = scan(JSON.stringify(v).slice(0, 300000)); } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
+        if (!hit) { try { var es = performance.getEntriesByType('resource'); for (var q = 0; q < es.length && !hit; q++) hit = scan(es[q].name); } catch (e) {} }
+        return hit || 'none';
+    })();
+"#;
+
+/// 🎲 프라그마틱 실보유금 스캔 — 게임 소켓엔 잔액 프레임이 없다(캡처 확인). 멀티바카라 클라이언트
+/// iframe(게임 소켓과 같은 컨텍스트) DOM 하단 바 "보유잔액 ₩ 41,820"에서 숫자만 뽑는다.
+/// 라이브 실측(2026-09-03): document.body.innerText에 '보유잔액\n\n₩ 41,820' 형태로 존재(캔버스 아님).
+const PRAG_FIND_BALANCE_SCRIPT: &str = r#"
+    (function() {
+        try {
+            var body = document.body ? document.body.innerText : '';
+            var m = body.match(/보유\s*잔액[\s\S]{0,25}?([0-9][0-9,]*(?:\.[0-9]+)?)/);
+            if (!m) m = body.match(/Balance[\s\S]{0,25}?([0-9][0-9,]*(?:\.[0-9]+)?)/i);
+            if (m) return m[1].replace(/,/g, '');
+            return 'none';
+        } catch (e) { return 'err:' + e; }
+    })();
+"#;
+
+/// 🎲 프라그마틱 MTB 게임 소켓 훅 — 에볼루션 블로커와 별개의 작은 스크립트. `/game?…multiTable=true` 소켓만
+/// 잡아 `__BCR_PRAG_SEND__`를 노출하고 `[BCR_PRAG_WS]` 콘솔로 실행 컨텍스트를 알린다. 다른 소켓은 그대로 통과.
+const PRAG_WS_HOOK_SCRIPT: &str = r#"
+    (function() {
+        if (window.__BCR_PRAG_HOOK__) return 'already';
+        window.__BCR_PRAG_HOOK__ = true;
+        var Orig = window.WebSocket;
+        if (!Orig) return 'no_ws';
+        function Patched(url, protocols) {
+            var u = String(url || '');
+            var ws = protocols ? new Orig(u, protocols) : new Orig(u);
+            if (u.indexOf('/game?') !== -1 && u.indexOf('multiTable=true') !== -1) {
+                window.__BCR_PRAG_SOCKET__ = ws;
+                window.__BCR_PRAG_SEND__ = function(text) {
+                    try {
+                        var s = window.__BCR_PRAG_SOCKET__;
+                        if (!s || s.readyState !== 1) return 'not_open';
+                        s.send(text);
+                        return 'sent';
+                    } catch (e) { return 'err:' + e; }
+                };
+                try { console.log('[BCR_PRAG_WS]', u.substring(0, 120)); } catch (e) {}
+            }
+            return ws;
+        }
+        Patched.prototype = Orig.prototype;
+        Patched.CONNECTING = 0; Patched.OPEN = 1; Patched.CLOSING = 2; Patched.CLOSED = 3;
+        window.WebSocket = Patched;
+        return 'prag_hook_installed';
+    })();
+"#;
 
 fn ws_blocker_script() -> &'static str {
     WS_BLOCKER_SCRIPT_RESOLVED.as_str()
