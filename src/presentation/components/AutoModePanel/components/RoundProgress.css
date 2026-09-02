@@ -1,0 +1,79 @@
+/* RoundProgress — 라운드 진행 표시(배팅 카운트다운 → 마감·딜링 → 결과) */
+.round-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 72px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.round-progress--compact {
+  min-width: 48px;
+  gap: 3px;
+}
+
+.round-progress__label {
+  font-size: var(--am-fs-meta, 12px);
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.round-progress.is-betting .round-progress__label { color: var(--text-primary); }
+.round-progress.is-betting.warning .round-progress__label { color: var(--status-warning); }
+.round-progress.is-betting.urgent .round-progress__label { color: var(--status-danger); }
+.round-progress.is-dealing .round-progress__label { color: var(--status-info); }
+.round-progress.is-idle .round-progress__label { opacity: 0.7; }
+
+.round-progress__track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.round-progress--compact .round-progress__track { height: 4px; }
+
+.round-progress__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--status-success);
+  transition: width 1s linear;
+}
+
+.round-progress.is-betting.warning .round-progress__fill { background: var(--status-warning); }
+.round-progress.is-betting.urgent .round-progress__fill { background: var(--status-danger); }
+
+/* 마감·딜링: 서버가 딜링 타이머를 주지 않으므로 흐르는 바로 "진행 중"만 표시 */
+.round-progress__track--indeterminate .round-progress__fill {
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--status-info), transparent);
+  animation: round-progress-slide 1.2s ease-in-out infinite;
+  transition: none;
+}
+
+.round-progress.is-result .round-progress__fill {
+  background: var(--text-secondary);
+  opacity: 0.6;
+  transition: none;
+}
+
+@keyframes round-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(260%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .round-progress__track--indeterminate .round-progress__fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+  .round-progress__fill { transition: none; }
+}
+
+/* 배치 보조 — 카드 뷰(제목 줄 오른쪽) */
+.auto-mode__room-round-progress { flex: 0 0 auto; width: 84px; }

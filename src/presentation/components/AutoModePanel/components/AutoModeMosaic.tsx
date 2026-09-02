@@ -9,6 +9,7 @@ import './AutoModeMosaic.css'
 import '../AutoModePanel.css'
 import { useRoomFilter } from '../hooks/useRoomFilter'
 import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel, compactAmount } from '../utils/autoModeStatus'
+import { RoundProgress } from './RoundProgress'
 
 interface AutoModeMosaicProps {
   rooms: Room[]
@@ -236,6 +237,17 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
           <span className={`mosaic-timer-badge ${timerClass}`} aria-label={`배팅 마감까지 ${timeLeft}초`}>{timeLeft}초</span>
         )}
       </div>
+
+      {/* 라운드 진행 — 배팅 카운트다운 → 마감·딜링 → 결과. 결과 대기 방이 지금 어느 단계인지 한눈에 */}
+      <RoundProgress
+        remainingSeconds={timeLeft}
+        windowMs={room.bettingWindowMs}
+        phase={room.phase}
+        waitingForResult={isBetting}
+        compact
+        showLabel={timeLeft <= 0}
+        className="mosaic-round-progress"
+      />
 
       {/* Filter Reason — 왜 이 방이 풀에 들어왔는지 */}
       {filterLabel && (

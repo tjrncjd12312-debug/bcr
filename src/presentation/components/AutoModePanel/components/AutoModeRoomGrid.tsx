@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
 import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel } from '../utils/autoModeStatus'
+import { RoundProgress } from './RoundProgress'
 import '../AutoModePanel.css'
 
 type RoomBetStatus = 'pending' | 'win' | 'loss' | 'tie' | 'failed' | 'pass'
@@ -288,9 +289,6 @@ function AutoModeRoomCard({
     return betLogs.reduce((sum, log) => sum + (log.profit || 0), 0)
   }, [betLogs])
 
-  // 남은 시간은 링 대신 글자 알약으로(가독성). 5초 이하 빨강, 10초 이하 주황
-  const timerTone = timer <= 5 ? 'urgent' : timer <= 10 ? 'warning' : ''
-
   // Status Classes
   let statusClass = 'idle'
 
@@ -357,11 +355,15 @@ function AutoModeRoomCard({
         <div className="auto-mode__room-title-row">
           <div className={`auto-mode__status-dot-indicator ${statusClass}`} />
           <div className="auto-mode__room-name" title={room.koreanName || room.name}>{room.koreanName || room.name}</div>
-          {timer > 0 && (
-            <span className={`auto-mode__timer-pill ${timerTone}`} aria-label={`배팅 마감까지 ${timer}초`}>
-              {timer}초
-            </span>
-          )}
+          {/* 라운드 진행 — 배팅 카운트다운(서버 마감 기준) → 마감·딜링 → 결과 */}
+          <RoundProgress
+            remainingSeconds={timer}
+            windowMs={room.bettingWindowMs}
+            phase={room.phase}
+            waitingForResult={isBetting}
+            compact
+            className="auto-mode__room-round-progress"
+          />
         </div>
         <div className="auto-mode__room-chips">
           <span className={`auto-status-chip ${statusChip.tone}`}>{statusChip.text}</span>

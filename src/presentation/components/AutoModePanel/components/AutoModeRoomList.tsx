@@ -3,6 +3,7 @@ import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirec
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
 import type { RoomBetLog } from './AutoModeRoomGrid'
 import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel } from '../utils/autoModeStatus'
+import { RoundProgress } from './RoundProgress'
 import '../AutoModePanel.css'
 import './AutoModeList.css'
 
@@ -193,7 +194,7 @@ export function AutoModeRoomList({
             <div className="auto-mode__list-header" role="row">
                 <div className={headerClass('name', 'col-room')} onClick={() => setSortType('name')}>방 이름{sortMark('name')}</div>
                 <div className="col-status">상태</div>
-                <div className={headerClass('recent', 'col-timer')} onClick={() => setSortType('recent')}>남은 시간{sortMark('recent')}</div>
+                <div className={headerClass('recent', 'col-timer')} onClick={() => setSortType('recent')}>라운드 진행{sortMark('recent')}</div>
                 <div className={headerClass('winRate', 'col-stats')} onClick={() => setSortType('winRate')}>적중률{sortMark('winRate')}</div>
                 <div className="col-trend">최근 기록</div>
                 <div className={headerClass('martin', 'col-strategy')} onClick={() => setSortType('martin')}>진행 단계{sortMark('martin')}</div>
@@ -267,9 +268,6 @@ function AutoModeListRow({
         activePrediction ??
         (isTieFilter ? 'T' : null)
 
-    // Timer Color
-    const timerClass = timer <= 5 ? 'urgent' : timer <= 10 ? 'warning' : 'normal';
-
     // Last Profit from logs
     const sessionProfit = betLogs.reduce((sum, log) => sum + log.profit, 0);
 
@@ -304,9 +302,9 @@ function AutoModeListRow({
                 <span className={`auto-status-chip ${statusChip.tone}`}>{statusChip.text}</span>
             </div>
 
-            {/* 3. 남은 시간 */}
+            {/* 3. 라운드 진행 — 배팅 카운트다운(서버 마감 기준) → 마감·딜링 → 결과. 결과 대기 방도 어느 단계인지 보이게 */}
             <div className="col-timer">
-                {timer > 0 && <span className={`timer-value ${timerClass}`}>{timer}초</span>}
+                <RoundProgress remainingSeconds={timer} windowMs={room.bettingWindowMs} phase={room.phase} waitingForResult={isBetting} />
             </div>
 
             {/* 4. 적중률 */}

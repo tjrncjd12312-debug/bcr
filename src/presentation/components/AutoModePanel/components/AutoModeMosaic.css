@@ -541,3 +541,8 @@
     padding: 8px;
   }
 }
+
+/* 라운드 진행 바(RoundProgress) — 헤더 바로 아래, 좌우 여백은 헤더와 맞춤 */
+.mosaic-round-progress {
+  padding: 4px 10px 2px;
+}

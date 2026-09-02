@@ -66,14 +66,27 @@ export function getRoomStatusChip(
   }
 
   if (waitingForResult) {
-    if (martinLevel > 0) {
+    // 실배팅이 실제로 어떻게 됐는지 그대로 보여준다(사용자 요구: "실제로 어떻게 되는지 눈에 들어오게").
+    //   attempted = 전송 중, accepted/confirmed/sent = 접수됨, unknown = 체결 미확인(⚠), rejected = 거절.
+    const placement = String(autoState?.placementStatus ?? '')
+    const stage = martinLevel > 0 ? `마틴 ${martinLevel + 1}단계` : null
+    if (placement === 'unknown') {
+      return { text: brief ? '체결 미확인' : (stage ? `${stage} · 체결 미확인` : '체결 미확인'), tone: 'martin' }
+    }
+    if (placement === 'rejected') {
+      return { text: brief ? '배팅 거절' : (stage ? `${stage} · 배팅 거절` : '배팅 거절'), tone: 'martin' }
+    }
+    if (placement === 'attempted') {
+      return { text: brief ? '전송 중' : (stage ? `${stage} · 배팅 전송 중` : '배팅 전송 중'), tone: 'pending' }
+    }
+    const accepted = placement === 'accepted' || placement === 'confirmed' || placement === 'sent'
+    const waitText = accepted ? (brief ? '접수 · 대기' : '접수됨 · 결과 대기') : '결과 대기'
+    if (stage) {
       return brief
         ? { text: `마틴 ${martinLevel + 1} 대기`, tone: 'martin' }
-        : { text: `마틴 ${martinLevel + 1}단계 대기`, tone: 'martin' }
+        : { text: `${stage} · ${waitText}`, tone: 'martin' }
     }
-    return brief
-      ? { text: '결과 대기', tone: 'pending' }
-      : { text: '결과 대기', tone: 'pending' }
+    return { text: waitText, tone: 'pending' }
   }
 
   if (martinLevel > 0) {
