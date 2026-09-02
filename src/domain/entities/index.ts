@@ -134,6 +134,10 @@ export interface Room {
   lastResultTime?: number
   remainingSeconds?: number
   phase?: GamePhase
+  /** 배팅 마감 시각(epoch ms). 서버가 BetsOpen 순간 준 timeRemaining으로 고정 — UI 카운트다운의 단일 기준 */
+  bettingDeadlineAt?: number
+  /** 배팅 창 전체 길이(ms, 서버 timeInitial). 진행 바 비율 계산용 */
+  bettingWindowMs?: number
   gameState?: GameState
   /** 카지노 프로바이더 (evolution | pragmatic) */
   provider?: 'evolution' | 'pragmatic'
@@ -241,6 +245,10 @@ export interface BettingPhaseEvent {
   roomId: string
   remainingSeconds: number
   phase: 'start' | 'end'
+  /** 배팅 마감 절대시각(epoch ms). 있으면 UI는 감산 대신 이 값으로 센다 */
+  deadlineAt?: number
+  /** 배팅 창 전체 길이(ms) */
+  windowMs?: number
 }
 
 /**

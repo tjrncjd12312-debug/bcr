@@ -13,6 +13,9 @@ import { winProfit } from '../../domain/betting/payout'
 import { TauriAdapter } from '../../infrastructure/adapters/TauriAdapter'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
 
+/** 실배팅 전송에 필요한 최소 여유(ms). 서버 마감 절대시각 기준. 라이브 응답 지연 ~250ms + 안전분. */
+const REAL_BET_MIN_LEAD_MS = 800
+
 /** 배팅 이벤트 타입 */
 export interface BetPlacedEvent {
   tableId: string
@@ -184,7 +187,20 @@ class AutoBettingServiceImpl {
       const liveGameId = EvolutionAdapter.getCurrentGameId(tableId)
       if (!liveGameId || liveGameId.startsWith('synthetic-')) {
         console.warn(`[AutoBetting] 🛡️ 실배팅 차단 — 실시간 gameId 미수신(현재값=${liveGameId ?? 'null'}). 가짜 gameId로 실제 배팅 방지.`)
+        this.feDiag(`REAL-BET-BLOCKED-NO-GAMEID table=${tableId} bet=${betType} amount=${amount} gameId=${liveGameId ?? 'null'}`)
         return { success: false, placementStatus: 'not_sent', error: '게임 정보를 받는 중입니다 — 이번 판은 건너뜁니다' }
+      }
+
+      // 🛡️ [실배팅 안전장치 #2] 서버 마감 절대시각(bettingDeadlineAt) 기준으로 여유가 없으면 보내지 않는다.
+      //   마감 뒤 도착한 베팅은 Evolution이 응답 없이 무시해 '체결 미확인'만 남는다
+      //   (2026-09-02 라이브 3차: 7초 창 테이블에 마감 10초 뒤 전송 → 무응답). 호출 경로가 무엇이든 여기서 막는다.
+      //   마감 시각을 아는 경우에만 판정한다(모르면 호출측 가드에 맡긴다 — AutoMode는 스냅샷 기준으로 fail-closed).
+      const liveRoom = EvolutionAdapter.getRoom(tableId)
+      const msLeft = liveRoom?.bettingDeadlineAt !== undefined ? liveRoom.bettingDeadlineAt - Date.now() : null
+      if (msLeft !== null && msLeft < REAL_BET_MIN_LEAD_MS) {
+        console.warn(`[AutoBetting] 🛡️ 실배팅 차단 — 배팅창 여유 부족(msLeft=${msLeft ?? 'unknown'})`)
+        this.feDiag(`REAL-BET-BLOCKED-TIMING table=${tableId} bet=${betType} amount=${amount} msLeft=${msLeft ?? 'unknown'}`)
+        return { success: false, placementStatus: 'not_sent', error: '배팅창이 마감됐거나 남은 시간이 부족해요 — 이번 판은 건너뜁니다' }
       }
     }
 
@@ -192,6 +208,7 @@ class AutoBettingServiceImpl {
     const isConnected = await TauriAdapter.getEvolutionMultiStatus().catch(() => false)
     if (!isConnected) {
       console.warn('[AutoBetting] ❌ Cannot bet: Evolution multi-socket not connected')
+      if (isRealBetting) this.feDiag(`REAL-BET-BLOCKED-NOT-CONNECTED table=${tableId} bet=${betType} amount=${amount}`)
       return { success: false, placementStatus: 'not_sent', error: '연결이 끊겼어요 (재연결 대기 중)' }
     }
 
@@ -283,10 +300,12 @@ class AutoBettingServiceImpl {
 
       // Send message via Tauri
       console.log(`[AutoBetting] 📤 ${isRealBetting ? '실제 배팅 메시지 전송' : '가상 배팅 로그'}...`)
+      if (isRealBetting) this.feDiag(`REAL-BET-SEND table=${tableId} bet=${betType} amount=${actualAmount} gameId=${gameId}`)
       await TauriAdapter.sendEvolutionMultiMessage(message)
 
       if (confirmationPromise) {
         const confirmation = await confirmationPromise
+        this.feDiag(`REAL-BET-CONFIRM table=${tableId} status=${confirmation.status} source=${confirmation.source} gameId=${confirmation.gameId ?? '?'} bet=${confirmation.betType ?? '?'} amount=${confirmation.amount ?? '?'} err=${confirmation.error ?? ''}`)
         if (confirmation.status === 'rejected') {
           const reason = confirmation.error || '실제 베팅이 거절되었습니다'
           this.pendingBets.delete(tableId)
@@ -350,6 +369,7 @@ class AutoBettingServiceImpl {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       console.error('[AutoBetting] ❌ Failed to send bet:', errorMsg)
+      if (isRealBetting) this.feDiag(`REAL-BET-SEND-ERROR table=${tableId} bet=${betType} amount=${actualAmount} err=${errorMsg}`)
       if (realBetAttempted) {
         const pendingBet = this.pendingBets.get(tableId)
         if (pendingBet) {
@@ -363,6 +383,15 @@ class AutoBettingServiceImpl {
       }
       return { success: false, placementStatus: 'not_sent', error: errorMsg }
     }
+  }
+
+  /** 🔬 실배팅 핵심 단계를 Rust 로그(bcr-runtime.log)로 포워딩한다. 웹뷰 콘솔은 파일로 남지 않는다. */
+  private feDiag(line: string): void {
+    try {
+      import('@tauri-apps/api/core')
+        .then((m) => m.invoke('fe_diag', { line }).catch(() => {}))
+        .catch(() => {})
+    } catch { /* ignore */ }
   }
 
   /**

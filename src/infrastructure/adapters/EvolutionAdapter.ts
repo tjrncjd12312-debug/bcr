@@ -29,6 +29,14 @@ import { BET_CODES, DEFAULT_TABLE_BETTING_CONFIG } from '../../domain/entities'
 // Timer max duration limit (seconds) - prevents unreasonably high timer values
 const MAX_TIMER_SECONDS = 60
 
+/** 서버 시간값을 ms로 정규화한다. Evolution은 ms(예 13000)를 주지만 300 이하면 초로 본다. */
+function toMillis(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined
+  const num = Number(raw)
+  if (Number.isNaN(num) || num < 0) return undefined
+  return num > 300 ? Math.round(num) : Math.round(num * 1000)
+}
+
 // ==================== Room Filtering ====================
 // 제외할 테이블 패턴 (라이트닝, 살롱, RNG 등)
 const EXCLUDED_PATTERNS = ['lightning', '라이트닝', 'salon', '살롱', 'sal', 'priv', 'rng-']
@@ -881,16 +889,15 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
 
     // Try multiple possible paths for time remaining and betting status
     // ✅ 수정: timeInitial, timeRemaining 등 다양한 필드 지원
-    const rawTimeRemaining =
-      (args as any)?.currentGame?.timeRemaining ??
-      (args as any)?.currentGame?.timeRemainingMs ??
-      (args as any)?.currentGame?.timeInitial ??
-      (args as any)?.timeRemaining ??
-      (args as any)?.timeRemainingMs ??
-      (args as any)?.timeInitial ??
-      (args as any)?.betTime ??
-      (args as any)?.betTimeInMs ??
-      undefined
+    // 남은 시간(timeRemaining)과 창 길이(timeInitial)는 다른 값이다 — 마감 뒤 오는 프레임엔
+    // timeInitial만 남는데 예전엔 그걸 남은 시간으로 읽어 마감 후에도 13초가 떠 있었다.
+    const cg = (args as any)?.currentGame
+    const rawTimeRemaining = toMillis(
+      cg?.timeRemaining ?? cg?.timeRemainingMs ??
+      (args as any)?.timeRemaining ?? (args as any)?.timeRemainingMs ??
+      (args as any)?.betTime ?? (args as any)?.betTimeInMs
+    )
+    const windowMsTS = toMillis(cg?.timeInitial ?? (args as any)?.timeInitial) ?? rawTimeRemaining
     const bettingStatus =
       (args as any)?.currentGame?.betting ??
       (args as any)?.betting ??
@@ -911,13 +918,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
 
     let remainingSeconds = room.remainingSeconds
     if (rawTimeRemaining !== undefined) {
-      const num = Number(rawTimeRemaining)
-      if (!Number.isNaN(num)) {
-        // Heuristic: if greater than 300 it's probably ms, else seconds
-        // Clamp to MAX_TIMER_SECONDS to prevent unreasonably high values
-        const parsed = num > 300 ? Math.ceil(num / 1000) : Math.ceil(num)
-        remainingSeconds = Math.max(0, Math.min(parsed, MAX_TIMER_SECONDS))
-      }
+      remainingSeconds = Math.max(0, Math.min(Math.ceil(rawTimeRemaining / 1000), MAX_TIMER_SECONDS))
     }
 
     // Game Data (Live Scores/Cards) - 빈 카드 배열이면 기존 데이터 유지
@@ -947,15 +948,26 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       }
     }
 
-    this.rooms.set(tableId, { ...room, phase, remainingSeconds, gameState })
+    const openWithTimer = phase === 'betting' && rawTimeRemaining !== undefined && remainingSeconds !== undefined && remainingSeconds > 0
+    const deadlineAt = openWithTimer && rawTimeRemaining !== undefined ? Date.now() + rawTimeRemaining : undefined
+    this.rooms.set(tableId, {
+      ...room,
+      phase,
+      remainingSeconds: phase === 'betting' ? remainingSeconds : 0,
+      bettingDeadlineAt: deadlineAt ?? (phase === 'betting' ? room.bettingDeadlineAt : undefined),
+      bettingWindowMs: windowMsTS ?? room.bettingWindowMs,
+      gameState,
+    })
     this.emitRoomUpdate(Array.from(this.rooms.values()))
 
     // 베팅 오픈 상태면 타이머 이벤트도 전파 (멀티테이블 타이머 동기화)
-    if (phase === 'betting' && remainingSeconds !== undefined && remainingSeconds > 0) {
+    if (openWithTimer && remainingSeconds !== undefined) {
       this.emitBettingPhase({
         roomId: tableId,
         remainingSeconds,
         phase: 'start',
+        deadlineAt,
+        windowMs: windowMsTS ?? rawTimeRemaining,
       })
     }
   }
@@ -1100,12 +1112,10 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
           history: parsedHistory,
         })
 
-        // 다음 라운드 베팅 페이즈 트리거
-        this.emitBettingPhase({
-          roomId: tableId,
-          remainingSeconds: 12,
-          phase: 'start',
-        })
+        // ⛔ 히스토리 갱신 직후 가짜 'start'(12초)를 쏘지 않는다. 결과가 뜬 시점엔 다음 라운드가 아직
+        //   열리지 않았고(실측: 결과 → 약 5초 뒤 BetsOpen), 여기서 시작을 알리면 자동배팅이 끝난 라운드
+        //   gameId로 즉시 배팅해 Evolution이 무시한다(2026-09-02 라이브 3차: 7초 창 테이블, 마감 10초 뒤 전송).
+        //   시작 신호는 baccarat.gameState BetsOpen(실제 timeRemaining 포함) 하나만 쓴다.
       }
     }
   }
@@ -1171,23 +1181,18 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const room = this.rooms.get(tableId) || this.ensureRoom(tableId, (args as any)?.tableName as string | undefined)
     if (!room) return  // 라이트닝 등 제외된 테이블은 무시
 
-    // ✅ 타이머 파싱 - 다양한 필드명 지원
-    const rawTimeRemaining =
-      (args as any)?.timeRemaining ??
-      (args as any)?.timeInitial ??
-      (args as any)?.timeRemainingMs ??
-      (args as any)?.gameData?.timeRemaining ??
-      undefined
+    // ✅ 타이머 파싱 — 라이브 캡처(2026-09-02) 기준 baccarat.gameState는 BetsOpen 순간 한 번
+    //   `timeRemaining`(ms, 예 13000)과 `timeInitial`(ms, 창 길이)을 준다. 이후 카운트다운 프레임은
+    //   오지 않으므로 여기서 마감 시각을 절대시간으로 고정하고 UI가 그것을 기준으로 센다.
+    //   BetsClosed 프레임엔 timeInitial만 남는다 — 그것을 남은 시간으로 읽으면 안 된다.
+    const remainingMs = toMillis(
+      (args as any)?.timeRemaining ?? (args as any)?.timeRemainingMs ?? (args as any)?.gameData?.timeRemaining
+    )
+    const windowMs = toMillis((args as any)?.timeInitial) ?? remainingMs
 
     let remainingSeconds: number | undefined = undefined
-    if (rawTimeRemaining !== undefined) {
-      const num = Number(rawTimeRemaining)
-      if (!Number.isNaN(num)) {
-        // Heuristic: if greater than 300 it's probably ms, else seconds
-        // Clamp to MAX_TIMER_SECONDS to prevent unreasonably high values
-        const parsed = num > 300 ? Math.ceil(num / 1000) : Math.ceil(num)
-        remainingSeconds = Math.max(0, Math.min(parsed, MAX_TIMER_SECONDS))
-      }
+    if (remainingMs !== undefined) {
+      remainingSeconds = Math.max(0, Math.min(Math.ceil(remainingMs / 1000), MAX_TIMER_SECONDS))
     }
 
     // 🔥 결과 추출: 두 가지 메시지 형식 지원
@@ -1268,6 +1273,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
           phase: 'result',
           lastResultTime: Date.now(),
           remainingSeconds: 0,
+          bettingDeadlineAt: undefined,
         }
         this.rooms.set(tableId, updated)
         this.emitRoomUpdate(Array.from(this.rooms.values()))
@@ -1302,12 +1308,10 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
           betOutcome,
         })
 
-        // 🔥 다음 라운드 예측 트리거
-        this.emitBettingPhase({
-          roomId: tableId,
-          remainingSeconds: 12,
-          phase: 'start',
-        })
+        // ⛔ 결과 직후 가짜 'start'(12초)를 쏘지 않는다. 다음 라운드의 실제 BetsOpen 프레임(새 gameId +
+        //   timeRemaining)이 시작 신호다. 예전엔 여기서 즉시 시작을 알려 마틴 재배팅이 끝난 라운드의
+        //   gameId로 나가 Evolution이 무시했고(2026-09-02 라이브: 마틴 2만 미등록), 타이머도 결과
+        //   직후부터 11초 거짓 카운트다운을 했다. 실제 다음 BetsOpen은 결과 후 약 5초 뒤에 온다.
 
         return
       }
@@ -1320,6 +1324,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
 
     // 🔥 DEBUG: Log betting field for analysis
 
+    let bettingClosedNow = false
     if (betting) {
       const bettingLower = betting.toLowerCase()
       if (bettingLower.includes('open') || bettingLower === 'betsopen') {
@@ -1327,10 +1332,10 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
         // ✅ 베팅 오픈 시 타이머와 함께 betting phase emit
         if (remainingSeconds !== undefined && remainingSeconds > 0) {
           shouldEmitBettingPhase = true
-        } else {
         }
       } else if (bettingLower.includes('closed') || bettingLower === 'betsclosed') {
         phase = 'dealing'
+        bettingClosedNow = true
       }
     }
 
@@ -1338,7 +1343,7 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const dealing = (args as any)?.dealing as string | undefined
     if (dealing) {
       const dealingLower = dealing.toLowerCase()
-      if (dealingLower === 'dealing') {
+      if (dealingLower === 'dealing' || dealingLower === 'revealing') {
         phase = 'dealing'
       } else if (dealingLower === 'finished') {
         phase = 'result'
@@ -1372,23 +1377,33 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       }
     }
 
-    // 방 상태 업데이트
+    // 방 상태 업데이트 — 마감 시각은 절대시간으로 고정(UI·자동배팅이 같은 기준으로 센다)
+    const now = Date.now()
+    const deadlineAt = shouldEmitBettingPhase && remainingMs !== undefined ? now + remainingMs : undefined
+    const wasBettingOpen = room.phase === 'betting' || room.bettingDeadlineAt !== undefined
     const updatedRoom: Room = {
       ...room,
       phase,
-      remainingSeconds: remainingSeconds ?? room.remainingSeconds,
+      remainingSeconds: bettingClosedNow ? 0 : (remainingSeconds ?? room.remainingSeconds),
+      bettingDeadlineAt: deadlineAt ?? (bettingClosedNow || phase === 'result' ? undefined : room.bettingDeadlineAt),
+      bettingWindowMs: windowMs ?? room.bettingWindowMs,
       gameState,
     }
     this.rooms.set(tableId, updatedRoom)
     this.emitRoomUpdate(Array.from(this.rooms.values()))
 
-    // ✅ 베팅 페이즈 emit (BetsOpen일 때만)
+    // ✅ 베팅 페이즈 emit (BetsOpen일 때만). 마감(BetsClosed) 전환 순간엔 'end'를 한 번 알려
+    //   UI 타이머를 즉시 지우고 자동배팅의 배팅 창 스냅샷을 정리한다.
     if (shouldEmitBettingPhase && remainingSeconds !== undefined) {
       this.emitBettingPhase({
         roomId: tableId,
         remainingSeconds,
         phase: 'start',
+        deadlineAt,
+        windowMs: updatedRoom.bettingWindowMs,
       })
+    } else if (bettingClosedNow && wasBettingOpen) {
+      this.emitBettingPhase({ roomId: tableId, remainingSeconds: 0, phase: 'end' })
     }
   }
 
@@ -1409,22 +1424,31 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     const room = this.rooms.get(tableId) || this.ensureRoom(tableId)
     if (!room) return  // 라이트닝 등 제외된 테이블은 무시
 
-    // 카드 상태는 유지(마지막 라운드 카드 표시)하고, 페이즈 betting으로 전환
+    // 카드 상태는 유지(마지막 라운드 카드 표시)하고, 페이즈 betting으로 전환.
+    // 남은 시간은 프레임이 준 값만 쓴다(고정 12초 금지 — 테이블마다 창 길이가 7~35초로 다르다).
+    const newGameRemainingMs = toMillis((args as any)?.timeRemaining ?? (args as any)?.timeInitial)
     const updatedRoom: Room = {
       ...room,
       phase: 'betting',
-      remainingSeconds: 12,  // 새 게임 시작 시 기본 12초
+      remainingSeconds: newGameRemainingMs !== undefined ? Math.ceil(newGameRemainingMs / 1000) : (room.remainingSeconds ?? 0),
+      bettingDeadlineAt: newGameRemainingMs !== undefined ? Date.now() + newGameRemainingMs : room.bettingDeadlineAt,
+      bettingWindowMs: toMillis((args as any)?.timeInitial) ?? room.bettingWindowMs,
     }
     this.rooms.set(tableId, updatedRoom)
     this.emitRoomUpdate(Array.from(this.rooms.values()))
 
-    // ✅ 멀티소켓: 새 게임 시작 시 BettingPhase emit
-    // AutoModeService가 배팅 기회를 받을 수 있도록 함
-    this.emitBettingPhase({
-      roomId: tableId,
-      remainingSeconds: 12,
-      phase: 'start',
-    })
+    // ✅ newGame이 실제 남은 시간을 실어 왔을 때만 시작을 알린다(고정 12초 금지).
+    //   멀티위젯에선 newGame과 같은 순간 gameState BetsOpen(timeRemaining 포함)이 따로 오므로
+    //   보통 그쪽이 유일한 시작 신호가 된다. 테이블 창 길이는 7~35초로 달라 12초 가정은 틀린다.
+    if (newGameRemainingMs !== undefined && newGameRemainingMs > 0) {
+      this.emitBettingPhase({
+        roomId: tableId,
+        remainingSeconds: Math.ceil(newGameRemainingMs / 1000),
+        phase: 'start',
+        deadlineAt: updatedRoom.bettingDeadlineAt,
+        windowMs: updatedRoom.bettingWindowMs,
+      })
+    }
   }
 
   // ✅ 카드 딜링 처리 - 실시간 카드 업데이트
@@ -1622,16 +1646,47 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
         .forEach(confirmation => this.emitBetPlacementConfirmation(confirmation))
     }
 
+    // 💰 실잔액(서버 권위값): playerBettingState.state.balances = [{id:'combined', amount}] — 베팅 수락
+    //   시점에 차감된 잔액이 온다. 게임의 CLIENT_BALANCE_UPDATED 포워딩과 함께 실시간 잔액의 두 소스.
+    const balances = (args as any)?.state?.balances
+    if (Array.isArray(balances) && balances.length > 0) {
+      this.handleBalanceUpdated(balances)
+    }
+
     const room = this.ensureRoom(tableId)
     if (!room) return
 
-    const remainingSeconds = (args as any)?.timeRemaining as number | undefined
-    const phase: GamePhase = 'betting'
+    // ⛔ 페이즈를 무조건 'betting'으로 덮지 않는다. state.status가 권위값이다:
+    //   Betting → 배팅중(새 라운드; 이 프레임의 gameId가 새 라운드 id), Accepted → 마감/딜링,
+    //   Settled → 결과, Idle/그 외 → 유지. 예전엔 결과 직후 오는 Settled 프레임이 방을 다시
+    //   '배팅중'으로 뒤집어 마감 가드를 통과시켰고, 마틴 재배팅이 끝난 라운드 gameId로 나가
+    //   Evolution이 무시했다(2026-09-02 라이브). bettingStats(공개 통계)는 페이즈를 건드리지 않는다.
+    const status = String((args as any)?.state?.status ?? '').toLowerCase()
+    let phase: GamePhase | undefined = room.phase
+    if (msgType === 'baccarat.playerBettingState' || msgType === 'baccarat.playerBetResponse') {
+      if (status === 'betting') {
+        phase = 'betting'
+        const gid = (args as any)?.gameId
+        if (typeof gid === 'string' && gid && !gid.startsWith('synthetic-')) {
+          this.currentGameIds.set(tableId, gid)
+        }
+      } else if (status === 'accepted') {
+        phase = 'dealing'
+      } else if (status === 'settled') {
+        phase = 'result'
+      }
+    }
+
+    const remainingMs = toMillis((args as any)?.timeRemaining)
+    const remainingSeconds = remainingMs !== undefined
+      ? Math.max(0, Math.min(Math.ceil(remainingMs / 1000), MAX_TIMER_SECONDS))
+      : undefined
 
     this.rooms.set(tableId, {
       ...room,
       phase,
       remainingSeconds: remainingSeconds ?? room.remainingSeconds ?? 0,
+      bettingDeadlineAt: phase === 'betting' ? room.bettingDeadlineAt : undefined,
     })
     this.emitRoomUpdate(Array.from(this.rooms.values()))
   }

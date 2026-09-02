@@ -30,7 +30,9 @@ const MAX_LOG_ENTRIES = 200
 const MAX_CHART_POINTS = 100
 const RESULT_DISPLAY_DURATION = 2000
 const FLASH_DURATION = 600
-const DISPLAY_TIMER_CAP = 11  // 실제 12초 카운트 시작을 사용자에는 11초로 표시
+// 표시 타이머는 서버가 BetsOpen 순간 준 마감 절대시각(deadline)으로 센다. 예전의 "12초 고정 → 11초 표시"
+// 캡은 테이블마다 창 길이가 7~35초로 달라(2026-09-02 라이브 캡처) 실제와 어긋났다.
+const TIMER_TICK_MS = 250
 
 // Log entry type
 export interface LogEntry {
@@ -182,64 +184,68 @@ export function useGameEvents({
     return timer
   }, [])
 
+  // 방별 배팅 마감 절대시각. 1초 감산 방식은 프레임 도착 지연·setInterval 위상에 따라 1~2초씩
+  // 어긋났다(2026-09-02 라이브). 마감 시각을 고정해 두고 매 틱 "지금 기준 남은 초"를 다시 계산한다.
+  const roomDeadlinesRef = useRef<Map<string, number>>(new Map())
+
+  const computeTimers = useCallback((now: number) => {
+    const next = new Map<string, number>()
+    roomDeadlinesRef.current.forEach((deadlineAt, roomId) => {
+      const remaining = Math.ceil((deadlineAt - now) / 1000)
+      if (remaining > 0) next.set(roomId, remaining)
+      else roomDeadlinesRef.current.delete(roomId)
+    })
+    return next
+  }, [])
+
+  const applyTimers = useCallback((next: Map<string, number>) => {
+    setRoomTimers(prev => {
+      if (prev.size === next.size) {
+        let same = true
+        next.forEach((value, key) => { if (prev.get(key) !== value) same = false })
+        if (same) return prev
+      }
+      return next
+    })
+  }, [])
+
   // Subscribe to betting phase events
   useEffect(() => {
     const unsubscribe = onBettingPhase((event) => {
       try {
-        const displaySeconds = Math.min(event.remainingSeconds, DISPLAY_TIMER_CAP)
-        setRoomTimers(prev => {
-          const next = new Map(prev)
-          next.set(event.roomId, displaySeconds)
-          return next
-        })
-        if (selectedRoom && event.roomId === selectedRoom.id) {
-          setBettingTimer(displaySeconds)
+        const now = Date.now()
+        if (event.phase === 'start' && event.remainingSeconds > 0) {
+          roomDeadlinesRef.current.set(event.roomId, event.deadlineAt ?? now + event.remainingSeconds * 1000)
+        } else {
+          // 'end'(BetsClosed) 또는 0초 → 즉시 타이머 제거
+          roomDeadlinesRef.current.delete(event.roomId)
         }
+        applyTimers(computeTimers(now))
         onMultiRoomBetting(event, roomsRef.current)
       } catch (error) {
         handleEventError('배팅 단계 처리', error)
       }
     })
     return unsubscribe
-  }, [onBettingPhase, selectedRoom, onMultiRoomBetting, handleEventError])
+  }, [onBettingPhase, onMultiRoomBetting, handleEventError, applyTimers, computeTimers])
 
-  // Local timer countdown
-  useEffect(() => {
-    if (bettingTimer <= 0) return
-
-    const timerId = setInterval(() => {
-      setBettingTimer(prev => Math.max(0, prev - 1))
-    }, 1000)
-
-    return () => clearInterval(timerId)
-  }, [bettingTimer])
-
-  // Keep selected room timer in sync with list timers to avoid drift
-  useEffect(() => {
-    if (!selectedRoom) return
-    const current = roomTimers.get(selectedRoom.id) || 0
-    setBettingTimer(current)
-  }, [roomTimers, selectedRoom])
-
-  // Countdown timers for all rooms (list 표시용)
+  // 모든 방 타이머를 deadline 기준으로 다시 계산(표시용). 250ms 주기라 초 경계 오차 ≤ 0.25초.
   useEffect(() => {
     const intervalId = setInterval(() => {
-      setRoomTimers(prev => {
-        let changed = false
-        const next = new Map<string, number>()
-        prev.forEach((value, key) => {
-          const nextValue = Math.max(0, value - 1)
-          if (nextValue > 0) {
-            next.set(key, nextValue)
-          }
-          if (nextValue !== value) changed = true
-        })
-        return changed ? next : prev
-      })
-    }, 1000)
-
+      if (roomDeadlinesRef.current.size === 0) return
+      applyTimers(computeTimers(Date.now()))
+    }, TIMER_TICK_MS)
     return () => clearInterval(intervalId)
-  }, [])
+  }, [applyTimers, computeTimers])
+
+  // 선택된 방 타이머는 목록 타이머와 같은 값을 쓴다(드리프트 방지)
+  useEffect(() => {
+    if (!selectedRoom) {
+      setBettingTimer(0)
+      return
+    }
+    setBettingTimer(roomTimers.get(selectedRoom.id) || 0)
+  }, [roomTimers, selectedRoom])
 
   // Subscribe to game results from Evolution
   useEffect(() => {

@@ -1041,7 +1041,7 @@ class AutoModeServiceImpl {
 
   // 현재 선택된 패턴 필터 (예: 'long_streak', 'short_streak', 'all')
   private currentPatternFilter: RoomFilterType | 'all' = 'all'
-  private lastBettingPhaseByRoom: Map<string, { startedAt: number; initialSeconds: number }> = new Map()
+  private lastBettingPhaseByRoom: Map<string, { startedAt: number; initialSeconds: number; deadlineAt?: number }> = new Map()
 
   // 방별 배팅 진행 중 락 (동시 배팅 방지)
   private bettingInProgress: Set<string> = new Set()
@@ -1295,7 +1295,15 @@ class AutoModeServiceImpl {
     // ✅ 오토 OFF 상태에서도 "현재 배팅 페이즈" 스냅샷을 저장해,
     // ON/필터 변경을 배팅 창 중간에 눌러도 즉시 배팅 가능하도록 한다.
     if (phase === 'start' && remainingSeconds > 0) {
-      this.lastBettingPhaseByRoom.set(roomId, { startedAt: Date.now(), initialSeconds: remainingSeconds })
+      // 마감 절대시각을 함께 보관한다 — 이후 남은 시간 계산은 전부 이 값으로(초 감산 금지).
+      //   우선순위: 이벤트의 서버 마감 시각 → 방의 서버 마감 시각 → (둘 다 없으면) 이벤트 수신 시각 + 남은 초.
+      const deadlineAt = event.deadlineAt
+        ?? this.casinoAdapter.getRoom(roomId)?.bettingDeadlineAt
+        ?? (Date.now() + remainingSeconds * 1000)
+      this.lastBettingPhaseByRoom.set(roomId, { startedAt: Date.now(), initialSeconds: remainingSeconds, deadlineAt })
+      if (this.settings.enabled && this.isRoomEnabled(roomId)) {
+        this.feDiag(`PHASE-START room=${roomNameForDebug} src=${source} remain=${remainingSeconds}s deadlineIn=${deadlineAt !== undefined ? deadlineAt - Date.now() : 'n/a'}ms`)
+      }
     } else if (phase === 'end' || remainingSeconds <= 0) {
       this.lastBettingPhaseByRoom.delete(roomId)
     }
@@ -1602,10 +1610,13 @@ class AutoModeServiceImpl {
           }
           : null
 
+        const predictStartedAt = Date.now()
         const prediction = customStrategyPrediction ?? recoveryPrediction
           ?? (isInMartinRecovery && this.isTieOnlyFilter(this.currentPatternFilter)
             ? { roomId, prediction: 'T' as const, confidence: 90, reasoning: '마틴 회복 (타이 유지)', isSkip: false, timestamp: Date.now() }
             : await this.getPatternBasedPrediction(room, remainingSeconds))
+        // ⏱️ 예측에 걸린 시간 — 7초 창(슈퍼 스피드) 테이블에서 마감 전 전송 여부를 좌우한다.
+        this.feDiag(`PREDICT-DONE room=${room.koreanName} ms=${Date.now() - predictStartedAt} src=${customStrategyPrediction ? 'strategy' : recoveryPrediction ? 'martin-keep' : 'api'} result=${prediction?.prediction ?? 'null'}`)
 
         // 예측 없음 (shouldBet 호출 전 체크 - null 예측은 shouldBet에서 처리 불가)
         if (!prediction) {
@@ -1970,13 +1981,23 @@ class AutoModeServiceImpl {
         //   베팅이 마감 후 도착해 Evolution이 조용히 무시한다(라이브 확인 2026-06-23: 닫힌 뒤 전송→미등록,
         //   HasBet:false). 전송 직전 실시간 방 상태를 재확인해 '명확히 닫힌' 경우만 이번 판 스킵한다.
         //   (phase 미상/betting이면 진행 — 과차단으로 "배팅 안 함" 회귀 방지.)
+        //   2026-09-02 추가: 페이즈만으론 부족하다. 서버 마감 절대시각(bettingDeadlineAt) 기준으로 전송·처리
+        //   지연분(REAL_BET_MIN_LEAD_MS)만큼 여유가 없거나, 마감 시각을 모르면(BetsOpen 프레임 미수신) 보내지 않는다.
+        //   마감 뒤 도착한 베팅은 Evolution이 응답 없이 무시해 '체결 미확인'만 남긴다(3차 라이브: 7초 창, 마감 10초 뒤 전송).
+        const REAL_BET_MIN_LEAD_MS = 1000
         const liveRoom = this.casinoAdapter.getRoom(roomId)
-        if (liveRoom && (liveRoom.phase === 'dealing' || liveRoom.phase === 'result')) {
-          console.warn(`[AutoMode] ⏱️ 베팅창 마감 — 실배팅 스킵: ${room.koreanName} (phase=${liveRoom.phase}, tRemain=${liveRoom.remainingSeconds ?? '?'})`)
-          this.feDiag(`SKIP-WINDOW-CLOSED room=${room.koreanName} phase=${liveRoom.phase} tRemain=${liveRoom.remainingSeconds ?? '?'} martin=${roomState.martinLevel} betType=${betType}`)
+        const deadlineAt = liveRoom?.bettingDeadlineAt ?? this.lastBettingPhaseByRoom.get(roomId)?.deadlineAt
+        const msLeft = deadlineAt !== undefined ? deadlineAt - Date.now() : null
+        const windowClosed = !!liveRoom && (liveRoom.phase === 'dealing' || liveRoom.phase === 'result')
+        const tooLate = msLeft === null || msLeft < REAL_BET_MIN_LEAD_MS
+        if (windowClosed || tooLate) {
+          const why = windowClosed ? `phase=${liveRoom?.phase}` : msLeft === null ? 'deadline=unknown' : `msLeft=${msLeft}`
+          console.warn(`[AutoMode] ⏱️ 배팅창 마감/타이밍 부족 — 실배팅 스킵: ${room.koreanName} (${why})`)
+          this.feDiag(`SKIP-WINDOW-CLOSED room=${room.koreanName} ${why} martin=${roomState.martinLevel} betType=${betType}`)
           roomState.waitingForResult = false
           return
         }
+        this.feDiag(`BET-GUARD-PASS room=${room.koreanName} msLeft=${msLeft} martin=${roomState.martinLevel} betType=${betType} amount=${betAmount}`)
 
         // 🛡️ 실제 배팅 직전 동기화 재확인 (최종 안전장치)
         // AutoBettingService의 virtualModeEnabled가 true면 소켓 전송이 차단되므로
@@ -2137,23 +2158,22 @@ class AutoModeServiceImpl {
         const missingLockedMartinRoom = !room ? this.getMissingLockedMartinRoom(roomId) : null
         if (!room && !missingLockedMartinRoom) return
 
-        let remainingSeconds = 0
-
-        // 방법 1: 캐시된 스냅샷 사용
+        // ⏱️ 남은 시간은 서버 마감 절대시각(deadline)으로만 잰다. 정적 remainingSeconds는 프레임이 온
+        //   순간의 값이라 시간이 흘러도 줄지 않아, 마감 뒤에도 "배팅 가능"으로 보여 늦은 배팅을 만들었다.
+        const nowMs = Date.now()
         const phaseSnapshot = this.lastBettingPhaseByRoom.get(roomId)
-        if (phaseSnapshot) {
-          const elapsed = Math.floor((Date.now() - phaseSnapshot.startedAt) / 1000)
-          remainingSeconds = Math.max(0, phaseSnapshot.initialSeconds - elapsed)
-          if (remainingSeconds <= 0) {
-            this.lastBettingPhaseByRoom.delete(roomId)
-          }
-        }
-
-        // 방법 2: 스냅샷 없거나 만료됐으면 실시간 데이터 사용
+        const liveRoomData = room || missingLockedMartinRoom
+        // 최후 폴백: 마감 시각이 어디에도 없고 방 데이터의 남은 초만 있으면 지금 기준으로 마감 시각을 만든다.
+        //   (운영에선 BetsOpen이 항상 마감 시각을 채우고 BetsClosed가 남은 초를 0으로 만들어 여기까지 오지 않는다.)
+        const staticRemaining = liveRoomData?.remainingSeconds ?? 0
+        const deadlineAt = liveRoomData?.bettingDeadlineAt
+          ?? phaseSnapshot?.deadlineAt
+          ?? (phaseSnapshot ? phaseSnapshot.startedAt + phaseSnapshot.initialSeconds * 1000 : undefined)
+          ?? (staticRemaining > 0 ? nowMs + staticRemaining * 1000 : undefined)
+        const remainingSeconds = deadlineAt !== undefined ? Math.floor((deadlineAt - nowMs) / 1000) : 0
         if (remainingSeconds <= 0) {
-          remainingSeconds = (room || missingLockedMartinRoom)?.remainingSeconds ?? 0
-          // 🆕 phase 체크 완화: remainingSeconds > 0이면 배팅 가능으로 간주
-          if (remainingSeconds <= 0) return
+          this.lastBettingPhaseByRoom.delete(roomId)
+          return
         }
 
         // 이미 배팅 진행 중이면 스킵 (중복 배팅 방지)
@@ -2165,7 +2185,7 @@ class AutoModeServiceImpl {
         if (remainingSeconds < minRequiredSeconds) return
 
         // 기존 이벤트 핸들러 재사용 (동일한 안전장치/로직 적용)
-        void this.onBettingPhase({ roomId, remainingSeconds, phase: 'start' }, 'poll')
+        void this.onBettingPhase({ roomId, remainingSeconds, phase: 'start', deadlineAt }, 'poll')
         triggeredCount++
       } catch (e) {
         console.error('[AutoMode] tryBetOnCurrentBettingWindows error:', e)
