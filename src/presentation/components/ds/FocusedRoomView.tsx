@@ -84,12 +84,18 @@ export function FocusedRoomView({
           </div>
 
           <div className="focused-room__road">
-            <span className="focused-room__road-label">큰길 (메인 흐름)</span>
+            <div className="focused-room__road-head">
+              <span className="focused-room__road-label">큰길 (메인 흐름)</span>
+              <span className="focused-room__road-hint">오른쪽이 최신</span>
+            </div>
             <div className="focused-room__road-slot">{bigRoadSlot ?? <span className="focused-room__road-empty">기록 모으는 중</span>}</div>
           </div>
 
           <div className="focused-room__bead">
-            <span className="focused-room__road-label">비드플레이트</span>
+            <div className="focused-room__road-head">
+              <span className="focused-room__road-label">비드플레이트</span>
+              <span className="focused-room__road-hint">오른쪽이 최신</span>
+            </div>
             <div className="focused-room__bead-slot">{beadPlateSlot ?? <span className="focused-room__road-empty">기록 모으는 중</span>}</div>
           </div>
         </div>

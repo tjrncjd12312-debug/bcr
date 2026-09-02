@@ -3,6 +3,7 @@ import { memo, useMemo, useEffect, useRef } from 'react'
 import { Check, X, Minus } from 'lucide-react'
 import type { RoadResult } from '../../../../domain/entities'
 import { useRoadLayout } from './useRoadLayout'
+import './RoadMap.css'
 
 // 예측 정보 타입
 export interface PredictionInfo {
@@ -170,9 +171,18 @@ export const BeadPlate = memo(function BeadPlate({
 
   return (
     <div className={`road-card bead-plate ${className}`.trim()} ref={containerRef}>
-
-      <div className="road-grid-container road-grid-container--scrollable" style={gridStyle} ref={scrollContainerRef}>
-        <div className="road-grid">
+      {history.length === 0 ? (
+        <div className="road-empty">아직 게임 기록이 없습니다.</div>
+      ) : (
+        <div
+          className="road-grid-container road-grid-container--scrollable"
+          style={gridStyle}
+          ref={scrollContainerRef}
+          role="region"
+          aria-label={`비드플레이트 게임 기록 ${history.length}개, 오른쪽이 최신`}
+          tabIndex={0}
+        >
+          <div className="road-grid">
           {Array(colCount).fill(0).map((_, colIdx) => (
             <div key={colIdx} className="road-col">
               {Array(rows).fill(0).map((_, rowIdx) => {
@@ -185,7 +195,7 @@ export const BeadPlate = memo(function BeadPlate({
                       <div
                         className={`road-marker ${cell.result.winner.toLowerCase()} solid ${prediction?.won === true ? 'predicted-win' : ''}`}
                       >
-                        {cell.result.winner}
+                        <span className="road-marker__label">{cell.result.winner}</span>
                         {cell.result.isPlayerPair && <div className="pair-dot player" />}
                         {cell.result.isBankerPair && <div className="pair-dot banker" />}
                         {prediction && <PredictionBadge prediction={prediction} />}
@@ -196,8 +206,9 @@ export const BeadPlate = memo(function BeadPlate({
               })}
             </div>
           ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 })

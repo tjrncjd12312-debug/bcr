@@ -4,6 +4,7 @@ import { Check, X, Minus } from 'lucide-react'
 import type { RoadResult, Winner } from '../../../../domain/entities'
 import { useRoadLayout } from './useRoadLayout'
 import type { PredictionInfo } from './BeadPlate'
+import './RoadMap.css'
 
 interface BigRoadCell {
   winner: Winner
@@ -204,12 +205,18 @@ export const BigRoad = memo(function BigRoad({
 
   return (
     <div className={`road-card big-road ${className}`.trim()} ref={containerRef}>
-      <div
-        className="road-grid-container road-grid-container--scrollable"
-        style={gridStyle}
-        ref={scrollContainerRef}
-      >
-        <div className="road-grid">
+      {history.length === 0 ? (
+        <div className="road-empty">아직 게임 기록이 없습니다.</div>
+      ) : (
+        <div
+          className="road-grid-container road-grid-container--scrollable"
+          style={gridStyle}
+          ref={scrollContainerRef}
+          role="region"
+          aria-label={`큰길 게임 기록 ${history.length}개, 오른쪽이 최신`}
+          tabIndex={0}
+        >
+          <div className="road-grid">
           {Array(totalCols).fill(0).map((_, colIdx) => {
             const gridCol = startCol + colIdx
             return (
@@ -239,8 +246,9 @@ export const BigRoad = memo(function BigRoad({
               </div>
             )
           })}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 })

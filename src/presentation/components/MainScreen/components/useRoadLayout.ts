@@ -28,12 +28,9 @@ export function useRoadLayout({
 
     const calculate = () => {
       const width = el.clientWidth || el.parentElement?.clientWidth || minSize * cols
-      const height = el.clientHeight || el.parentElement?.clientHeight || 0
       const safeCols = Math.max(cols, 1)
-      const safeRows = Math.max(rows, 1)
       const sizeByWidth = (width - gap * (safeCols - 1)) / safeCols
-      const sizeByHeight = height > 0 ? (height - gap * (safeRows - 1)) / safeRows : Number.POSITIVE_INFINITY
-      const size = Math.min(sizeByWidth, sizeByHeight, maxSize)
+      const size = Math.min(sizeByWidth, maxSize)
       const clamped = Math.max(minSize, Math.floor(size))
       setCellSize(clamped)
     }

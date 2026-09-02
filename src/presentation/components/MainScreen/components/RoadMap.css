@@ -1,0 +1,203 @@
+/* Shared Big Road / Bead Plate presentation.
+ * Result colors retain baccarat semantics; chrome stays neutral. */
+.road-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.road-grid-container {
+  width: 100%;
+  max-width: 100%;
+  padding: 8px;
+  overflow: hidden;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.road-grid-container--scrollable {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-behavior: smooth;
+  scrollbar-color: rgba(200, 208, 218, 0.4) transparent;
+  scrollbar-width: thin;
+}
+
+.road-grid-container--scrollable:focus-visible {
+  outline: 3px solid var(--selection-outline);
+  outline-offset: 2px;
+}
+
+.road-grid-container--scrollable::-webkit-scrollbar {
+  height: 8px;
+}
+
+.road-grid-container--scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.road-grid-container--scrollable::-webkit-scrollbar-thumb {
+  background: rgba(200, 208, 218, 0.34);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-full);
+}
+
+.road-grid-container--scrollable::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 216, 77, 0.5);
+  background-clip: padding-box;
+}
+
+.road-grid {
+  display: flex;
+  width: var(--road-total-width);
+  min-width: var(--road-total-width);
+  gap: var(--road-gap, 4px);
+}
+
+.road-col {
+  display: grid;
+  flex: 0 0 var(--road-cell-size, 32px);
+  grid-template-rows: repeat(var(--road-rows, 6), var(--road-cell-size, 32px));
+  width: var(--road-cell-size, 32px);
+  gap: var(--road-gap, 4px);
+}
+
+.road-cell {
+  display: grid;
+  place-items: center;
+  width: var(--road-cell-size, 32px);
+  height: var(--road-cell-size, 32px);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+}
+
+.road-marker {
+  position: relative;
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  width: calc(var(--road-cell-size, 32px) - 4px);
+  height: calc(var(--road-cell-size, 32px) - 4px);
+  border-radius: 50%;
+  font-size: clamp(11px, calc(var(--road-cell-size, 32px) * 0.4), 15px);
+  font-weight: 850;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.road-marker__label {
+  position: relative;
+  z-index: 1;
+}
+
+.road-marker.b,
+.road-marker.b.solid {
+  background: var(--banker-color);
+  color: #ffffff;
+}
+
+.road-marker.p,
+.road-marker.p.solid {
+  background: var(--player-color);
+  color: #ffffff;
+}
+
+.road-marker.t,
+.road-marker.t.solid {
+  background: var(--tie-color);
+  color: #07170f;
+}
+
+.road-marker.predicted-win {
+  box-shadow:
+    0 0 0 2px var(--status-success),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+}
+
+.road-marker__tie {
+  position: absolute;
+  z-index: 3;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--bg-base);
+  border-radius: var(--radius-full);
+  background: var(--tie-color);
+  color: #07170f;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 14px;
+  text-align: center;
+}
+
+.pair-dot {
+  position: absolute;
+  z-index: 2;
+  width: 8px;
+  height: 8px;
+  bottom: -2px;
+  border: 2px solid var(--bg-base);
+  border-radius: 50%;
+}
+
+.pair-dot.player {
+  left: -2px;
+  background: var(--player-light);
+}
+
+.pair-dot.banker {
+  right: -2px;
+  background: var(--banker-light);
+}
+
+.prediction-badge {
+  position: absolute;
+  z-index: 3;
+  right: -5px;
+  bottom: -5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--bg-base);
+  border-radius: 50%;
+  color: #07120c;
+}
+
+.prediction-badge--win {
+  background: var(--status-success);
+}
+
+.prediction-badge--loss {
+  background: var(--status-danger);
+  color: #ffffff;
+}
+
+.prediction-badge--push {
+  background: var(--status-warning);
+}
+
+.road-empty {
+  display: grid;
+  min-height: 116px;
+  place-items: center;
+  padding: 20px;
+  background: var(--bg-base);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .road-grid-container--scrollable {
+    scroll-behavior: auto;
+  }
+}
