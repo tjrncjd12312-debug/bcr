@@ -44,12 +44,13 @@ export function getRoomStatusChip(
 
     switch (autoState.customStrategyStatus) {
       case 'pending':
+        // brief(모자이크)도 한글로 — 'S2-1*' 같은 약어는 읽을 수 없다
         return brief
-          ? { text: `S${step}*`, tone: 'pending' }
+          ? { text: `${step} 결과 대기`, tone: 'pending' }
           : { text: `조건전략 ${stage}단계 ${attempt}차 · 결과대기`, tone: 'pending' }
       case 'ready':
         return brief
-          ? { text: `S${step}`, tone: 'betting' }
+          ? { text: `${step} 배팅 준비`, tone: 'betting' }
           : { text: `조건전략 ${stage}단계 ${attempt}차 · 배팅준비`, tone: 'betting' }
       case 'waiting_trigger':
         return { text: brief ? '트리거' : '진입 트리거 대기', tone: 'observing' }
@@ -67,17 +68,17 @@ export function getRoomStatusChip(
   if (waitingForResult) {
     if (martinLevel > 0) {
       return brief
-        ? { text: `${martinLevel + 1}단*`, tone: 'martin' }
-        : { text: `마틴 ${martinLevel + 1} · 결과대기`, tone: 'martin' }
+        ? { text: `마틴 ${martinLevel + 1} 대기`, tone: 'martin' }
+        : { text: `마틴 ${martinLevel + 1}단계 대기`, tone: 'martin' }
     }
     return brief
-      ? { text: '대기*', tone: 'pending' }
-      : { text: '결과대기', tone: 'pending' }
+      ? { text: '결과 대기', tone: 'pending' }
+      : { text: '결과 대기', tone: 'pending' }
   }
 
   if (martinLevel > 0) {
     return brief
-      ? { text: `${martinLevel + 1}단`, tone: 'martin' }
+      ? { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }
       : { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }
   }
 

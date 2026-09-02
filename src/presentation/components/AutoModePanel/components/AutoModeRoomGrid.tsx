@@ -3,7 +3,7 @@
 import { useMemo } from 'react'
 import type { Room, RoomPredictionState, RoomFilterType, RoomSortType, SortDirection } from '../../../../domain/entities'
 import type { RoomBettingState, AutoModeSettings } from '../../../../application/services/AutoModeService'
-import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel, compactAmount } from '../utils/autoModeStatus'
+import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel } from '../utils/autoModeStatus'
 import '../AutoModePanel.css'
 
 type RoomBetStatus = 'pending' | 'win' | 'loss' | 'tie' | 'failed' | 'pass'
@@ -288,12 +288,8 @@ function AutoModeRoomCard({
     return betLogs.reduce((sum, log) => sum + (log.profit || 0), 0)
   }, [betLogs])
 
-  // Timer Circle Calculation
-  const radius = 10
-  const circumference = 2 * Math.PI * radius
-  const maxTime = 20 // 기준 시간 20초
-  const progress = Math.min(1, Math.max(0, timer / maxTime))
-  const dashoffset = circumference * (1 - progress)
+  // 남은 시간은 링 대신 글자 알약으로(가독성). 5초 이하 빨강, 10초 이하 주황
+  const timerTone = timer <= 5 ? 'urgent' : timer <= 10 ? 'warning' : ''
 
   // Status Classes
   let statusClass = 'idle'
@@ -356,61 +352,36 @@ function AutoModeRoomCard({
   return (
     <div className={`auto-mode__room-card ${statusClass} ${isFlashing ? 'flashing' : ''} ${isBetting ? 'betting' : ''}`}>
 
-      {/* 1. Header */}
+      {/* 1. Header — 1행: 방 이름(항상 다 보이게) + 남은 시간 / 2행: 상태 칩 + 진입 근거 */}
       <div className="auto-mode__room-header">
-        <div className="auto-mode__room-header-left">
+        <div className="auto-mode__room-title-row">
           <div className={`auto-mode__status-dot-indicator ${statusClass}`} />
-          <div className="auto-mode__room-name">{room.koreanName || room.name}</div>
+          <div className="auto-mode__room-name" title={room.koreanName || room.name}>{room.koreanName || room.name}</div>
+          {timer > 0 && (
+            <span className={`auto-mode__timer-pill ${timerTone}`} aria-label={`배팅 마감까지 ${timer}초`}>
+              {timer}초
+            </span>
+          )}
+        </div>
+        <div className="auto-mode__room-chips">
           <span className={`auto-status-chip ${statusChip.tone}`}>{statusChip.text}</span>
+          {filterLabel && (
+            <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`} title="이 방이 배팅 대상에 들어온 이유">{filterLabel}</span>
+          )}
         </div>
-
-        {/* Timer Ring */}
-        {timer > 0 && (
-          <div className="auto-mode__timer-ring-wrapper">
-            <svg className="auto-mode__timer-svg" width="24" height="24">
-              <circle
-                className="auto-mode__timer-circle-bg"
-                strokeWidth="2"
-                fill="transparent"
-                r={radius}
-                cx="12"
-                cy="12"
-              />
-              <circle
-                className={`auto-mode__timer-circle ${timer <= 5 ? 'urgent' : ''}`}
-                strokeWidth="2"
-                fill="transparent"
-                r={radius}
-                cx="12"
-                cy="12"
-                strokeDasharray={circumference}
-                strokeDashoffset={dashoffset}
-              />
-            </svg>
-            <span className="auto-mode__timer-text">{timer}</span>
-          </div>
-        )}
       </div>
-
-      {/* 1.5. Filter Reason — 왜 이 방이 풀에 들어왔는지 */}
-      {filterLabel && (
-        <div className="auto-mode__room-meta">
-          <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`}>{filterLabel}</span>
-        </div>
-      )}
 
       {/* 2. Main Game Area */}
       <div className="auto-mode__room-game-area">
 
-        {/* Betting Overlay */}
+        {/* 배팅 중 배너 — 점수 영역을 덮지 않고 그 위에 한 줄로(무엇을 얼마 걸었는지) */}
         {isBetting && betBadgeType && (
-          <div className="auto-mode__bet-action-overlay">
-            <div className={`auto-mode__bet-action-badge ${betBadgeType}`}>
-              배팅 {activePrediction === 'B' ? '뱅커' : activePrediction === 'P' ? '플레이어' : activePrediction}
-            </div>
-            <div className="auto-mode__bet-action-amount">
-              {currentBetAmount.toLocaleString()}원
-            </div>
+          <div className={`auto-mode__bet-banner ${betBadgeType}`} role="status">
+            <span className="auto-mode__bet-banner-label">배팅 중</span>
+            <strong className="auto-mode__bet-banner-side">
+              {activePrediction === 'B' ? '뱅커' : activePrediction === 'P' ? '플레이어' : '타이'}
+            </strong>
+            <span className="auto-mode__bet-banner-amount">{currentBetAmount.toLocaleString()}원</span>
           </div>
         )}
 
@@ -453,11 +424,11 @@ function AutoModeRoomCard({
         <div className="auto-mode__score-display">
           <div className="auto-mode__score-item player">
             <span className="auto-mode__score-label">플레이어</span>
-            <span className="auto-mode__score-value">{hasScore ? playerScore : '-'}</span>
+            <span className="auto-mode__score-value">{hasScore ? playerScore : '—'}</span>
           </div>
           <div className="auto-mode__score-divider" />
           <div className="auto-mode__score-item banker">
-            <span className="auto-mode__score-value">{hasScore ? bankerScore : '-'}</span>
+            <span className="auto-mode__score-value">{hasScore ? bankerScore : '—'}</span>
             <span className="auto-mode__score-label">뱅커</span>
           </div>
         </div>
@@ -485,8 +456,11 @@ function AutoModeRoomCard({
 
           {/* Right: active progression */}
           <div className="auto-mode__martin-section">
-            <span className={`auto-mode__martin-label ${progressionRisk ? 'danger' : progressionWarning ? 'warning' : ''}`}>
-              진행 {progression.stepLabel}
+            <span
+              className={`auto-mode__martin-label ${progressionRisk ? 'danger' : progressionWarning ? 'warning' : ''}`}
+              title={progression.strategyLabel}
+            >
+              {progression.stepLabel} / {progression.maxStage}단계
             </span>
             <div className="auto-mode__martin-gauge">
               {Array.from({ length: progression.maxStage }).map((_, idx) => (
@@ -500,10 +474,10 @@ function AutoModeRoomCard({
         </div>
       </div>
 
-      {/* 3. Footer: Bead Road + Info Bar */}
+      {/* 3. Footer: 최근 기록(오른쪽이 최신) + 이 방 승패 + 마지막 결과 */}
       <div className="auto-mode__room-footer">
-        <div className="auto-mode__mini-history">
-          {room.history.slice(0, 15).reverse().map((h, i) => (
+        <div className="auto-mode__mini-history" aria-label="최근 결과, 오른쪽이 최신">
+          {room.history.slice(0, 14).reverse().map((h, i) => (
             <div
               key={i}
               className={`auto-mode__history-bar ${h.winner.toLowerCase()}`}
@@ -511,32 +485,14 @@ function AutoModeRoomCard({
             />
           ))}
         </div>
+        <span className="auto-mode__room-wl">
+          {autoState?.totalWins || 0}승 {autoState?.totalLosses || 0}패
+        </span>
         {lastGameLabel && (
           <div className={`auto-mode__last-game-result ${lastGameClass}`}>
             {lastGameLabel}
           </div>
         )}
-      </div>
-
-      {/* 4. 실행 요약: 방향·금액·진행·승패 */}
-      <div className="auto-mode__room-card-footer">
-        <div className="auto-mode__room-card-footer-left">
-          {prediction ? (
-            <span className={`auto-mode__room-card-footer-pred ${prediction === 'B' ? 'banker' : prediction === 'P' ? 'player' : 'tie'}`}>
-            {prediction === 'B' ? '뱅커' : prediction === 'P' ? '플레이어' : '타이'} {compactAmount(currentBetAmount)}
-            </span>
-          ) : (
-            <span className="auto-mode__room-card-footer-pred idle">대기</span>
-          )}
-        </div>
-        <div className="auto-mode__room-card-footer-info">
-          <span className={`auto-mode__room-card-footer-martin ${!progressionWarning ? 'safe' : progressionRisk ? 'danger' : 'warn'}`}>
-            {progression.compactStepLabel}
-          </span>
-          <span className="auto-mode__room-card-footer-wl">
-            {autoState?.totalWins || 0}승 {autoState?.totalLosses || 0}패
-          </span>
-        </div>
       </div>
     </div>
   )

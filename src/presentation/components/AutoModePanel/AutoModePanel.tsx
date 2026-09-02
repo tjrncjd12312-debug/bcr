@@ -107,7 +107,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
   const roomStates = gameRoomStates
 
   // Toast notifications (replaces window.alert popups)
-  const { showSuccess, showInfo } = useError()
+  const { showSuccess, showInfo, showWarning } = useError()
 
   // State
   const [showSettings, setShowSettings] = useState(false)
@@ -735,10 +735,11 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
     if (!enabled) {
       console.log(`[AutoModePanel] 🎮 handleToggle - 시작 시도, selectedRooms: ${selectedRoomIds.size}개, filteredRooms: ${filteredBettingRoomIds.length}개, pattern: ${activeFilters.length > 0 ? activeFilters[0] : 'all'}`)
       if (filteredBettingRoomIds.length === 0) {
+        // 네이티브 alert는 화면을 멈추고 글자도 작다 → 앱 토스트로 통일
         if (activeFilters.length === 0) {
-          alert('베팅할 방을 먼저 선택하거나 필터를 선택해 주세요.')
+          showWarning('배팅할 방을 먼저 선택하거나 필터를 골라 주세요.')
         } else {
-          alert('현재 필터 조건에 맞는 방이 없습니다.\n\n필터 기준을 조정하거나 방 선택 범위를 확인해 주세요.')
+          showWarning('현재 필터 조건에 맞는 방이 없습니다. 필터 기준을 조정하거나 방 선택 범위를 확인해 주세요.')
         }
         return
       }
@@ -749,7 +750,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
       addHistoryLog('-', '오토 배팅 정지', 'info')
     }
     toggle(realBalance ?? undefined)
-  }, [toggle, enabled, addHistoryLog, selectedRoomIds.size, activeFilters, getCurrentFilterLabel, filteredBettingRoomIds.length, realBalance])
+  }, [toggle, enabled, addHistoryLog, selectedRoomIds.size, activeFilters, getCurrentFilterLabel, filteredBettingRoomIds.length, realBalance, showWarning])
 
   // 전역 상태 스트립 정보
   const getGlobalStatusInfo = () => {
@@ -817,7 +818,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                 <>
                   <span className="status-divider">·</span>
                   <div className="status-timer">
-                    <Clock size={9} />
+                    <Clock size={14} />
                     <span>{duration}</span>
                   </div>
                 </>
@@ -976,29 +977,31 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
             <div className="auto-mode__header-money-label">실시간 세션 손익</div>
             <div className="auto-mode__header-money-value">
               {sessionProfit >= 0 ? '+' : '-'}{animatedSessionProfit.toLocaleString()}원
+            </div>
+
+            {/* 보조 줄: 수익률(글자) + 스파크라인(그림). 값 위에 겹치지 않게 별도 행 */}
+            <div className="auto-mode__header-money-sub">
               <span className={`auto-mode__header-money-percent ${autoMode.totalBetAmount > 0 ? (sessionProfit >= 0 ? 'positive' : 'negative') : ''}`}>
                 수익률 {autoMode.totalBetAmount > 0
                   ? `${sessionProfit >= 0 ? '+' : ''}${((sessionProfit / autoMode.totalBetAmount) * 100).toFixed(1)}%`
                   : '0.0%'}
               </span>
+              {settings.isVirtualMode && balanceHistory.length >= 2 && (
+                <div className="auto-mode__header-sparkline" aria-hidden="true">
+                  <svg width="120" height="18" viewBox="0 0 120 30" preserveAspectRatio="none" style={{ overflow: 'visible' }}>
+                    <path
+                      d={sparklinePath}
+                      fill="none"
+                      stroke={sessionProfit >= 0 ? '#4ade80' : '#ff4b4b'}
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="sparkline-path"
+                    />
+                  </svg>
+                </div>
+              )}
             </div>
-
-            {/* Sparkline Visual - Simple */}
-            {settings.isVirtualMode && balanceHistory.length >= 2 && (
-              <div className="auto-mode__header-sparkline">
-                <svg width="120" height="30" viewBox="0 0 120 30" style={{ overflow: 'visible' }}>
-                  <path
-                    d={sparklinePath}
-                    fill="none"
-                    stroke={sessionProfit >= 0 ? '#4ade80' : '#ff4b4b'}
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="sparkline-path"
-                  />
-                </svg>
-              </div>
-            )}
           </div>
 
           {/* Active Bet Pod */}
@@ -1094,8 +1097,15 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
         (!isConnected && rooms.size === 0) ? (
           <main className="auto-mode__empty">
             <div className="auto-mode__empty-content">
-              {(status === 'launching' || status === 'monitoring') && (
-                <div className="auto-mode__empty-spinner" />
+              {(status === 'launching' || status === 'monitoring') ? (
+                <>
+                  <div className="auto-mode__empty-spinner" />
+                  <p>{status === 'launching' ? '브라우저를 여는 중입니다…' : '카지노 연결을 기다리는 중입니다…'}</p>
+                </>
+              ) : status === 'error' ? (
+                <p>연결에 실패했습니다. 오른쪽 위 <strong>재연결</strong>을 눌러 다시 시도하세요.</p>
+              ) : (
+                <p>아직 연결되지 않았습니다. 오른쪽 위 <strong>연결 시작</strong>을 누르면 방 목록을 불러옵니다.</p>
               )}
             </div>
           </main>
@@ -1109,78 +1119,68 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
           </main>
         ) : (
           <div className="auto-mode__content">
+            {/* 운영 바 — 한 줄: [보기 선택] [현황] [정렬]. 설명문은 버튼 title로 이동(가독성: 글자 수 줄이고 크기 키움) */}
             <section className="auto-mode__workspace-bar" aria-label="자동배팅 운영 화면">
-              <div className="auto-mode__workspace-context">
-                <span>현재 운영 화면</span>
-                <strong>
-                  {viewMode === 'grid' ? '집중 관제' : viewMode === 'list' ? '전체 비교' : '밀집 감시'}
-                </strong>
-                <p>
-                  {viewMode === 'grid'
-                    ? '진행 중인 방의 배팅·단계·최근 결과를 크게 확인합니다.'
-                    : viewMode === 'list'
-                      ? '모든 방의 상태·다음 배팅·손익을 한 줄로 비교합니다.'
-                      : '많은 방의 이상 상태와 결과 대기를 한눈에 감시합니다.'}
-                </p>
-              </div>
-
               <div className="auto-mode__workspace-views" role="group" aria-label="화면 보기 선택">
                 <button
                   className={viewMode === 'grid' ? 'active' : ''}
                   onClick={() => setViewMode('grid')}
                   aria-pressed={viewMode === 'grid'}
+                  title="진행 중인 방의 배팅·단계·최근 결과를 크게 확인합니다."
                 >
-                  <LayoutGrid size={17} />
-                  <span><strong>집중 관제</strong><small>진행 방 크게</small></span>
+                  <LayoutGrid size={18} />
+                  <span>집중 관제</span>
                 </button>
                 <button
                   className={viewMode === 'list' ? 'active' : ''}
                   onClick={() => setViewMode('list')}
                   aria-pressed={viewMode === 'list'}
+                  title="모든 방의 상태·다음 배팅·손익을 한 줄로 비교합니다."
                 >
-                  <List size={17} />
-                  <span><strong>전체 비교</strong><small>상태·손익 정렬</small></span>
+                  <List size={18} />
+                  <span>전체 비교</span>
                 </button>
                 <button
                   className={viewMode === 'mosaic' ? 'active' : ''}
                   onClick={() => setViewMode('mosaic')}
                   aria-pressed={viewMode === 'mosaic'}
+                  title="많은 방의 이상 상태와 결과 대기를 한눈에 감시합니다."
                 >
-                  <LayoutTemplate size={17} />
-                  <span><strong>밀집 감시</strong><small>최대 방 스캔</small></span>
+                  <LayoutTemplate size={18} />
+                  <span>밀집 감시</span>
                 </button>
               </div>
 
-              <div className="auto-mode__workspace-tools">
-                <div className="auto-mode__workspace-counts" aria-label="운영 현황">
-                  <span>전체 <strong>{roomsForAutoModeDisplay.size}</strong></span>
-                  <span>대상 <strong>{filteredBettingRoomIds.length}</strong></span>
-                  <span className={currentBettingInfo.bettingRoomCount > 0 ? 'is-live' : ''}>
-                    배팅 중 <strong>{currentBettingInfo.bettingRoomCount}</strong>
-                  </span>
-                </div>
-                <div className="auto-mode__header-sort" aria-label="방 정렬">
-                  {SORT_OPTIONS.filter(opt =>
-                    ['name', 'games', 'martin', 'winRate', 'profit'].includes(opt.type)
-                  ).map(option => (
-                    <button
-                      key={option.type}
-                      className={`auto-mode__header-sort-btn ${sortType === option.type ? 'active' : ''}`}
-                      onClick={() => setSortType(option.type)}
-                      title={option.label}
-                    >
-                      {option.shortLabel}
-                    </button>
-                  ))}
+              <div className="auto-mode__workspace-counts" aria-label="운영 현황">
+                <span>전체 <strong>{roomsForAutoModeDisplay.size}</strong></span>
+                <span>대상 <strong>{filteredBettingRoomIds.length}</strong></span>
+                <span className={currentBettingInfo.bettingRoomCount > 0 ? 'is-live' : ''}>
+                  배팅 중 <strong>{currentBettingInfo.bettingRoomCount}</strong>
+                </span>
+              </div>
+
+              <div className="auto-mode__header-sort" aria-label="방 정렬">
+                <span className="auto-mode__header-sort-label">정렬</span>
+                {SORT_OPTIONS.filter(opt =>
+                  ['name', 'games', 'martin', 'winRate', 'profit'].includes(opt.type)
+                ).map(option => (
                   <button
-                    className={`auto-mode__header-sort-btn auto-mode__sort-direction ${sortDirection}`}
-                    onClick={toggleSortDirection}
-                    title={sortDirection === 'asc' ? '오름차순' : '내림차순'}
-                    aria-label={sortDirection === 'asc' ? '오름차순, 클릭하면 내림차순' : '내림차순, 클릭하면 오름차순'}
+                    key={option.type}
+                    className={`auto-mode__header-sort-btn ${sortType === option.type ? 'active' : ''}`}
+                    onClick={() => setSortType(option.type)}
+                    title={option.label}
                   >
-                    {sortDirection === 'asc' ? '↑' : '↓'}
+                    {option.shortLabel}
                   </button>
-                </div>
+                ))}
+                <button
+                  className={`auto-mode__header-sort-btn auto-mode__sort-direction ${sortDirection}`}
+                  onClick={toggleSortDirection}
+                  title={sortDirection === 'asc' ? '오름차순' : '내림차순'}
+                  aria-label={sortDirection === 'asc' ? '오름차순, 클릭하면 내림차순' : '내림차순, 클릭하면 오름차순'}
+                >
+                  {sortDirection === 'asc' ? '↑' : '↓'}
+                </button>
               </div>
             </section>
 

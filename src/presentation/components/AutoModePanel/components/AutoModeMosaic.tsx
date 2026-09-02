@@ -233,7 +233,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
         <div className={`mosaic-status-dot ${statusDotClass}`} />
         <span className="mosaic-name">{room.koreanName || room.name}</span>
         {timeLeft > 0 && (
-          <span className={`mosaic-timer-badge ${timerClass}`}>{timeLeft}</span>
+          <span className={`mosaic-timer-badge ${timerClass}`} aria-label={`배팅 마감까지 ${timeLeft}초`}>{timeLeft}초</span>
         )}
       </div>
 
@@ -250,7 +250,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
           predictionBadge === 'P' ? 'player' :
             predictionBadge === 'T' ? 'tie' : 'empty'
           }`}>
-          {predictionBadge === 'B' ? '뱅' : predictionBadge === 'P' ? '플' : predictionBadge === 'T' ? '타' : '-'}
+          {predictionBadge === 'B' ? '뱅커' : predictionBadge === 'P' ? '플레이어' : predictionBadge === 'T' ? '타이' : '—'}
         </div>
 
         <div className="mosaic-center-info">
@@ -266,8 +266,8 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
           )}
         </div>
 
-        <div className={`mosaic-martin-badge ${progressionLabelClass}`} title={progression.strategyLabel}>
-          {progression.compactStepLabel}
+        <div className={`mosaic-martin-badge ${progressionLabelClass}`} title={`${progression.strategyLabel} · ${progression.stepLabel} / ${progression.maxStage}단계`}>
+          {progression.stepLabel}
         </div>
       </div>
 
@@ -299,7 +299,7 @@ const MosaicTile: React.FC<MosaicTileProps> = ({
           <span className={`mosaic-win-rate ${winRateClass}`}>
             {winRate > 0 ? `${winRate.toFixed(0)}%` : '-'}
           </span>
-          <span className="mosaic-game-count">({roomHistory.length}G)</span>
+          <span className="mosaic-game-count">{roomHistory.length}판</span>
         </span>
       </div>
 

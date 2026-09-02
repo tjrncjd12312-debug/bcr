@@ -738,9 +738,8 @@ input[type='radio'] {
 }
 
 .auto-mode__status-strip {
-  min-height: 38px;
+  min-height: 40px;
   height: auto;
-  font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
   background: var(--bg-elevated);
@@ -777,6 +776,7 @@ input[type='radio'] {
   border-color: var(--accent-primary);
 }
 
+/* 글자 크기는 AutoModePanel.css의 --am-fs-* 체계가 단일 소스다(여기서 덮어쓰지 않음). */
 .auto-mode__pod-label,
 .auto-mode__header-money-label,
 .auto-mode__stat-label,
@@ -785,7 +785,6 @@ input[type='radio'] {
 .auto-mode__bet-label,
 .auto-mode__profit-label,
 .auto-mode__martin-label {
-  font-size: 13px;
   color: var(--text-secondary);
 }
 
@@ -795,7 +794,6 @@ input[type='radio'] {
 .auto-mode__score-value,
 .auto-mode__bet-value,
 .auto-mode__profit-amount {
-  font-size: 19px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -842,14 +840,7 @@ input[type='radio'] {
 }
 
 .auto-mode__room-name {
-  font-size: 16px;
   font-weight: 800;
-}
-
-.auto-mode__timer-text,
-.auto-mode__bet-action-amount,
-.auto-mode__profit-value {
-  font-size: 15px;
 }
 
 .auto-mode__bottom-log-title,

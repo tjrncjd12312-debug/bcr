@@ -182,22 +182,23 @@ export function AutoModeRoomList({
     }
 
     const filterLabel = getFilterShortLabel(activeFilters)
+    const sortMark = (type: RoomSortType) =>
+        sortType === type ? <span className="sort-arrow" aria-hidden="true">{sortDirection === 'asc' ? '▲' : '▼'}</span> : null
+    const headerClass = (type: RoomSortType, base: string) =>
+        `${base} sortable ${sortType === type ? 'is-active' : ''}`
 
     return (
         <div className="auto-mode__list-container">
-            {/* Table Header */}
-            <div className="auto-mode__list-header">
-                <div className="col-room sortable" onClick={() => setSortType('name')}>방 이름</div>
+            {/* Table Header — 행과 같은 그리드 열을 공유(열 겹침 방지). '진입 근거'는 방 이름 아래 칩으로 이동 */}
+            <div className="auto-mode__list-header" role="row">
+                <div className={headerClass('name', 'col-room')} onClick={() => setSortType('name')}>방 이름{sortMark('name')}</div>
                 <div className="col-status">상태</div>
-                <div className="col-timer sortable" onClick={() => setSortType('recent')}>타이머</div>
-                <div className="col-stats sortable" onClick={() => setSortType('winRate')}>승률</div>
+                <div className={headerClass('recent', 'col-timer')} onClick={() => setSortType('recent')}>남은 시간{sortMark('recent')}</div>
+                <div className={headerClass('winRate', 'col-stats')} onClick={() => setSortType('winRate')}>적중률{sortMark('winRate')}</div>
                 <div className="col-trend">최근 기록</div>
-                <div className="col-filter">진입 근거</div>
-                <div className="col-strategy sortable" onClick={() => setSortType('martin')}>
-                    진행
-                </div>
-                <div className="col-predict">현재 / 다음 배팅</div>
-                <div className="col-profit">손익</div>
+                <div className={headerClass('martin', 'col-strategy')} onClick={() => setSortType('martin')}>진행 단계{sortMark('martin')}</div>
+                <div className="col-predict">배팅 (현재 / 다음)</div>
+                <div className={headerClass('profit', 'col-profit')} onClick={() => setSortType('profit')}>손익{sortMark('profit')}</div>
             </div>
 
             {/* Table Body */}
@@ -272,53 +273,59 @@ function AutoModeListRow({
     // Last Profit from logs
     const sessionProfit = betLogs.reduce((sum, log) => sum + log.profit, 0);
 
-    // Trend (Right to Left)
-    const recentHistory = room.history.slice(0, 10);
+    // 최근 기록: 오래된 → 최신(오른쪽 끝이 최신). 다른 뷰(카드·모자이크)·디자인시스템 MiniBigRoad와 같은 방향.
+    const recentHistory = room.history.slice(0, 12).reverse();
 
+    // 적중률은 예측 표본이 있을 때만 숫자로, 없으면 '—' (0.0%로 오해하지 않게)
+    const predictionTotal = predictionState?.stats?.total ?? 0
+    const winRateText = predictionTotal > 0 ? `${winRate.toFixed(0)}%` : '—'
 
+    // 방향은 항상 한글로(원문 B/P/T 노출 금지 — 디자인시스템 규칙)
+    const directionLabel = (d: 'B' | 'P' | 'T') => (d === 'B' ? '뱅커' : d === 'P' ? '플레이어' : '타이')
+    const profitText = `${sessionProfit > 0 ? '+' : ''}${sessionProfit.toLocaleString()}`
 
     return (
-        <div className={`auto-mode__list-row ${isFlashing ? 'flashing' : ''} ${isBetting ? 'betting' : ''} ${!isEnabled ? 'disabled' : ''}`}>
-            {/* 1. Room Name */}
+        <div className={`auto-mode__list-row ${isFlashing ? 'flashing' : ''} ${isBetting ? 'betting' : ''} ${!isEnabled ? 'disabled' : ''}`} role="row">
+            {/* 1. 방 이름 + 메타(게임 수 · 진입 근거) */}
             <div className="col-room">
-                <span className="room-name">{room.koreanName || room.name}</span>
-                <span className="room-id">{room.history.length || 0}게임 · #{room.id.slice(-4)}</span>
+                <span className="room-name" title={room.koreanName || room.name}>{room.koreanName || room.name}</span>
+                <span className="room-meta">
+                    <span className="room-id">{room.history.length || 0}게임</span>
+                    {filterLabel && (
+                        <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`} title="이 방이 배팅 대상에 들어온 이유">
+                            {filterLabel}
+                        </span>
+                    )}
+                </span>
             </div>
 
-            {/* 2. Status */}
+            {/* 2. 상태 */}
             <div className="col-status">
-                <span className={`auto-status-chip compact ${statusChip.tone}`}>{statusChip.text}</span>
+                <span className={`auto-status-chip ${statusChip.tone}`}>{statusChip.text}</span>
             </div>
 
-            {/* 3. Timer */}
+            {/* 3. 남은 시간 */}
             <div className="col-timer">
-                {timer > 0 && <span className={`timer-value ${timerClass}`}>{timer}s</span>}
+                {timer > 0 && <span className={`timer-value ${timerClass}`}>{timer}초</span>}
             </div>
 
-            {/* 4. Win Rate */}
+            {/* 4. 적중률 */}
             <div className="col-stats">
-                <span className="win-rate">{winRate.toFixed(1)}%</span>
+                <span className={`win-rate ${predictionTotal > 0 ? '' : 'empty'}`}>{winRateText}</span>
             </div>
 
-            {/* 5. Trend (Bead Plate Mini) */}
+            {/* 5. 최근 기록 */}
             <div className="col-trend">
-                <div className="mini-bead-plate">
-                    {recentHistory.map((h, i) => (
-                        <div key={i} className={`bead ${h.winner.toLowerCase()}`} />
-                    ))}
+                <div className="mini-bead-plate" aria-label="최근 결과, 오른쪽이 최신">
+                    {recentHistory.length > 0 ? recentHistory.map((h, i) => (
+                        <div key={i} className={`bead ${h.winner.toLowerCase()}`} title={directionLabel(h.winner)} />
+                    )) : (
+                        <span className="bead-empty">기록 없음</span>
+                    )}
                 </div>
             </div>
 
-            {/* 6. Filter Match — 왜 풀에 들어왔는지 */}
-            <div className="col-filter">
-                {filterLabel ? (
-                    <span className={`auto-filter-reason ${isTieFilter ? 'tie-tone' : ''}`}>{filterLabel}</span>
-                ) : (
-                    <span className="predict-none">-</span>
-                )}
-            </div>
-
-            {/* 7. Active progression */}
+            {/* 6. 진행 단계 */}
             <div className="col-strategy">
                 <div className="martin-bar-container">
                     <div
@@ -326,40 +333,37 @@ function AutoModeListRow({
                         style={{ width: `${progression.progressPercent}%` }}
                     ></div>
                 </div>
-                <span className="martin-text" title={progression.strategyLabel}>
-                    {progression.stepLabel} / 총 {progression.maxStage}단계
+                <span className={`martin-text ${progressionRisk ? 'danger' : ''}`} title={progression.strategyLabel}>
+                    {progression.stepLabel} / {progression.maxStage}단계
                 </span>
             </div>
 
-            {/* 8. Next Bet — 항상 표시: 배팅 중이면 실제 금액·예측, 아이들이면 다음 배팅금액·방향 */}
+            {/* 7. 배팅 — 배팅 중이면 방향 칩 + 금액, 대기 중이면 다음 방향·금액 */}
             <div className="col-predict">
                 {isBetting && activePrediction ? (
-                    <div className="predict-group">
+                    <div className="predict-group" title={patternName || undefined}>
                         <div className={`predict-badge ${activePrediction === 'B' ? 'banker' : activePrediction === 'P' ? 'player' : 'tie'}`}>
-                            {activePrediction === 'B' ? '뱅커' : activePrediction === 'P' ? '플레이어' : '타이'}
+                            {directionLabel(activePrediction)}
                         </div>
-                        <div className="predict-info">
-                            {betAmount > 0 && <span className="bet-amt">{betAmount.toLocaleString()}</span>}
-                            {patternName && <span className="pattern-tag">{patternName}</span>}
-                        </div>
+                        {betAmount > 0 && <span className="bet-amt">{betAmount.toLocaleString()}원</span>}
                     </div>
                 ) : isAutoEnabled && isEnabled ? (
                     <span className="auto-next-bet">
                         <span className="auto-next-bet__label">다음</span>
                         {nextDirection && (
-                            <span className={`auto-next-bet__dir ${nextDirection.toLowerCase()}`}>{nextDirection}</span>
+                            <span className={`auto-next-bet__dir ${nextDirection.toLowerCase()}`}>{directionLabel(nextDirection)}</span>
                         )}
-                        <span>{progression.amount.toLocaleString()}</span>
+                        <span>{progression.amount.toLocaleString()}원</span>
                     </span>
                 ) : (
-                    <span className="predict-none">-</span>
+                    <span className="predict-none">—</span>
                 )}
             </div>
 
-            {/* 9. Profit */}
+            {/* 8. 손익 */}
             <div className="col-profit">
                 <span className={`profit-value ${sessionProfit > 0 ? 'plus' : sessionProfit < 0 ? 'minus' : ''}`}>
-                    {sessionProfit.toLocaleString()}
+                    {profitText}
                 </span>
             </div>
         </div>

@@ -25,6 +25,15 @@
   --text-muted: var(--text-muted);
 
   --border: var(--border-color);
+
+  /* 자동 배팅 화면 글자 크기 체계(가독성 개선 2026-09).
+     디자인시스템(global.css --fs-*)과 같은 사다리를 쓰되, 밀도가 높은 운영 화면이라
+     보조 메타만 14px까지 허용한다. 이 아래 크기는 쓰지 않는다. */
+  --am-fs-meta: 14px;    /* 보조 메타: 게임 수·방 ID·시각·단위 */
+  --am-fs-body: 16px;    /* 기본: 칩·버튼·표 본문 */
+  --am-fs-label: 18px;   /* 방 이름·강조 라벨 */
+  --am-fs-num: 22px;     /* 금액·핵심 숫자 */
+  --am-fs-hero: 28px;    /* 배팅 배너·점수 */
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -47,16 +56,23 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 32px;
-  padding: 0 16px;
-  font-size: 10px;
-  font-weight: 800;
+  min-height: 40px;
+  padding: 0 18px;
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
   flex-shrink: 0;
-  text-transform: uppercase;
-  letter-spacing: 1px;
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.auto-mode__status-strip-label,
+.auto-mode__status-strip-message {
+  font-size: var(--am-fs-body);
+}
+
+.auto-mode__status-strip-message {
+  font-weight: 600;
 }
 
 .auto-mode__status-strip::after {
@@ -78,8 +94,8 @@
 }
 
 .auto-mode__status-strip-indicator {
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: currentColor;
   box-shadow: 0 0 12px currentColor;
@@ -140,10 +156,10 @@
 
 /* 마지막 배팅 결과 */
 .auto-mode__last-result {
-  padding: 3px 10px;
-  border-radius: 10px;
-  font-weight: 700;
-  font-size: 10px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: var(--am-fs-meta);
 }
 
 .auto-mode__last-result.win {
@@ -209,12 +225,12 @@
 
 .auto-mode__pod {
   flex: 1 1 0;
-  min-width: 100px;
-  max-width: 240px;
+  min-width: 170px;
+  max-width: 320px;
   background: var(--border-subtle);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -230,8 +246,8 @@
 }
 
 .auto-mode__pod-label {
-  font-size: 12px;
-  font-weight: 800;
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
   color: var(--text-secondary);
   /* uppercase/letter-spacing 제거 — 한글 라벨 가독성 우선(고령 사용자) */
   white-space: nowrap;
@@ -240,14 +256,15 @@
 }
 
 .auto-mode__pod-value {
-  font-size: 18px;
-  font-weight: 900;
-  letter-spacing: -0.03em;
+  font-size: var(--am-fs-num);
+  font-weight: 800;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
-  line-height: 1.1;
+  line-height: 1.15;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .auto-mode__pod.profit .auto-mode__pod-value.positive {
@@ -579,15 +596,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 10px;
+  gap: 6px;
+  height: 42px;
+  padding: 0 14px;
   background: var(--border-subtle);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   backdrop-filter: blur(10px);
@@ -617,11 +634,11 @@
 /* 1. Toggle Buttons (Virtual/Real & ON/OFF) */
 .auto-mode__mode-toggle,
 .auto-mode__toggle {
-  padding: 3px;
-  border-radius: 16px;
+  padding: 4px;
+  border-radius: 999px;
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid var(--border);
-  height: 26px;
+  height: 40px;
   gap: 0;
   /* Reset gap for custom layout */
 }
@@ -629,8 +646,8 @@
 /* Toggle Indicators */
 .auto-mode__mode-toggle-indicator,
 .auto-mode__toggle-indicator {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--text-muted);
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -639,9 +656,9 @@
 
 .auto-mode__mode-toggle-label,
 .auto-mode__toggle-label {
-  margin: 0 6px;
-  font-size: 10px;
-  font-weight: 700;
+  margin: 0 10px 0 8px;
+  font-size: var(--am-fs-body);
+  font-weight: 800;
   color: var(--text-secondary);
 }
 
@@ -922,53 +939,28 @@
 .auto-mode__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 400px;
+  grid-template-columns: 1fr 380px;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
+@media (max-width: 1500px) {
+  .auto-mode__content {
+    grid-template-columns: 1fr 340px;
+  }
+}
+
+/* 운영 바 — 한 줄 구성: [보기 선택] … [현황] [정렬] */
 .auto-mode__workspace-bar {
   grid-column: 1 / -1;
   grid-row: 1;
-  display: grid;
-  grid-template-columns: minmax(250px, 1fr) auto minmax(290px, auto);
+  display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 10px 16px;
+  gap: 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-card);
-}
-
-.auto-mode__workspace-context {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: baseline;
-  gap: 3px 8px;
-  min-width: 0;
-}
-
-.auto-mode__workspace-context > span {
-  color: var(--accent-primary);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auto-mode__workspace-context > strong {
-  color: var(--text-primary);
-  font-size: 15px;
-}
-
-.auto-mode__workspace-context > p {
-  grid-column: 1 / -1;
-  margin: 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 
 .auto-mode__workspace-views {
@@ -979,19 +971,21 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-deep);
+  margin-right: auto;
 }
 
 .auto-mode__workspace-views > button {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 112px;
-  min-height: 44px;
-  padding: 6px 10px;
+  min-height: 42px;
+  padding: 0 16px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
+  font-size: var(--am-fs-body);
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -1007,51 +1001,31 @@
   color: var(--text-on-accent);
 }
 
-.auto-mode__workspace-views > button > span {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-.auto-mode__workspace-views strong {
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.auto-mode__workspace-views small {
-  margin-top: 2px;
-  font-size: 9px;
-  line-height: 1.2;
-  opacity: 0.76;
-}
-
-.auto-mode__workspace-tools {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 5px;
-}
-
 .auto-mode__workspace-counts {
   display: flex;
   gap: 6px;
 }
 
 .auto-mode__workspace-counts > span {
-  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
   border-radius: 999px;
   background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--am-fs-meta);
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .auto-mode__workspace-counts strong {
-  margin-left: 3px;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--am-fs-body);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .auto-mode__workspace-counts .is-live {
@@ -1223,32 +1197,41 @@
    ═══════════════════════════════════════════════════════════════ */
 .auto-mode__header-sort {
   display: flex;
+  align-items: center;
   gap: 2px;
   background: var(--border-subtle);
-  padding: 2px;
-  border-radius: 6px;
+  padding: 3px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.auto-mode__header-sort-label {
+  padding: 0 8px 0 10px;
+  color: var(--text-secondary);
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
 }
 
 .auto-mode__header-sort-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 8px;
+  min-height: 34px;
+  padding: 0 12px;
   background: transparent;
   border: none;
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .auto-mode__header-sort-btn:hover {
-  background: var(--border-subtle);
-  color: var(--text-secondary);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .auto-mode__header-sort-btn.active {
@@ -1259,8 +1242,9 @@
 
 /* Sort Direction Toggle */
 .auto-mode__sort-direction {
-  min-width: 28px;
-  padding: 3px 6px;
+  min-width: 34px;
+  padding: 0 8px;
+  font-size: var(--am-fs-body);
 }
 
 .auto-mode__sort-direction.asc {
@@ -1361,15 +1345,24 @@
   background: var(--border-subtle);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  padding: 12px 16px;
-  min-width: 160px;
-  max-width: 280px;
+  padding: 10px 14px;
+  min-width: 200px;
+  max-width: 340px;
   flex: 1 1 0;
   position: relative;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 값 아래 보조 줄: 수익률(글자) + 스파크라인(그림) — 서로 겹치지 않게 좌우 배치 */
+.auto-mode__header-money-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .auto-mode__header-money-pod.positive {
@@ -1381,38 +1374,50 @@
 }
 
 .auto-mode__header-money-label {
-  font-size: 13px;
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
   color: var(--text-secondary);
   /* uppercase/letter-spacing 제거 — 한글 라벨('가상 잔고','세션 손익')에 불필요하고 가독성만 떨어뜨림 */
   white-space: nowrap;
 }
 
 .auto-mode__header-money-value {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: var(--am-fs-num);
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
   flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.auto-mode__header-money-pod.positive .auto-mode__header-money-value {
+  color: var(--status-success);
+}
+
+.auto-mode__header-money-pod.negative .auto-mode__header-money-value {
+  color: var(--status-danger);
 }
 
 .auto-mode__header-money-percent {
-  font-size: 12px;
-  font-weight: 500;
-  opacity: 0.6;
+  font-size: var(--am-fs-meta);
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
+/* 스파크라인은 글자 위를 덮지 않도록 흐름 안(값 아래)에 얇게 둔다 */
 .auto-mode__header-sparkline {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  height: 30px;
+  height: 18px;
   width: 120px;
-  opacity: 0.5;
+  opacity: 0.55;
   pointer-events: none;
-  mask-image: linear-gradient(to left, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+}
+
+.auto-mode__header-sparkline svg {
+  width: 120px;
+  height: 18px;
 }
 
 .auto-mode__history-entry {
@@ -1566,8 +1571,8 @@
    ═══════════════════════════════════════════════════════════════ */
 .auto-mode__room-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 14px;
   padding-bottom: 20px;
 }
 
@@ -1577,8 +1582,9 @@
   align-items: center;
   justify-content: center;
   height: 400px;
-  color: var(--text-muted);
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: var(--am-fs-label);
+  font-weight: 700;
 }
 
 .auto-mode__room-empty--center {
@@ -1587,8 +1593,9 @@
 
 .auto-mode__room-empty-hint {
   margin-top: 8px;
-  font-size: 12px;
-  opacity: 0.7;
+  font-size: var(--am-fs-body);
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 /* Room Card container */
@@ -1600,7 +1607,7 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
-  height: 220px;
+  min-height: 240px;
   transition: all 0.2s ease;
 }
 
@@ -1657,21 +1664,35 @@
   }
 }
 
-/* 1. Header Section: Name + Status Dot + Timer Ring */
+/* 1. Header Section: 1행 이름+남은 시간, 2행 상태 칩(+진입 근거) — 이름이 잘리지 않게 */
 .auto-mode__room-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 14px 10px;
   border-bottom: 1px solid var(--border-subtle);
   background: rgba(0, 0, 0, 0.2);
 }
 
+.auto-mode__room-title-row,
 .auto-mode__room-header-left {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 1;
+  min-width: 0;
+}
+
+.auto-mode__room-title-row .auto-mode__room-name {
+  flex: 1;
+}
+
+.auto-mode__room-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1702,12 +1723,13 @@
 }
 
 .auto-mode__room-name {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--am-fs-label);
+  font-weight: 800;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* Timer Ring */
@@ -1778,11 +1800,11 @@
 }
 
 .auto-mode__bet-action-badge {
-  font-size: 18px;
+  font-size: var(--am-fs-num);
   font-weight: 800;
   padding: 8px 24px;
-  border-radius: 8px;
-  letter-spacing: 1px;
+  border-radius: 10px;
+  letter-spacing: 0;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
   margin-bottom: 4px;
 }
@@ -1806,11 +1828,12 @@
 }
 
 .auto-mode__bet-action-amount {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--am-fs-body);
+  font-weight: 800;
   color: white;
   text-shadow: 0 1px 4px black;
   margin-top: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Score Display (Simplified) */
@@ -1830,14 +1853,14 @@
 }
 
 .auto-mode__score-label {
-  font-size: 10px;
+  font-size: var(--am-fs-meta);
   font-weight: 700;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
 .auto-mode__score-value {
-  font-size: 28px;
+  font-size: var(--am-fs-hero);
   font-weight: 800;
   line-height: 1;
 }
@@ -1870,16 +1893,17 @@
 }
 
 .auto-mode__bet-label {
-  font-size: 10px;
-  color: var(--text-muted);
+  font-size: var(--am-fs-meta);
+  color: var(--text-secondary);
 }
 
 .auto-mode__bet-value {
-  font-size: 15px;
+  font-size: var(--am-fs-label);
   font-weight: 800;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.3px;
   color: var(--text-primary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Center: Profit */
@@ -1904,10 +1928,11 @@
 }
 
 .auto-mode__profit-value {
-  font-size: 13px;
+  font-size: var(--am-fs-body);
   font-weight: 800;
   letter-spacing: -0.3px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .auto-mode__profit-section.positive .auto-mode__profit-value {
@@ -1928,9 +1953,9 @@
 }
 
 .auto-mode__martin-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
@@ -2018,7 +2043,7 @@
   background: var(--red);
 }
 
-/* 3. Footer: Simplified History */
+/* 3. Footer: 최근 기록(왼쪽, 좁으면 오래된 쪽부터 잘림) + 승패 + 마지막 결과 (줄바꿈 없음) */
 .auto-mode__room-footer {
   padding: 10px 14px;
   background: rgba(0, 0, 0, 0.3);
@@ -2026,18 +2051,30 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: nowrap;
+  min-height: 48px;
 }
 
 .auto-mode__mini-history {
   display: flex;
-  gap: 3px;
+  gap: 4px;
   overflow: hidden;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.auto-mode__room-footer .auto-mode__last-game-result {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .auto-mode__history-bar {
-  width: 6px;
-  height: 6px;
-  border-radius: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .auto-mode__history-bar.b {
@@ -2054,10 +2091,10 @@
 
 /* Recent Result Icon (Last Game) */
 .auto-mode__last-game-result {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-size: var(--am-fs-meta);
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
 }
 
 .auto-mode__last-game-result.win {
@@ -2134,7 +2171,7 @@
 }
 
 .auto-mode__history-header h3 {
-  font-size: 13px;
+  font-size: var(--am-fs-body);
   font-weight: 800;
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -2146,19 +2183,19 @@
 }
 
 .auto-mode__history-count {
-  font-size: 11px;
+  font-size: var(--am-fs-meta);
   font-weight: 700;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--border-subtle);
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
   flex-shrink: 0;
   white-space: nowrap;
 }
 
 .auto-mode__history-filter-toggle {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2206,20 +2243,21 @@
 }
 
 .auto-mode__history-filter-group label {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-weight: 500;
+  font-size: var(--am-fs-meta);
+  color: var(--text-secondary);
+  font-weight: 600;
 }
 
 .auto-mode__history-filter-group select {
-  padding: 4px 8px;
+  padding: 6px 10px;
+  min-height: 36px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--am-fs-meta);
   cursor: pointer;
-  min-width: 100px;
+  min-width: 120px;
 }
 
 .auto-mode__history-filter-group select:focus {
@@ -2237,13 +2275,14 @@
 }
 
 .auto-mode__history-filter-buttons button {
-  padding: 4px 8px;
+  padding: 6px 10px;
+  min-height: 34px;
   background: transparent;
   border: none;
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -2270,12 +2309,14 @@
 
 /* Filter Reset */
 .auto-mode__history-filter-reset {
-  padding: 4px 8px;
+  padding: 6px 10px;
+  min-height: 34px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: 10px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: var(--am-fs-meta);
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
   margin-left: auto;
@@ -2297,7 +2338,7 @@
 }
 
 .auto-mode__history-filter-stats .stat-item {
-  font-size: 11px;
+  font-size: var(--am-fs-meta);
   color: var(--text-secondary);
 }
 
@@ -2326,28 +2367,30 @@
   transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Global Risk Pulse Overlay */
+/* Global Risk Pulse — 깊은 마틴(4단계 이상) 경고.
+   화면 전체를 붉게 물들이던 비네트(글자 대비 저하)를 화면 테두리 띠로 낮춘다. 상태 스트립의
+   'N연패' 배지와 함께 보이는 보조 신호일 뿐이라 읽기를 방해하면 안 된다. */
 .auto-mode.risk-critical::before {
   content: '';
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 9999;
-  box-shadow: inset 0 0 100px rgba(255, 0, 0, 0.3);
+  box-shadow: inset 0 0 0 3px rgba(255, 101, 117, 0.55);
   animation: risk-pulse 2s infinite;
 }
 
 @keyframes risk-pulse {
   0% {
-    box-shadow: inset 0 0 40px rgba(255, 0, 0, 0.1);
+    box-shadow: inset 0 0 0 3px rgba(255, 101, 117, 0.25);
   }
 
   50% {
-    box-shadow: inset 0 0 120px rgba(255, 0, 0, 0.4);
+    box-shadow: inset 0 0 0 4px rgba(255, 101, 117, 0.7);
   }
 
   100% {
-    box-shadow: inset 0 0 40px rgba(255, 0, 0, 0.1);
+    box-shadow: inset 0 0 0 3px rgba(255, 101, 117, 0.25);
   }
 }
 
@@ -2719,8 +2762,8 @@
 }
 
 .auto-mode__history-empty p {
-  font-size: 13px;
-  color: var(--text-muted);
+  font-size: var(--am-fs-body);
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
@@ -2873,20 +2916,19 @@
   box-shadow: 0 0 10px rgba(75, 125, 255, 0.2);
 }
 
-/* Prediction Badge Enhancements */
-.config-label,
-.auto-mode__header-money-label {
+/* Prediction Badge Enhancements
+   (.auto-mode__header-money-label/-value는 위 '세션 손익 카드' 규칙이 단일 소스 — 여기서 10~11px로 덮어쓰던 것 제거) */
+.config-label {
   color: var(--text-muted);
   font-weight: 500;
-  font-size: 10px;
+  font-size: var(--am-fs-meta);
 }
 
-.config-value,
-.auto-mode__header-money-value {
+.config-value {
   color: var(--text-primary);
   font-weight: 700;
-  font-size: 11px;
-  font-family: 'Roboto Mono', monospace;
+  font-size: var(--am-fs-meta);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Specific Value Colors */
@@ -2908,9 +2950,9 @@
 
 /* Expected Profit (brackets) */
 .auto-mode__header-money-expected {
-  font-size: 11px;
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
   color: var(--green);
-  opacity: 0.9;
   margin-left: 2px;
   white-space: nowrap;
 }
@@ -3172,11 +3214,10 @@
 
 /* Game Result Styles for Card Footer */
 .auto-mode__last-game-result {
-  font-size: 11px;
+  font-size: var(--am-fs-meta);
   font-weight: 800;
-  padding: 3px 8px;
-  border-radius: 6px;
-  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
   margin-left: auto;
 }
 
@@ -3314,17 +3355,17 @@
 .auto-mode__status-strip-content {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 10px;
+  gap: 8px;
+  font-size: var(--am-fs-body);
 }
 
 .auto-mode__status-strip-right {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  color: var(--text-muted);
-  font-weight: 500;
+  gap: 8px;
+  font-size: var(--am-fs-meta);
+  color: var(--text-secondary);
+  font-weight: 600;
   z-index: 2;
 }
 
@@ -3762,52 +3803,67 @@
 
 .auto-mode__empty-content p {
   margin-top: 16px;
-  font-size: 14px;
+  max-width: 560px;
+  font-size: var(--am-fs-label);
+  line-height: 1.5;
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.auto-mode__empty-content p strong {
+  color: var(--accent-primary);
+  font-weight: 800;
 }
 
 /* ============================================================
    AUTO-MODE STATUS CHIP — Mosaic/Grid/List 공용
    ============================================================ */
+/* 상태 칩 — 색 + 한글 이중 표기, 최소 14px */
 .auto-status-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 6px;
+  padding: 4px 12px;
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.4;
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
+  line-height: 1.3;
   white-space: nowrap;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-muted);
+  border: 1.5px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.auto-status-chip.idle { color: var(--text-muted); border-color: rgba(255, 255, 255, 0.08); }
-.auto-status-chip.observing { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 35%, transparent); background: color-mix(in srgb, var(--blue) 10%, transparent); }
-.auto-status-chip.betting { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 35%, transparent); background: color-mix(in srgb, var(--gold) 12%, transparent); }
-.auto-status-chip.pending { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 35%, transparent); background: color-mix(in srgb, var(--gold) 8%, transparent); }
-.auto-status-chip.martin { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); }
-.auto-status-chip.disabled { color: var(--text-muted); opacity: 0.6; }
+.auto-status-chip.idle { color: var(--text-secondary); border-color: var(--border-color); }
+.auto-status-chip.observing { color: var(--status-info); border-color: color-mix(in srgb, var(--status-info) 40%, transparent); background: var(--status-info-bg); }
+.auto-status-chip.betting { color: var(--status-success); border-color: color-mix(in srgb, var(--status-success) 40%, transparent); background: var(--status-success-bg); }
+.auto-status-chip.pending { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); background: color-mix(in srgb, var(--gold) 10%, transparent); }
+.auto-status-chip.martin { color: var(--status-warning); border-color: color-mix(in srgb, var(--status-warning) 45%, transparent); background: var(--status-warning-bg); }
+.auto-status-chip.disabled { color: var(--text-muted); border-color: var(--border-subtle); }
 
 .auto-status-chip.compact {
-  padding: 1px 6px;
-  font-size: 10px;
+  padding: 3px 10px;
+  font-size: var(--am-fs-meta);
 }
 
 /* 필터 매칭 이유 라벨 (모든 뷰 공용) */
 .auto-filter-reason {
   display: inline-flex;
   align-items: center;
-  font-size: 10.5px;
-  color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  padding: 1px 6px;
+  font-size: var(--am-fs-meta);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 2px 8px;
   white-space: nowrap;
-  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  line-height: 1.4;
 }
 .auto-filter-reason.tie-tone {
   color: color-mix(in srgb, var(--gold) 80%, white);
@@ -3819,15 +3875,15 @@
 .auto-next-bet {
   display: inline-flex;
   align-items: baseline;
-  gap: 3px;
-  font-size: 11px;
-  font-weight: 600;
+  gap: 6px;
+  font-size: var(--am-fs-body);
+  font-weight: 700;
   color: var(--text-primary);
 }
 .auto-next-bet .auto-next-bet__label {
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: var(--am-fs-meta);
 }
 .auto-next-bet .auto-next-bet__dir {
   font-weight: 700;
@@ -3836,3 +3892,129 @@
 .auto-next-bet .auto-next-bet__dir.b { color: var(--red); }
 .auto-next-bet .auto-next-bet__dir.p { color: var(--blue); }
 .auto-next-bet .auto-next-bet__dir.t { color: var(--gold); }
+
+/* ============================================================
+   가독성 개선(2026-09) — 카드 뷰 보조 요소
+   ============================================================ */
+/* 남은 시간 알약(링 대체) */
+.auto-mode__timer-pill {
+  flex-shrink: 0;
+  min-width: 52px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: var(--am-fs-meta);
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-mode__timer-pill.warning {
+  color: var(--status-warning);
+  background: var(--status-warning-bg);
+}
+
+.auto-mode__timer-pill.urgent {
+  color: var(--status-danger);
+  background: var(--status-danger-bg);
+}
+
+/* 배팅 중 배너 — 흐름 안에 한 줄, 점수 영역을 덮지 않음 */
+.auto-mode__bet-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1.5px solid transparent;
+  background: var(--bg-surface);
+}
+
+.auto-mode__bet-banner.b {
+  background: var(--banker-bg);
+  border-color: var(--border-banker);
+}
+
+.auto-mode__bet-banner.p {
+  background: var(--player-bg);
+  border-color: var(--border-player);
+}
+
+.auto-mode__bet-banner.t {
+  background: var(--tie-bg);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.auto-mode__bet-banner-label {
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.auto-mode__bet-banner-side {
+  font-size: var(--am-fs-label);
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.auto-mode__bet-banner.b .auto-mode__bet-banner-side { color: var(--banker-light); }
+.auto-mode__bet-banner.p .auto-mode__bet-banner-side { color: var(--player-light); }
+.auto-mode__bet-banner.t .auto-mode__bet-banner-side { color: var(--tie-color); }
+
+.auto-mode__bet-banner-amount {
+  margin-left: auto;
+  font-size: var(--am-fs-label);
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 카드 푸터 승패 */
+.auto-mode__room-wl {
+  margin-left: auto;
+  font-size: var(--am-fs-meta);
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.auto-mode__room-wl + .auto-mode__last-game-result {
+  margin-left: 8px;
+}
+
+.auto-mode__room-footer {
+  gap: 10px;
+}
+
+/* 헤더: 1560px 이하에서는 금액 카드(잔고·손익·현재 배팅)를 둘째 줄 전체 폭으로 내려
+   글자를 줄이지 않고도 숫자가 잘리지 않게 한다. */
+@media (max-width: 1560px) {
+  .auto-mode__header {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  .auto-mode__header-center {
+    order: 1;
+  }
+
+  .auto-mode__header-actions {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .auto-mode__financial-pods {
+    order: 3;
+    flex: 1 1 100%;
+    margin: 0;
+    justify-content: flex-start;
+  }
+
+  .auto-mode__pod,
+  .auto-mode__header-money-pod {
+    max-width: none;
+  }
+}
