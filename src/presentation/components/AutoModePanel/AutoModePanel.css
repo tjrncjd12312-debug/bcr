@@ -4018,3 +4018,33 @@
     max-width: none;
   }
 }
+
+/* 💰 실잔액 갱신 플래시 — 서버 값이 바뀐 순간을 눈에 띄게 */
+.auto-mode__pod-value.flash-up { animation: bcr-balance-flash-up 1.2s ease-out; }
+.auto-mode__pod-value.flash-down { animation: bcr-balance-flash-down 1.2s ease-out; }
+@keyframes bcr-balance-flash-up {
+  0% { color: var(--status-success); text-shadow: 0 0 14px rgba(74, 222, 128, 0.75); transform: scale(1.06); }
+  100% { color: inherit; text-shadow: none; transform: scale(1); }
+}
+@keyframes bcr-balance-flash-down {
+  0% { color: var(--status-danger); text-shadow: 0 0 14px rgba(255, 75, 75, 0.75); transform: scale(1.06); }
+  100% { color: inherit; text-shadow: none; transform: scale(1); }
+}
+.auto-mode__pod-caption {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.auto-mode__pod-caption.live::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--status-success);
+  animation: bcr-live-dot 1.6s ease-in-out infinite;
+}
+@keyframes bcr-live-dot { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }

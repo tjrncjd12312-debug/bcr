@@ -4098,9 +4098,42 @@ async fn monitor_page_continuously(
                                         // Keep only the size for diagnostics.
                                         debug!("📤 [BROWSER-SENT] payload_len={}", payload.len());
 
+                                        // 🌉 브릿지: 현재 붙어 있는 멀티위젯 소켓의 송신 프레임은 암호화(binary)라 그대로는
+                                        // 파싱이 안 된다. 복호화 평문을 얻어 아래 CLIENT_* 파서(실잔액·칩 설정)에 넣는다.
+                                        // 이전엔 base64를 JSON으로 파싱하려다 조용히 실패해 브릿지 모드에서 실잔액이
+                                        // 한 번도 갱신되지 않았다(2026-09-02 라이브 확정). 게임은 CLIENT_BALANCE_UPDATED /
+                                        // CLIENT_BET_ACCEPTED(value.balance)를 이 소켓으로 보낸다.
+                                        let mut bridge_plaintext: Option<String> = None;
+                                        let mut is_bridge_mw_frame = false;
+                                        if bridge_mode_enabled() {
+                                            let sent_request_id = params
+                                                .get("requestId")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let frame_url = ws_url_by_request_id.get(sent_request_id);
+                                            if frame_url.map(|u| u.contains("multiwidget")).unwrap_or(false) {
+                                                let opcode = response
+                                                    .get("opcode")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(1);
+                                                let client = MULTIWIDGET_CLIENT.lock().await;
+                                                if client.bridge_url().is_some()
+                                                    && client.bridge_url() == frame_url.map(|s| s.as_str())
+                                                {
+                                                    is_bridge_mw_frame = true;
+                                                    bridge_plaintext = client.observe_bridge_sent_frame(opcode, payload);
+                                                }
+                                            }
+                                        }
+                                        let parse_source: &str = if is_bridge_mw_frame {
+                                            bridge_plaintext.as_deref().unwrap_or("")
+                                        } else {
+                                            payload
+                                        };
+
                                         // Parse CLIENT_* messages for auto-betting config capture
                                         if let Ok(json_msg) =
-                                            serde_json::from_str::<serde_json::Value>(payload)
+                                            serde_json::from_str::<serde_json::Value>(parse_source)
                                         {
                                             if let Some(log) = json_msg.get("log") {
                                                 if let Some(msg_type) =
@@ -4161,6 +4194,10 @@ async fn monitor_page_continuously(
                                                             .and_then(|v| v.get("balance"))
                                                             .and_then(|v| v.as_f64())
                                                         {
+                                                            info!(
+                                                                "💰 [CDP] {} balance={} → evolution_multi_event(balance)",
+                                                                msg_type, bal
+                                                            );
                                                             if let Some(main_window) = app_handle
                                                                 .get_webview_window("main")
                                                             {

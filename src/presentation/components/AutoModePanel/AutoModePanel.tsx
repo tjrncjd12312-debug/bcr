@@ -153,6 +153,30 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
   // 스파크라인용 잔액 히스토리 (AutoModeService의 cumulativeProfit 기반)
   const [balanceHistory, setBalanceHistory] = useState<number[]>([])
 
+  // 💰 실잔액 변화가 눈에 띄게: 오르면 초록, 내리면 빨강 플래시 + "N초 전 갱신" 캡션.
+  //   실잔액은 서버(playerBettingState.balances / CLIENT_BALANCE_UPDATED)에서만 온다 — 추정치가 아니다.
+  const [realBalanceFlash, setRealBalanceFlash] = useState<'up' | 'down' | null>(null)
+  const [realBalanceUpdatedAt, setRealBalanceUpdatedAt] = useState<number | null>(null)
+  const [realBalanceAgeSec, setRealBalanceAgeSec] = useState<number | null>(null)
+  const prevRealBalanceRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (realBalance === null) return
+    const prev = prevRealBalanceRef.current
+    prevRealBalanceRef.current = realBalance
+    setRealBalanceUpdatedAt(Date.now())
+    if (prev === null || prev === realBalance) return
+    setRealBalanceFlash(realBalance > prev ? 'up' : 'down')
+    const t = setTimeout(() => setRealBalanceFlash(null), 1300)
+    return () => clearTimeout(t)
+  }, [realBalance])
+  useEffect(() => {
+    if (realBalanceUpdatedAt === null) return
+    const tick = () => setRealBalanceAgeSec(Math.max(0, Math.floor((Date.now() - realBalanceUpdatedAt) / 1000)))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [realBalanceUpdatedAt])
+
   // VirtualBettingService 초기잔액 동기화 (설정 변경 시 업데이트)
   useEffect(() => {
     if (!settings.isVirtualMode || !enabled) return
@@ -949,7 +973,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
             <span className="auto-mode__pod-label">
               {settings.isVirtualMode ? '가상 잔고' : '실제 보유금'}
             </span>
-            <span className="auto-mode__pod-value">
+            <span className={`auto-mode__pod-value ${!settings.isVirtualMode && realBalanceFlash ? `flash-${realBalanceFlash}` : ''}`}>
               {settings.isVirtualMode
                 ? (() => {
                   const effectiveBalance = virtualInitialBalance + sessionProfit - currentBettingInfo.totalCurrentBet
@@ -957,6 +981,17 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                 })()
                 : `${((autoMode.realDisplayBalance ?? realBalance) || 0).toLocaleString()}원`}
             </span>
+            {!settings.isVirtualMode && (
+              <span className={`auto-mode__pod-caption ${realBalanceAgeSec !== null && realBalanceAgeSec < 5 ? 'live' : ''}`}>
+                {realBalance === null
+                  ? '서버 잔액 수신 대기'
+                  : realBalanceAgeSec === null
+                    ? '서버 잔액'
+                    : realBalanceAgeSec < 5
+                      ? '방금 서버에서 갱신'
+                      : `${realBalanceAgeSec < 60 ? `${realBalanceAgeSec}초` : `${Math.floor(realBalanceAgeSec / 60)}분`} 전 갱신`}
+              </span>
+            )}
             {settings.isVirtualMode && (
               (() => {
                 const balanceChange = sessionProfit - currentBettingInfo.totalCurrentBet
