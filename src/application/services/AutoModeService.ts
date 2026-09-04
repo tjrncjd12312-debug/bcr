@@ -1427,6 +1427,9 @@ class AutoModeServiceImpl {
         // ✅ Bug Fix: lastBetTime null 방어 - waitingForResult가 true인데 lastBetTime이 없으면 상태 불일치
         if (roomState.lastBetTime === null) {
           console.warn(`[AutoMode] ⚠️ 상태 불일치 감지: waitingForResult=true but lastBetTime=null - ${roomNameForDebug}`)
+          if (roomState.wasVirtualBet === true) {
+            VirtualBettingService.cancelPendingBet(roomId)
+          }
           roomState.waitingForResult = false
           roomState.lastPrediction = null
           roomState.martinRecoveryPrediction = null
@@ -1474,6 +1477,12 @@ class AutoModeServiceImpl {
           if (waitingTime > EXTENDED_TIMEOUT_MS || roomState.resultInferenceRetries >= MAX_RETRIES) {
             console.warn(`[AutoMode] ⚠️ 결과 대기 타임아웃 (${Math.round(waitingTime / 1000)}초, ${roomState.resultInferenceRetries}회 재시도) - ${roomNameForDebug}, 강제 리셋`)
             if (isRealPending) this.feDiag(`REAL-FORCE-RESET room=${roomNameForDebug} waited=${Math.round(waitingTime / 1000)}s retries=${roomState.resultInferenceRetries} — 정산 유실 위험`)
+            // 🧹 가상 pending은 VirtualBettingService에서도 환불·정리한다(2026-09-05). 종전엔 AutoMode만 리셋해
+            //   VBS에 pending이 남아 보유금 유령 차감 + 이후 45초간 duplicate_bet으로 이 방 배팅이 조용히 실패했다.
+            if (roomState.wasVirtualBet === true) {
+              VirtualBettingService.cancelPendingBet(roomId)
+            }
+            roomState.wasVirtualBet = undefined
             roomState.waitingForResult = false
             roomState.lastPrediction = null
             roomState.martinRecoveryPrediction = null
@@ -1942,11 +1951,38 @@ class AutoModeServiceImpl {
       // 🔬 커스텀 금액 검증용: 실제 적용된 전략·단계·금액을 남긴다(전략=custom인데 금액이 시퀀스와 다르면 배열 확인).
       this.feDiag(`BET-AMT room=${room.koreanName} strat=${this.resolveRoomProgressionStrategy(roomState)} lv=${roomState.martinLevel} amt=${betAmount} custom=[${(this.settings.customBetAmounts ?? []).slice(0, 16).join(',')}]`)
 
+      // ⏱️ 배팅창 마감 판정 입력(가상·실제 공통): 서버 마감 절대시각(bettingDeadlineAt) 기준.
+      const REAL_BET_MIN_LEAD_MS = 1000
+      const liveRoomForGuard = this.resolveRoom(roomId)
+      const guardDeadlineAt = liveRoomForGuard?.bettingDeadlineAt ?? this.lastBettingPhaseByRoom.get(roomId)?.deadlineAt
+      const guardMsLeft = guardDeadlineAt !== undefined ? guardDeadlineAt - Date.now() : null
+      const guardWindowClosed = !!liveRoomForGuard && (liveRoomForGuard.phase === 'dealing' || liveRoomForGuard.phase === 'result')
+
       if (this.settings.isVirtualMode) {
-        // 🔥 FIX: VirtualBettingService 잔액 동기화 (두 시스템 간 잔액 불일치 해결)
-        // AutoModeService가 계산한 가용 잔액으로 VirtualBettingService를 동기화
-        const syncBalance = VirtualBettingService.getSettings().initialBalance + this.state.cumulativeProfit
-        VirtualBettingService.syncGlobalBalance(syncBalance)
+        // ⏱️ 가상도 실제와 같은 마감 규칙으로 판정한다(2026-09-05, 사용자: "가상때 불일치"). 마감 뒤 가상 배팅은
+        //   실제라면 서버가 무시할 판을 '체결'로 쳐 승패·손익이 실전과 어긋난다(화면은 이미 딜링 중인데 프로그램만
+        //   배팅). 마감 시각을 모르면(미수신/테스트) 가상은 허용(무해) — 실제는 아래처럼 fail-closed 그대로.
+        const virtualTooLate = guardMsLeft !== null && guardMsLeft < REAL_BET_MIN_LEAD_MS
+        if (guardWindowClosed || virtualTooLate) {
+          const why = guardWindowClosed ? `phase=${liveRoomForGuard?.phase}` : `msLeft=${guardMsLeft}`
+          console.warn(`[AutoMode] ⏱️ 배팅창 마감/타이밍 부족 — 가상배팅 스킵: ${room.koreanName} (${why})`)
+          this.feDiag(`SKIP-WINDOW-CLOSED room=${room.koreanName} ${why} martin=${roomState.martinLevel} betType=${betType} virtual=1`)
+          roomState.waitingForResult = false
+          roomState.wasVirtualBet = undefined
+          return
+        }
+
+        // 🧹 AutoMode는 이 방에 pending이 없다고 보는데 VirtualBettingService엔 pending이 남아 있으면(타임아웃
+        //   강제리셋 등으로 양쪽 상태가 어긋난 잔재) 먼저 환불·정리한다. 안 그러면 duplicate_bet으로 최대 45초간
+        //   이 방 배팅이 조용히 실패하고 보유금엔 유령 차감이 남는다.
+        const staleVirtual = VirtualBettingService.getRoomState(roomId)
+        if (staleVirtual?.lastBetResult === 'pending') {
+          console.warn(`[AutoMode] ⚠️ VirtualBetting pending 잔재 정리(환불) — ${room.koreanName}: ${staleVirtual.currentBetAmount}원`)
+          VirtualBettingService.cancelPendingBet(roomId)
+        }
+
+        // 🔥 VirtualBettingService 잔액 동기화 — 다른 방 pending을 반영한 값으로(이 방 금액은 곧 placeBetWithAmount가 차감).
+        this.syncVirtualBalanceFor(roomId)
 
         // 가상 배팅 - AutoModeService 설정 기반 금액 사용 (실제 배팅과 동일한 동작)
         console.log(`[AutoMode] 가상 배팅 실행: ${room.koreanName} -> ${betCode} (${betAmount}원)`)
@@ -2021,11 +2057,9 @@ class AutoModeServiceImpl {
         //   2026-09-02 추가: 페이즈만으론 부족하다. 서버 마감 절대시각(bettingDeadlineAt) 기준으로 전송·처리
         //   지연분(REAL_BET_MIN_LEAD_MS)만큼 여유가 없거나, 마감 시각을 모르면(BetsOpen 프레임 미수신) 보내지 않는다.
         //   마감 뒤 도착한 베팅은 Evolution이 응답 없이 무시해 '체결 미확인'만 남긴다(3차 라이브: 7초 창, 마감 10초 뒤 전송).
-        const REAL_BET_MIN_LEAD_MS = 1000
-        const liveRoom = this.resolveRoom(roomId)
-        const deadlineAt = liveRoom?.bettingDeadlineAt ?? this.lastBettingPhaseByRoom.get(roomId)?.deadlineAt
-        const msLeft = deadlineAt !== undefined ? deadlineAt - Date.now() : null
-        const windowClosed = !!liveRoom && (liveRoom.phase === 'dealing' || liveRoom.phase === 'result')
+        const liveRoom = liveRoomForGuard
+        const msLeft = guardMsLeft
+        const windowClosed = guardWindowClosed
         const tooLate = msLeft === null || msLeft < REAL_BET_MIN_LEAD_MS
         if (windowClosed || tooLate) {
           const why = windowClosed ? `phase=${liveRoom?.phase}` : msLeft === null ? 'deadline=unknown' : `msLeft=${msLeft}`
@@ -2378,6 +2412,10 @@ class AutoModeServiceImpl {
     const predResult = roomState.lastPrediction.prediction
     if (!predResult) {
       console.warn(`[AutoMode] 결과 처리 불가 - lastPrediction.prediction 없음 (${roomName})`)
+      if (roomState.wasVirtualBet === true) {
+        VirtualBettingService.cancelPendingBet(roomId)
+      }
+      roomState.wasVirtualBet = undefined
       roomState.waitingForResult = false
       roomState.lastPrediction = null
       roomState.martinRecoveryPrediction = null
@@ -2514,9 +2552,8 @@ class AutoModeServiceImpl {
       if (customTransition.handled) this.syncCustomStrategyState(roomId, roomState)
       if (wasVirtualBet) {
         VirtualBettingService.resolveBet(roomId, roomName, predResult, 'T')
-        // ✅ 결과 처리 후 잔액 동기화 (Single Source of Truth: cumulativeProfit)
-        const syncBalance = VirtualBettingService.getSettings().initialBalance + this.state.cumulativeProfit
-        VirtualBettingService.syncGlobalBalance(syncBalance)
+        // ✅ 결과 처리 후 잔액 동기화 (Single Source of Truth: cumulativeProfit, 다른 방 pending 반영)
+        this.syncVirtualBalanceFor(roomId)
       } else {
         // Bug Fix: 실제 배팅이었으면 AutoBettingService 상태도 정리
         AutoBettingService.onGameResult(roomId)
@@ -2673,10 +2710,9 @@ class AutoModeServiceImpl {
     if (wasVirtualBet) {
       // 가상 배팅 결과 처리 (lastPrediction을 null로 만들기 전에 처리)
       VirtualBettingService.resolveBet(roomId, roomName, predResult, winner)
-      // ✅ 결과 처리 후 잔액 동기화 (Single Source of Truth: cumulativeProfit)
+      // ✅ 결과 처리 후 잔액 동기화 (Single Source of Truth: cumulativeProfit, 다른 방 pending 반영)
       // cumulativeProfit이 이미 업데이트된 후이므로 정확한 잔액으로 동기화됨
-      const syncBalance = VirtualBettingService.getSettings().initialBalance + this.state.cumulativeProfit
-      VirtualBettingService.syncGlobalBalance(syncBalance)
+      this.syncVirtualBalanceFor(roomId)
     } else {
       // Bug Fix: 실제 배팅이었으면 AutoBettingService 상태 정리
       AutoBettingService.onGameResult(roomId)
@@ -2809,6 +2845,24 @@ class AutoModeServiceImpl {
       }
     })
     return pendingAmount
+  }
+
+  /**
+   * 🆕 2026-09-05 가상 보유금 동기화(pending 반영) — 사용자: "가상때 불일치".
+   * VirtualBettingService.globalBalance를 '초기잔액 + 누적손익 − (이 방을 제외한) 가상 pending 합계'로 맞춘다.
+   *   - 배팅 직전: 이 방 금액은 곧 placeBetWithAmount가 차감하므로 제외.
+   *   - 정산 직후: 이 방은 resolveBet으로 이미 정산(환불/지급)됐으므로 제외(waitingForResult는 아직 true).
+   * 종전엔 pending을 전혀 빼지 않아(초기+손익만) 동시배팅(2방 이상)마다 다른 방 pending이 되살아났고,
+   * 그래서 VBS 잔액(헤더/로그 balance)이 패널의 '초기+손익−현재배팅'과 다른 값으로 오락가락했다.
+   */
+  private syncVirtualBalanceFor(roomId: string): void {
+    let otherPending = 0
+    this.state.roomStates.forEach((rs, id) => {
+      if (id === roomId) return
+      if (rs.waitingForResult && rs.wasVirtualBet === true) otherPending += rs.lastBetAmount ?? 0
+    })
+    const syncBalance = VirtualBettingService.getSettings().initialBalance + this.state.cumulativeProfit - otherPending
+    VirtualBettingService.syncGlobalBalance(syncBalance)
   }
 
   /** 현재 테이블에 걸린 '실배팅' pending 합계(결과 대기 중, 실모드). getRealNetProfit 보정용. */

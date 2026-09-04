@@ -320,4 +320,113 @@ describe('AutoModeService', () => {
     expect(internal.continuousBettingTimerId).toBeNull()
   })
 
+  // ==================== 가상 모드 보유금 불일치(2026-09-05) ====================
+
+  function makeVirtualRoom(id: string, winners: Array<'B' | 'P' | 'T'> = ['B', 'P', 'B', 'P', 'B']): Room {
+    return {
+      id,
+      name: id,
+      koreanName: id,
+      history: makeHistory(winners),
+      gameCount: winners.length,
+      gameState: {
+        playerHand: { score: 0, cards: ['AS', 'KD'] },
+        bankerHand: { score: 0, cards: ['2H', '3C'] },
+      },
+    }
+  }
+
+  it('keeps the VirtualBettingService balance pending-aware across concurrent virtual bets (가상 보유금 불일치)', async () => {
+    AutoModeService.resetStats() // 싱글턴에 남은 이전 테스트의 누적 손익 제거
+    const initialBalance = VirtualBettingService.getSettings().initialBalance
+    const room1 = makeVirtualRoom('room1')
+    const room2 = makeVirtualRoom('room2')
+    adapter.setRoom(room1)
+    adapter.setRoom(room2)
+
+    AutoModeService.start()
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
+    adapter.emitBettingPhase({ roomId: 'room2', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
+    expect(AutoModeService.getRoomState('room2')?.waitingForResult).toBe(true)
+    // 두 방 pending 1,000원씩 → 둘 다 차감돼야 한다. 종전엔 두 번째 배팅 직전 동기화(초기+손익)가 첫 방 pending을
+    // 되살려 −1,000만 반영됐다(패널은 초기+손익−현재배팅=−2,000 → 불일치).
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - 2000)
+    expect(VirtualBettingService.getState().pendingBetCount).toBe(2)
+
+    // 배팅창 마감(즉시 재배팅 방지) 후 room1 패배(B 예측, P 결과) → 손익 −1,000, room2는 여전히 pending
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 0, phase: 'end' })
+    adapter.emitBettingPhase({ roomId: 'room2', remainingSeconds: 0, phase: 'end' })
+    const h1 = [makeHistory(['P'])[0], ...room1.history]
+    adapter.setRoom({ ...room1, history: h1, gameCount: h1.length })
+    adapter.emitGameResult({ roomId: 'room1', winner: 'P' })
+
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(false)
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - 1000 - 1000)
+    expect(VirtualBettingService.getState().pendingBetCount).toBe(1)
+
+    // room2 승리(B, 5% 커미션 → +950) → pending 0, 잔액 = 초기 −1,000 +950
+    const h2 = [makeHistory(['B'])[0], ...room2.history]
+    adapter.setRoom({ ...room2, history: h2, gameCount: h2.length })
+    adapter.emitGameResult({ roomId: 'room2', winner: 'B' })
+
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - 1000 + 950)
+    expect(VirtualBettingService.getState().pendingBetCount).toBe(0)
+  })
+
+  it('skips a virtual bet once the betting window is closed, like a real bet would be (가상=실제 마감 규칙)', async () => {
+    AutoModeService.resetStats()
+    const initialBalance = VirtualBettingService.getSettings().initialBalance
+    // 서버 마감 시각이 이미 지난 방(BetsClosed 뒤 늦게 도착한 start/poll)
+    adapter.setRoom({ ...makeVirtualRoom('room1'), bettingDeadlineAt: Date.now() - 500 })
+
+    AutoModeService.start()
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(false)
+    expect(VirtualBettingService.getRoomState('room1')?.lastBetResult ?? 'none').not.toBe('pending')
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance)
+
+    // 딜링 중(phase=dealing)으로 표시된 방도 같은 규칙으로 스킵
+    adapter.setRoom({ ...makeVirtualRoom('room2'), phase: 'dealing' })
+    adapter.emitBettingPhase({ roomId: 'room2', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+
+    expect(AutoModeService.getRoomState('room2')?.waitingForResult).toBe(false)
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance)
+  })
+
+  it('refunds the VirtualBettingService pending bet when a waiting virtual bet is force-reset', async () => {
+    AutoModeService.resetStats()
+    const initialBalance = VirtualBettingService.getSettings().initialBalance
+    const room = makeVirtualRoom('room1')
+    adapter.setRoom(room)
+
+    AutoModeService.start()
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - 1000)
+
+    // 결과가 오지 않는 채로 다음 배팅창 이벤트가 반복(히스토리 미증가) → 5회째 재시도에서 강제 리셋 후 새 배팅.
+    for (let i = 0; i < 5; i++) {
+      adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
+      await flush()
+      await flush()
+    }
+
+    // 종전: 옛 pending이 VBS에 남아 새 배팅이 duplicate_bet으로 실패하고, 동기화가 잔액을 초기값으로 되돌려
+    //       '배팅 없음 + 잔액 초기값' 상태가 됐다. 이제 옛 pending은 환불되고 새 배팅 1건만 차감된다.
+    expect(AutoModeService.getRoomState('room1')?.waitingForResult).toBe(true)
+    expect(VirtualBettingService.getState().pendingBetCount).toBe(1)
+    expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - 1000)
+  })
+
 })
