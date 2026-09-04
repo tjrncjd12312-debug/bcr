@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{command, AppHandle, Manager};
+use tauri::{command, AppHandle};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChromeEmbedResult {
@@ -334,6 +334,7 @@ pub async fn embed_chrome_window(
 ) -> Result<ChromeEmbedResult, String> {
     #[cfg(windows)]
     {
+        use tauri::Manager; // Windows에서만 쓰임 — 다른 플랫폼 빌드의 unused import 경고 방지
         let main = app
             .get_webview_window("main")
             .ok_or_else(|| "main window not found".to_string())?;
