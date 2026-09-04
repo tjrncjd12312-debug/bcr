@@ -24,6 +24,7 @@ import { AutoBettingService } from './application/services/AutoBettingService'
 import { PatternBettingService } from './application/services/PatternBettingService'
 import { CustomPatternService } from './application/services/CustomPatternService'
 import { AutoModeService } from './application/services/AutoModeService'
+import { ManualBetService } from './application/services/ManualBetService'
 import { SemiAutoService } from './application/services/SemiAutoService'
 import { RoomFilterService } from './application/services/RoomFilterService'
 import { MultiRoomPredictionService } from './application/services/MultiRoomPredictionService'
@@ -61,6 +62,7 @@ function App() {
       PatternBettingService.dispose()
       CustomPatternService.dispose()
       AutoModeService.dispose()
+      ManualBetService.dispose()
       SemiAutoService.dispose()
       RoomFilterService.dispose()
       MultiRoomPredictionService.dispose()
@@ -93,6 +95,7 @@ function App() {
       PatternBettingService.dispose()
       CustomPatternService.dispose()
       AutoModeService.dispose()
+      ManualBetService.dispose()
       SemiAutoService.dispose()
       RoomFilterService.dispose()
       MultiRoomPredictionService.dispose()
@@ -181,6 +184,7 @@ function App() {
       PatternBettingService.dispose()
       CustomPatternService.dispose()
       AutoModeService.dispose()
+      ManualBetService.dispose()
       SemiAutoService.dispose()
       RoomFilterService.dispose()
       MultiRoomPredictionService.dispose()

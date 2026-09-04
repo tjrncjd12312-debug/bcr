@@ -17,7 +17,7 @@
 .settings-dialog-overlay.visible { opacity: 1; }
 
 .settings-dialog {
-  width: min(720px, 92vw);
+  width: min(760px, 94vw);
   max-height: var(--dialog-max-height);
   background: var(--modal-bg);
   border: 1px solid var(--modal-border);
@@ -139,6 +139,42 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+.settings-field__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settings-field__formatted {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.settings-field__formatted.is-off { color: var(--text-muted); }
+.settings-field__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.settings-field__preset {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--modal-border);
+  background: var(--modal-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.settings-field__preset:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settings-field__preset.is-active {
+  background: var(--accent-muted);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 .settings-field__input-wrap {
   position: relative;

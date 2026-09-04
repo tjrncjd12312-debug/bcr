@@ -14,6 +14,8 @@ interface UseRoomFilterProps {
     sortDirection: SortDirection
     roomDataVersion: number
     filterSettingsSignature?: string
+    /** 배팅 중인 방을 맨 앞으로 끌어올릴지. 테이블 보기(그리드)는 false — 카드가 자리를 옮기며 깜박이지 않게 */
+    bettingFirst?: boolean
 }
 
 export const useRoomFilter = ({
@@ -27,7 +29,8 @@ export const useRoomFilter = ({
     sortType,
     sortDirection,
     roomDataVersion,
-    filterSettingsSignature
+    filterSettingsSignature,
+    bettingFirst = true,
 }: UseRoomFilterProps) => {
     return useMemo(() => {
         const isLockedAutoModeRoom = (roomId: string) => {
@@ -76,7 +79,7 @@ export const useRoomFilter = ({
             const pCount = recent.filter(r => r.winner === 'P').length
             return bCount - pCount
         }
-        const isBetting = (roomId: string) => bettingStates.get(roomId)?.waitingForResult ? 1 : 0
+        const isBetting = (roomId: string) => (bettingFirst && bettingStates.get(roomId)?.waitingForResult) ? 1 : 0
 
         const dir = sortDirection === 'asc' ? 1 : -1
 
@@ -158,5 +161,5 @@ export const useRoomFilter = ({
         }
 
         return roomList
-    }, [rooms, roomStates, bettingStates, enabledRoomIds, selectedPattern, activeFilters, matchesFilter, sortType, sortDirection, roomDataVersion, filterSettingsSignature])
+    }, [rooms, roomStates, bettingStates, enabledRoomIds, selectedPattern, activeFilters, matchesFilter, sortType, sortDirection, roomDataVersion, filterSettingsSignature, bettingFirst])
 }

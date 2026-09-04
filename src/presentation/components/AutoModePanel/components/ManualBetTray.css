@@ -1,0 +1,98 @@
+/* ManualBetTray — 수동 배팅 칩 트레이 */
+.manual-tray {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  margin-top: 6px;
+  border-top: 1px solid rgba(215, 226, 238, 0.12);
+}
+.manual-tray__chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.manual-tray__label { font-size: 12px; font-weight: 800; color: var(--text-secondary); margin-right: 2px; }
+.manual-tray__chip {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+.manual-tray__chip:hover { transform: translateY(-2px); }
+.manual-tray__chip.is-selected { border-color: #ffd84d; box-shadow: 0 0 12px rgba(255, 216, 77, 0.45); transform: translateY(-3px) scale(1.06); }
+.manual-tray__custom { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.manual-tray__custom input {
+  width: 96px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(215, 226, 238, 0.2);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.manual-tray__custom.is-selected input { border-color: #ffd84d; }
+.manual-tray__custom button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(215, 226, 238, 0.2);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.manual-tray__selected { margin-left: auto; font-size: 13px; color: var(--text-secondary); }
+.manual-tray__actions { display: inline-flex; gap: 6px; margin-left: 8px; }
+.manual-tray__action {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(215, 226, 238, 0.28);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.manual-tray__action:hover:not(:disabled) { background: var(--bg-hover); border-color: #ffd84d; }
+.manual-tray__action:disabled { opacity: 0.4; cursor: not-allowed; }
+.manual-tray__action.is-danger { color: #ff8490; border-color: rgba(255, 101, 117, 0.4); }
+.manual-tray__selected strong { color: #ffd84d; font-size: 15px; }
+.manual-tray__status { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.manual-tray__hint { font-size: 12px; color: var(--text-muted); }
+.manual-tray__hint b { color: var(--text-secondary); }
+.manual-tray__stats { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.manual-tray__stats strong { color: var(--text-primary); }
+.manual-tray__stats .win { color: #3bd58a; }
+.manual-tray__stats .loss { color: #ff6575; }
+.manual-tray__reset {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(215, 226, 238, 0.18);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.manual-tray__reset:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* 헤더 모드 스위치(자동/수동) */
+.auto-mode__bet-mode {
+  display: inline-flex;
+  border-radius: 999px;
+  border: 1px solid rgba(215, 226, 238, 0.2);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.auto-mode__bet-mode button {
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.auto-mode__bet-mode button.is-active { background: #ffd84d; color: #17120a; }
+.auto-mode__bet-mode button:disabled { opacity: 0.5; cursor: not-allowed; }

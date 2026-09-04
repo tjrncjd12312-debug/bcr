@@ -13,7 +13,16 @@ import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsD
 import { StatCard } from '../../common/StatCard'
 import './AutoModeSettingsDialog.css'
 
-type SettingsTab = 'general' | 'strategy' | 'safety'
+type SettingsTab = 'general' | 'strategy' | 'safety' | 'rooms'
+
+// 빠른 선택 칩 — 타이핑 없이 흔한 값을 한 번에(2026-09-05 설정 UX)
+const KRW = (n: number) => (n >= 10000 ? `${n / 10000}만` : n >= 1000 ? `${n / 1000}천` : `${n}`)
+const PRESET_BALANCE = [100_000, 300_000, 500_000, 1_000_000, 3_000_000, 5_000_000].map(v => ({ label: `${KRW(v)}원`, value: v }))
+const PRESET_BET = [1_000, 5_000, 10_000, 30_000, 50_000, 100_000].map(v => ({ label: `${KRW(v)}원`, value: v }))
+const PRESET_STAGE = [3, 5, 7, 10].map(v => ({ label: `${v}단계`, value: v }))
+const PRESET_CUT = [{ label: '끄기', value: 0 }, ...[50_000, 100_000, 300_000, 500_000, 1_000_000].map(v => ({ label: `${KRW(v)}원`, value: v }))]
+const PRESET_STREAK = [3, 5, 7, 10].map(v => ({ label: `${v}연패`, value: v }))
+const PRESET_CONCURRENT = [{ label: '제한 없음', value: 0 }, ...[1, 3, 6, 10].map(v => ({ label: `${v}개`, value: v }))]
 
 const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: string }[] = [
   { value: 'martingale', label: '마틴게일', desc: '패배시 2배 증가' },
@@ -25,8 +34,9 @@ const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: strin
 
 const TABS: SettingsTabDef<SettingsTab>[] = [
   { value: 'general', label: '일반' },
-  { value: 'safety', label: '안전 장치' },
   { value: 'strategy', label: '기본 배팅 전략' },
+  { value: 'safety', label: '안전 장치' },
+  { value: 'rooms', label: '방·필터' },
 ]
 
 interface AutoModeSettingsDialogProps {
@@ -41,6 +51,13 @@ interface AutoModeSettingsDialogProps {
   realBalance: number | null
   activeStructuredStrategy?: CustomStrategyDefinitionV1 | null
   onOpenStrategyBuilder?: () => void
+  /** 방·필터 탭(2026-09-05): 설정창 한곳에서 방 선택·필터·패턴으로 진입 */
+  selectedRoomCount?: number
+  totalRoomCount?: number
+  activeFilterLabel?: string
+  onOpenRoomSelector?: () => void
+  onOpenFilterDialog?: () => void
+  onOpenPatternManager?: () => void
 }
 
 export function AutoModeSettingsDialog({
@@ -55,6 +72,12 @@ export function AutoModeSettingsDialog({
   realBalance,
   activeStructuredStrategy = null,
   onOpenStrategyBuilder,
+  selectedRoomCount = 0,
+  totalRoomCount = 0,
+  activeFilterLabel = '전체',
+  onOpenRoomSelector,
+  onOpenFilterDialog,
+  onOpenPatternManager,
 }: AutoModeSettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
 
@@ -177,6 +200,7 @@ export function AutoModeSettingsDialog({
                   suffix="원"
                   min={100000}
                   step={100000}
+                  presets={PRESET_BALANCE}
                   onChange={handleVirtualBalanceChange}
                 />
                 <div className="ams-input-group">
@@ -325,6 +349,7 @@ export function AutoModeSettingsDialog({
                 suffix="원"
                 min={1000}
                 step={1000}
+                presets={PRESET_BET}
                 onChange={(n) => onUpdateSettings({ baseBetAmount: n })}
               />
               <NumberFieldWithSuffix
@@ -333,6 +358,7 @@ export function AutoModeSettingsDialog({
                 suffix="단계"
                 min={1}
                 max={100}
+                presets={PRESET_STAGE}
                 onChange={(n) => {
                   // 커스텀 전략일 때 배열 크기 조정
                   if (settings.betStrategy === 'custom') {
@@ -398,6 +424,8 @@ export function AutoModeSettingsDialog({
                 value={settings.maxConcurrentBets ?? 0}
                 suffix="개"
                 min={0}
+                presets={PRESET_CONCURRENT}
+                zeroLabel="제한 없음"
                 onChange={(n) => onUpdateSettings({ maxConcurrentBets: Math.max(0, n) })}
               />
             </div>
@@ -423,6 +451,8 @@ export function AutoModeSettingsDialog({
                 suffix="원"
                 min={0}
                 step={10000}
+                presets={PRESET_CUT}
+                zeroLabel="끄기"
                 onChange={(n) => onUpdateSettings({ winCutAmount: n })}
               />
               <NumberFieldWithSuffix
@@ -431,6 +461,8 @@ export function AutoModeSettingsDialog({
                 suffix="원"
                 min={0}
                 step={10000}
+                presets={PRESET_CUT}
+                zeroLabel="끄기"
                 onChange={(n) => onUpdateSettings({ lossCutAmount: n })}
               />
             </div>
@@ -453,6 +485,7 @@ export function AutoModeSettingsDialog({
                 suffix="연패"
                 min={1}
                 max={20}
+                presets={PRESET_STREAK}
                 onChange={(n) => onUpdateSettings({ globalMaxConsecutiveLosses: n })}
               />
             </div>
@@ -477,6 +510,59 @@ export function AutoModeSettingsDialog({
                 ? '중지 후 재시작 시 1단계부터 시작'
                 : '중지 후 재시작 시 이전 마틴 레벨 유지'}
             </div>
+          </div>
+        </>
+      )}
+
+      {/* ========== Tab: 방·필터 ========== */}
+      {activeTab === 'rooms' && (
+        <>
+          <div className="ams-section">
+            <div className="ams-section-title">배팅 대상</div>
+            <div className="ams-entry-grid">
+              <button type="button" className="ams-entry-card" onClick={onOpenRoomSelector} disabled={!onOpenRoomSelector}>
+                <span className="ams-entry-card__title">배팅할 방</span>
+                <span className="ams-entry-card__value">
+                  {selectedRoomCount > 0 ? `${selectedRoomCount} / ${totalRoomCount}방` : `전체 ${totalRoomCount}방`}
+                </span>
+                <span className="ams-entry-card__desc">
+                  {selectedRoomCount > 0 ? '선택한 방에서만 배팅합니다.' : '방을 고르지 않으면 필터에 맞는 모든 방이 대상입니다.'}
+                </span>
+                <span className="ams-entry-card__cta">방 고르기 →</span>
+              </button>
+              <button type="button" className="ams-entry-card" onClick={onOpenFilterDialog} disabled={!onOpenFilterDialog}>
+                <span className="ams-entry-card__title">진입 조건(필터)</span>
+                <span className="ams-entry-card__value">{activeFilterLabel}</span>
+                <span className="ams-entry-card__desc">타이 자동·커스텀 전략·패턴 필터와 필터별 방향·기준값을 정합니다.</span>
+                <span className="ams-entry-card__cta">필터 설정 →</span>
+              </button>
+              {onOpenPatternManager && (
+                <button type="button" className="ams-entry-card" onClick={onOpenPatternManager}>
+                  <span className="ams-entry-card__title">커스텀 패턴</span>
+                  <span className="ams-entry-card__value">B/P 순서</span>
+                  <span className="ams-entry-card__desc">원하는 결과 순서(예: BBP)가 뜨면 정한 방향으로 배팅합니다.</span>
+                  <span className="ams-entry-card__cta">패턴 관리 →</span>
+                </button>
+              )}
+            </div>
+            <div className="ams-hint">
+              방과 필터는 언제든 바꿀 수 있고, 진행 중인 마틴 방은 승리할 때까지 대상에 남습니다.
+            </div>
+          </div>
+
+          <div className="ams-section">
+            <div className="ams-section-title">방 선택 방식</div>
+            <div className="ams-toggle-row">
+              <label className="ams-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={settings.onlySelectedRooms ?? false}
+                  onChange={(e) => onUpdateSettings({ onlySelectedRooms: e.target.checked })}
+                />
+                <span className="ams-toggle-text">선택한 방만 화면에 표시</span>
+              </label>
+            </div>
+            <div className="ams-hint">끄면 전체 방이 보이고, 선택한 방은 배팅 대상으로만 쓰입니다.</div>
           </div>
         </>
       )}

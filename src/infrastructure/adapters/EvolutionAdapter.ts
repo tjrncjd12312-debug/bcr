@@ -837,6 +837,26 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
   }
 
   // ==================== Table State / Game State ====================
+  /**
+   * 🃏 라운드 전환(2026-09-05, 사용자: "딜링 중에 잠깐 그전 카드가 보임"): 새 gameId를 처음 보는 순간
+   * 현재 카드·점수를 previousGameState로 옮기고 gameState를 빈 손으로 만든다. 그래야 마감 직후 첫 카드가
+   * 오기 전까지 UI가 옛 카드를 '이번 판'으로 그리지 않는다. 같은 gameId면 아무것도 바꾸지 않는다.
+   */
+  private rotateRoundIfNew(room: Room, gameId: string | undefined): Room {
+    if (!gameId || gameId.startsWith('synthetic-')) return room
+    if (room.currentGameId === gameId) return room
+    if (!room.currentGameId) return { ...room, currentGameId: gameId }
+    return {
+      ...room,
+      currentGameId: gameId,
+      previousGameState: room.gameState,
+      gameState: {
+        playerHand: { score: 0, cards: [] },
+        bankerHand: { score: 0, cards: [] },
+      },
+    }
+  }
+
   private ensureRoom(tableId: string, tableName?: string): Room | null {
     const existing = this.rooms.get(tableId)
     const effectiveName = tableName || existing?.name || tableId
@@ -905,8 +925,9 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
       undefined
 
     // ROOM_MAPPING에 있는 테이블만 처리
-    const room = this.ensureRoom(tableId, tableName)
-    if (!room) return  // 라이트닝 등 제외된 테이블은 무시
+    const ensuredRoom = this.ensureRoom(tableId, tableName)
+    if (!ensuredRoom) return  // 라이트닝 등 제외된 테이블은 무시
+    const room = this.rotateRoundIfNew(ensuredRoom, currentGameId)
 
     let phase: GamePhase | undefined = room.phase
     if (bettingStatus) {
@@ -1178,8 +1199,11 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     if (!ROOM_MAPPING[tableId]) return
 
     // Try to get existing room or create via ensureRoom
-    const room = this.rooms.get(tableId) || this.ensureRoom(tableId, (args as any)?.tableName as string | undefined)
-    if (!room) return  // 라이트닝 등 제외된 테이블은 무시
+    const existingRoom = this.rooms.get(tableId) || this.ensureRoom(tableId, (args as any)?.tableName as string | undefined)
+    if (!existingRoom) return  // 라이트닝 등 제외된 테이블은 무시
+    // 새 라운드(gameId 변경)면 카드를 이전 판으로 넘긴다 — 결과 프레임은 같은 gameId라 영향 없음.
+    const room = this.rotateRoundIfNew(existingRoom, gameId)
+    if (room !== existingRoom) this.rooms.set(tableId, room)
 
     // ✅ 타이머 파싱 — 라이브 캡처(2026-09-02) 기준 baccarat.gameState는 BetsOpen 순간 한 번
     //   `timeRemaining`(ms, 예 13000)과 `timeInitial`(ms, 창 길이)을 준다. 이후 카운트다운 프레임은
@@ -1421,10 +1445,11 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     // ROOM_MAPPING에 없는 테이블은 무시 (라이트닝 등 제외)
     if (!ROOM_MAPPING[tableId]) return
 
-    const room = this.rooms.get(tableId) || this.ensureRoom(tableId)
-    if (!room) return  // 라이트닝 등 제외된 테이블은 무시
+    const baseRoom = this.rooms.get(tableId) || this.ensureRoom(tableId)
+    if (!baseRoom) return  // 라이트닝 등 제외된 테이블은 무시
+    const room = this.rotateRoundIfNew(baseRoom, gameId)
 
-    // 카드 상태는 유지(마지막 라운드 카드 표시)하고, 페이즈 betting으로 전환.
+    // 카드는 previousGameState로 넘어가 '이전 판'으로 표시되고, 페이즈 betting으로 전환.
     // 남은 시간은 프레임이 준 값만 쓴다(고정 12초 금지 — 테이블마다 창 길이가 7~35초로 다르다).
     const newGameRemainingMs = toMillis((args as any)?.timeRemaining ?? (args as any)?.timeInitial)
     const updatedRoom: Room = {
@@ -2355,6 +2380,29 @@ class EvolutionAdapterImpl implements ICasinoAdapter {
     }
 
     return JSON.stringify(message)
+  }
+
+  /**
+   * 마지막 칩을 되돌리는 playerBetRequest(action Undo). 수동 배팅의 '빼기'용 — 수동 캡처 형식(2026-09-02).
+   * 실제 gameId가 없으면 만들지 않는다(실배팅 안전장치와 동일).
+   */
+  buildPlayerUndoRequest(tableId: string): string | null {
+    const gameId = this.currentGameIds.get(tableId)
+    if (!gameId || gameId.startsWith('synthetic-')) return null
+    const timestamp = Date.now()
+    return JSON.stringify({
+      id: this.generateMessageId(),
+      type: 'baccarat.playerBetRequest',
+      args: {
+        tableId,
+        gameId,
+        replyId: `baccarat.playerBetRequest-${Math.floor(Math.random() * 1000000000)}-${timestamp}`,
+        timestamp,
+        betTags: { btTableView: '0', mwLayout: 9, openMwTables: 2 },
+        action: { name: 'Undo' },
+        correlationId: this.generateCorrelationId(),
+      },
+    })
   }
 
   /** Generate unique message ID */

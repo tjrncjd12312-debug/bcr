@@ -139,6 +139,10 @@ export interface Room {
   /** 배팅 창 전체 길이(ms, 서버 timeInitial). 진행 바 비율 계산용 */
   bettingWindowMs?: number
   gameState?: GameState
+  /** 현재 라운드 gameId — 바뀌는 순간 gameState를 previousGameState로 옮기고 새 판을 비운다(카드 불일치 방지) */
+  currentGameId?: string
+  /** 직전 라운드의 카드·점수(배팅창이 열려 있는 동안 '이전 판'으로 표시) */
+  previousGameState?: GameState
   /** 카지노 프로바이더 (evolution | pragmatic) */
   provider?: 'evolution' | 'pragmatic'
 }

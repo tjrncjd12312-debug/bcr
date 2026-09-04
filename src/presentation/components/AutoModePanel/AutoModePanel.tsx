@@ -10,7 +10,6 @@ import { useAutoMode } from '../../hooks'
 import { AutoModeSettingsDialog } from './components/AutoModeSettingsDialog'
 import { AutoModeRoomGrid, type RoomBetLog } from './components/AutoModeRoomGrid'
 import { AutoModeRoomList } from './components/AutoModeRoomList'
-import { AutoModeMosaic } from './components/AutoModeMosaic' // Added
 import { AutoModeHistory } from './components/AutoModeHistory'
 import { RoomSelectorModal } from '../shared'
 import { FilterSettingsDialog } from '../common/FilterSettingsDialog'
@@ -21,27 +20,33 @@ import CustomStrategyManagerModal from '../MainScreen/components/CustomStrategyM
 import CustomPatternService from '../../../application/services/CustomPatternService'
 import CustomStrategyService from '../../../application/services/CustomStrategyService'
 import VirtualBettingService from '../../../application/services/VirtualBettingService'
-import type { AutoModeBetLogEvent } from '../../../application/services/AutoModeService'
+import MultiRoomPredictionService from '../../../application/services/MultiRoomPredictionService'
+import ManualBetService, { type ManualBetLog } from '../../../application/services/ManualBetService'
+import { useManualBet } from '../../hooks/useManualBet'
+import { ManualBetTray } from './components/ManualBetTray'
+import { winProfit } from '../../../domain/betting/payout'
+import AutoModeService, { type AutoModeBetLogEvent } from '../../../application/services/AutoModeService'
 import type { RoomFilterType, RoomSortType, CustomPattern } from '../../../domain/entities'
 import { SORT_OPTIONS, TIE_PAYOUT_MULTIPLIER } from '../../../domain/entities'
 import './AutoModePanel.css'
 import {
   LayoutGrid,
   List,
-  LayoutTemplate,
   Clock,
   Workflow
 } from 'lucide-react'
 
 // LocalStorage key for view mode
 const VIEW_MODE_KEY = 'auto-mode:view-mode'
+// 배팅 방식(자동/수동) 저장 키
+const BET_MODE_KEY = 'auto-mode:bet-mode'
 import { useCountUp } from '../../hooks/useCountUp'
 
 interface AutoModePanelProps {
   onLogout: () => void
   sessionWarning?: string
   isOnline: boolean
-  /** 통합 홈으로 복귀 (있으면 헤더에 [홈] 버튼 노출) */
+  /** @deprecated 자동배팅 전용 화면 — 홈 버튼 없음(2026-09-05). */
   onHome?: () => void
 }
 
@@ -59,7 +64,7 @@ interface HistoryLog {
   winner?: 'P' | 'B' | 'T' // 승자
 }
 
-export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHome }: AutoModePanelProps) {
+export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: AutoModePanelProps) {
   const {
     user,
     rooms,
@@ -109,26 +114,38 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
   // Toast notifications (replaces window.alert popups)
   const { showSuccess, showInfo, showWarning } = useError()
 
+  // 🎯 배팅 방식: 자동(AutoModeService) / 수동(반자동: AI 예측 보고 사용자가 칩을 올림)
+  const [betMode, setBetMode] = useState<'auto' | 'manual'>(() => {
+    try { return localStorage.getItem(BET_MODE_KEY) === 'manual' ? 'manual' : 'auto' } catch { return 'auto' }
+  })
+  const isManual = betMode === 'manual'
+  const manual = useManualBet()
+
   // State
   const [showSettings, setShowSettings] = useState(false)
-  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'mosaic'>(() => {
-    // 디폴트는 list — 30개 방을 한 번에 스캔하기 가장 쉽고 결과/마틴/다음배팅을 표로 정렬해 보여줌.
-    // 기존 사용자는 localStorage 값이 그대로 살아남아 파괴적 변경 아님.
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+    // 디폴트는 grid — Evolution 타일 레이아웃 카드(2026-09-05). 저장된 'mosaic'(폐기)는 grid로 흡수.
     try {
       const saved = localStorage.getItem(VIEW_MODE_KEY)
-      if (saved && ['grid', 'list', 'mosaic'].includes(saved)) {
-        return saved as 'grid' | 'list' | 'mosaic'
-      }
+      if (saved === 'list') return 'list'
     } catch (e) {
       console.warn('[AutoMode] Failed to load view mode:', e)
     }
-    return 'list'
+    return 'grid'
   })
   const [showPatternModal, setShowPatternModal] = useState(false)
   const [showStrategyModal, setShowStrategyModal] = useState(false)
   const [showFilterDialog, setShowFilterDialog] = useState(false)
   const [showRoomSelector, setShowRoomSelector] = useState(false)
-  const [sortType, setSortType] = useState<RoomSortType>('games')
+  const [sortType, setSortType] = useState<RoomSortType>('name') // 이름순 기본 — 카드 위치가 안 바뀌어 보기 편하다
+  // 이름순은 가나다(오름차순)가 자연스럽다 — 저장된 방향이 내림차순이면 처음 한 번 뒤집는다.
+  const sortDirFixedRef = useRef(false)
+  useEffect(() => {
+    if (sortDirFixedRef.current) return
+    sortDirFixedRef.current = true
+    if (sortDirection === 'desc') toggleSortDirection()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([])
   const [isConnecting, setIsConnecting] = useState(false)
   const [lastBetTime, setLastBetTime] = useState<Date | null>(null)
@@ -254,9 +271,17 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
   // 🆕 2026-07-08 실잔액 기준 통일(사용자: "실잔액 -6만인데 프로그램 -4만"): 실모드에서는
   // 자체추정(cumulativeProfit)이 정산 유실로 실제와 어긋나므로, '진짜 돈' 실잔액 기반 손익
   // (realNetProfit)을 우선 표시한다. 가상모드/실잔액 미수신 시 cumulativeProfit로 폴백.
-  const sessionProfit = (!settings.isVirtualMode && autoMode.realNetProfit != null)
-    ? autoMode.realNetProfit
-    : cumulativeProfit
+  const sessionProfit = isManual
+    ? manual.stats.profit
+    : (!settings.isVirtualMode && autoMode.realNetProfit != null)
+      ? autoMode.realNetProfit
+      : cumulativeProfit
+  // 수동 모드의 '현재 배팅 중' — 걸린 방/금액/예상 수익(단일 페이아웃 정책)
+  const manualPending = useMemo(() => {
+    let total = 0, expected = 0
+    manual.bets.forEach((b) => { total += b.total; expected += winProfit(b.side, b.total) })
+    return { total, expected, rooms: manual.bets.size }
+  }, [manual.bets])
 
   // 헤더에 표시되는 손익·현재배팅·예상수익만 카운트업. 시작금액/전체배팅/최대수익/최대손실은 설정창의 통계 영역에서 정적으로 확인.
   const animatedSessionProfit = useCountUp(Math.abs(sessionProfit), 800)
@@ -672,6 +697,74 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
     return unsubscribe
   }, [onBetLog, addHistoryLog, settings.isVirtualMode, settings.betStrategy, cumulativeProfit])
 
+  // 수동 모드 진입/이탈: 자동배팅은 끄고, 모든 방 예측을 켠다(예측만 — 배팅은 사용자 클릭).
+  useEffect(() => {
+    try { localStorage.setItem(BET_MODE_KEY, betMode) } catch { /* ignore */ }
+    if (isManual) {
+      if (AutoModeService.isEnabled()) AutoModeService.stop()
+      ManualBetService.setVirtualMode(settings.isVirtualMode)
+      ManualBetService.enable()
+      MultiRoomPredictionService.setPredictModeActive(true)
+      addHistoryLog('-', `수동 배팅 시작 (${settings.isVirtualMode ? '가상' : '실제'}) — 카드의 자리를 눌러 칩을 올리세요`, 'info')
+    } else {
+      MultiRoomPredictionService.setPredictModeActive(false)
+      ManualBetService.disable()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isManual])
+
+  useEffect(() => {
+    ManualBetService.setVirtualMode(settings.isVirtualMode)
+  }, [settings.isVirtualMode])
+
+  // 수동 배팅 로그 → 히스토리 사이드바 + 방 카드(딜링 스트립 결과 캡션·테두리 플래시)
+  useEffect(() => {
+    return manual.onLog((log: ManualBetLog) => {
+      const side = log.side === 'B' ? '뱅커' : log.side === 'P' ? '플레이어' : '타이'
+      const type: HistoryLog['type'] = log.kind === 'win' ? 'win' : log.kind === 'loss' ? 'loss' : log.kind === 'error' ? 'error' : log.kind === 'placed' ? 'bet' : 'info'
+      addHistoryLog(log.roomName, log.message, type, {
+        betAmount: log.amount,
+        profit: log.profit,
+        cumulativeProfit: ManualBetService.getState().stats.profit,
+        winner: log.winner,
+      })
+      setRoomBetLogs(prev => {
+        const next = new Map(prev)
+        const logs = next.get(log.roomId) || []
+        const withoutPending = logs.filter(l => l.status !== 'pending')
+        if (log.kind === 'placed' || log.kind === 'undo') {
+          const bet = ManualBetService.getBet(log.roomId)
+          if (bet && bet.total > 0) {
+            const pendingLog: RoomBetLog = { betAmount: bet.total, status: 'pending', profit: 0, martinLevel: 0, prediction: bet.side, message: `${side} ${bet.total.toLocaleString()}원`, timestamp: Date.now() }
+            next.set(log.roomId, [pendingLog, ...withoutPending].slice(0, 10))
+          } else {
+            next.set(log.roomId, withoutPending)
+          }
+        } else if (log.kind === 'clear' || log.kind === 'void' || log.kind === 'error') {
+          next.set(log.roomId, withoutPending)
+        } else {
+          const status: RoomBetLog['status'] = log.kind === 'win' ? 'win' : log.kind === 'loss' ? 'loss' : 'tie'
+          const resolved: RoomBetLog = { betAmount: log.amount, status, profit: log.profit ?? 0, martinLevel: 0, prediction: log.side, winner: log.winner, message: log.message, timestamp: Date.now() }
+          next.set(log.roomId, [resolved, ...withoutPending].slice(0, 10))
+        }
+        return next
+      })
+    })
+  }, [manual.onLog, addHistoryLog])
+
+  const handleManualSpot = useCallback(async (room: Room, side: 'B' | 'P' | 'T') => {
+    const res = await manual.addChip(room, side)
+    if (!res.ok && res.error) showWarning(res.error)
+  }, [manual.addChip, showWarning])
+  const handleManualUndo = useCallback(async (room: Room) => {
+    const res = await manual.undoChip(room)
+    if (!res.ok && res.error) showWarning(res.error)
+  }, [manual.undoChip, showWarning])
+  const handleManualClear = useCallback(async (room: Room) => {
+    const res = await manual.clearRoom(room)
+    if (!res.ok && res.error) showWarning(res.error)
+  }, [manual.clearRoom, showWarning])
+
   const handleConnect = useCallback(async () => {
     if (!user?.siteUrl) return
     setIsConnecting(true)
@@ -784,6 +877,15 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
     if (status === 'monitoring') return { label: '대기 중', className: 'monitoring', message: 'Evolution 연결 대기...' }
     if (!isConnected) return { label: '연결 대기', className: 'idle', message: '연결 시작 버튼을 클릭하세요' }
 
+    if (isManual) {
+      return {
+        label: '',
+        isHtml: true,
+        className: settings.isVirtualMode ? 'running' : 'running-real',
+        message: settings.isVirtualMode ? '수동 배팅 · 가상' : '⚠️ 수동 배팅 · 실제 돈',
+      }
+    }
+
     // 실행 중 상태일 때 (HTML 반환을 위해 별도 처리)
     if (enabled) {
       return {
@@ -829,14 +931,14 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
 
           {globalStatus.isHtml ? (
             <div className="auto-mode__status-strip-content">
-              <span>자동 배팅</span>
+              <span>{isManual ? '수동 배팅' : '자동 배팅'}</span>
               <span className="status-divider">·</span>
               <span>{settings.isVirtualMode ? '가상' : '실제'}</span>
               <span className="status-divider">·</span>
               <div className="status-score">
-                <span className="win">{totalWins}승</span>
+                <span className="win">{isManual ? manual.stats.wins : totalWins}승</span>
                 <span className="divider">/</span>
-                <span className="loss">{totalLosses}패</span>
+                <span className="loss">{isManual ? manual.stats.losses : totalLosses}패</span>
               </div>
               {autoMode.startTime && (
                 <>
@@ -891,6 +993,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
       <header className="auto-mode__header">
 
         <div className="auto-mode__header-center">
+          {/* 배팅 방식: 자동 / 수동(반자동) */}
+          <div className="auto-mode__bet-mode" role="radiogroup" aria-label="배팅 방식">
+            <button type="button" role="radio" aria-checked={!isManual} className={!isManual ? 'is-active' : ''} onClick={() => setBetMode('auto')}>자동 배팅</button>
+            <button type="button" role="radio" aria-checked={isManual} className={isManual ? 'is-active' : ''} onClick={() => setBetMode('manual')}>수동 배팅</button>
+          </div>
+
           {/* 가상/실제 배팅 토글 */}
           {isConnected && (
             <button
@@ -906,8 +1014,8 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
             </button>
           )}
 
-          {/* 오토 배팅 ON/OFF 토글 */}
-          {isConnected && (
+          {/* 오토 배팅 ON/OFF 토글 (수동 모드에서는 숨김) */}
+          {isConnected && !isManual && (
             <button
               className={`auto-mode__toggle ${enabled ? 'active' : ''}`}
               onClick={handleToggle}
@@ -976,10 +1084,12 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
             <span className={`auto-mode__pod-value ${!settings.isVirtualMode && realBalanceFlash ? `flash-${realBalanceFlash}` : ''}`}>
               {settings.isVirtualMode
                 ? (() => {
-                  const effectiveBalance = virtualInitialBalance + sessionProfit - currentBettingInfo.totalCurrentBet
+                  const effectiveBalance = isManual
+                    ? manual.virtualBalance
+                    : virtualInitialBalance + sessionProfit - currentBettingInfo.totalCurrentBet
                   return `${effectiveBalance.toLocaleString()}원`
                 })()
-                : `${((autoMode.realDisplayBalance ?? realBalance) || 0).toLocaleString()}원`}
+                : `${((isManual ? realBalance : (autoMode.realDisplayBalance ?? realBalance)) || 0).toLocaleString()}원`}
             </span>
             {!settings.isVirtualMode && (
               <span className={`auto-mode__pod-caption ${realBalanceAgeSec !== null && realBalanceAgeSec < 5 ? 'live' : ''}`}>
@@ -994,10 +1104,15 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
             )}
             {settings.isVirtualMode && (
               (() => {
-                const balanceChange = sessionProfit - currentBettingInfo.totalCurrentBet
+                // 시작금 대비 변화 = 세션 손익 − 지금 걸려 있는 금액. 배팅 중 금액이 있으면 따로 적어 손익과 헷갈리지 않게.
+                const pendingNow = isManual ? manualPending.total : currentBettingInfo.totalCurrentBet
+                const balanceChange = sessionProfit - pendingNow
+                const pendingText = pendingNow > 0
+                  ? ` (배팅 중 −${pendingNow.toLocaleString()} 포함)`
+                  : ''
                 return (
                   <span className={`auto-mode__header-money-expected ${balanceChange >= 0 ? '' : 'loss'}`}>
-                    {balanceChange >= 0 ? '+' : ''}{balanceChange.toLocaleString()}
+                    {balanceChange >= 0 ? '+' : ''}{balanceChange.toLocaleString()}{pendingText}
                   </span>
                 )
               })()
@@ -1040,14 +1155,14 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
           </div>
 
           {/* Active Bet Pod */}
-          {currentBettingInfo.totalCurrentBet > 0 && (
+          {(isManual ? manualPending.total > 0 : currentBettingInfo.totalCurrentBet > 0) && (
             <div className="auto-mode__pod active-bet">
-              <span className="auto-mode__pod-label">현재 배팅 중 ({currentBettingInfo.bettingRoomCount}방)</span>
+              <span className="auto-mode__pod-label">현재 배팅 중 ({isManual ? manualPending.rooms : currentBettingInfo.bettingRoomCount}방)</span>
               <span className="auto-mode__pod-value">
-                {animatedCurrentBet.toLocaleString()}원
+                {(isManual ? manualPending.total : animatedCurrentBet).toLocaleString()}원
               </span>
               <span className="auto-mode__header-money-expected">
-                예상 +{animatedExpected.toLocaleString()}
+                예상 +{(isManual ? manualPending.expected : animatedExpected).toLocaleString()}
               </span>
             </div>
           )}
@@ -1111,12 +1226,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
             </button>
           )}
 
-          {onHome && (
-            <button className="auto-mode__header-btn" onClick={onHome}>
-              홈
-            </button>
-          )}
-
           <button className="auto-mode__header-btn auto-mode__header-btn--logout" onClick={onLogout}>
             로그아웃
           </button>
@@ -1161,10 +1270,10 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                   className={viewMode === 'grid' ? 'active' : ''}
                   onClick={() => setViewMode('grid')}
                   aria-pressed={viewMode === 'grid'}
-                  title="진행 중인 방의 배팅·단계·최근 결과를 크게 확인합니다."
+                  title="에볼루션 테이블처럼 배팅 자리·큰길·P/B 예측을 방마다 보여줍니다."
                 >
                   <LayoutGrid size={18} />
-                  <span>집중 관제</span>
+                  <span>테이블 보기</span>
                 </button>
                 <button
                   className={viewMode === 'list' ? 'active' : ''}
@@ -1174,15 +1283,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                 >
                   <List size={18} />
                   <span>전체 비교</span>
-                </button>
-                <button
-                  className={viewMode === 'mosaic' ? 'active' : ''}
-                  onClick={() => setViewMode('mosaic')}
-                  aria-pressed={viewMode === 'mosaic'}
-                  title="많은 방의 이상 상태와 결과 대기를 한눈에 감시합니다."
-                >
-                  <LayoutTemplate size={18} />
-                  <span>밀집 감시</span>
                 </button>
               </div>
 
@@ -1217,6 +1317,21 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </button>
               </div>
+
+              {isManual && (
+                <ManualBetTray
+                  selectedChip={manual.selectedChip}
+                  onSelectChip={manual.setChip}
+                  stats={manual.stats}
+                  pendingAmount={manual.pendingAmount}
+                  openBetCount={manual.bets.size}
+                  isVirtual={settings.isVirtualMode}
+                  onResetStats={manual.resetStats}
+                  lastRoomName={manual.lastRoomId ? (manual.bets.get(manual.lastRoomId)?.roomName ?? null) : null}
+                  onUndoLast={() => { void manual.undoLast().then(r => { if (!r.ok && r.error) showWarning(r.error) }) }}
+                  onClearAll={() => { void manual.clearAll().then(r => { if (!r.ok && r.error) showWarning(r.error) }) }}
+                />
+              )}
             </section>
 
             {/* Room Grid - 메인 영역 */}
@@ -1239,8 +1354,13 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                   sortDirection={sortDirection}
                   roomDataVersion={roomDataVersion}
                   filterSettingsSignature={filterSettingsSignature}
+                  manualActive={isManual}
+                  manualBets={manual.bets}
+                  onManualSpot={handleManualSpot}
+                  onManualUndo={handleManualUndo}
+                  onManualClear={handleManualClear}
                 />
-              ) : viewMode === 'list' ? (
+              ) : (
                 <AutoModeRoomList
                   rooms={roomsForAutoModeDisplay}
                   roomStates={roomStates}
@@ -1259,27 +1379,6 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
                   sortDirection={sortDirection}
                   setSortType={setSortType}
                   roomDataVersion={roomDataVersion}
-                  filterSettingsSignature={filterSettingsSignature}
-                />
-              ) : (
-                // mosaic view
-                <AutoModeMosaic
-                  rooms={Array.from(roomsForAutoModeDisplay.values())}
-                  roomStates={roomStates}
-                  bettingStates={autoModeRoomStates}
-                  activePredictions={new Map()}
-                  roomBetLogs={roomBetLogs}
-                  settings={settings}
-                  cumulativeProfit={sessionProfit}
-                  onToggleRoom={() => { }}
-                  roomDataVersion={roomDataVersion}
-                  roomTimers={roomTimers}
-                  enabledRoomIds={enabledRoomIds}
-                  selectedPattern={activeFilters.length > 0 ? activeFilters[0] : 'all'}
-                  activeFilters={activeFilters}
-                  matchesFilter={matchesFilter}
-                  sortType={sortType}
-                  sortDirection={sortDirection}
                   filterSettingsSignature={filterSettingsSignature}
                 />
               )}
@@ -1323,6 +1422,21 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline, onHo
         onOpenStrategyBuilder={() => {
           setShowSettings(false)
           setShowStrategyModal(true)
+        }}
+        selectedRoomCount={selectedRoomIds.size}
+        totalRoomCount={baccaratRoomList.length}
+        activeFilterLabel={getCurrentFilterLabel()}
+        onOpenRoomSelector={() => {
+          setShowSettings(false)
+          setShowRoomSelector(true)
+        }}
+        onOpenFilterDialog={() => {
+          setShowSettings(false)
+          setShowFilterDialog(true)
+        }}
+        onOpenPatternManager={() => {
+          setShowSettings(false)
+          setShowPatternModal(true)
         }}
       />
 

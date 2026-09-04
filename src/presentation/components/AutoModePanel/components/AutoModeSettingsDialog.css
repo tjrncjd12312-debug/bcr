@@ -96,9 +96,35 @@
 /* Strategy Grid */
 .ams-strategy-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+/* 방·필터 탭 — 설정창 한곳에서 방 선택·필터·패턴으로 들어가는 진입 카드 */
+.ams-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
 }
+.ams-entry-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--modal-elevated);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ams-entry-card:hover { border-color: var(--accent-primary); background: var(--bg-hover); }
+.ams-entry-card__title { font-size: 14px; font-weight: 800; }
+.ams-entry-card__value { font-size: 20px; font-weight: 900; color: var(--accent-primary); font-variant-numeric: tabular-nums; }
+.ams-entry-card__desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.ams-entry-card__cta { margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--text-secondary); }
 
 .ams-strategy-owner {
   display: flex;

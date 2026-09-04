@@ -1,0 +1,451 @@
+/* EvoRoomCard — Evolution 멀티위젯 타일 레이아웃의 자동배팅 방 카드 */
+.evo-card {
+  --evo-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 8px;
+  background: linear-gradient(180deg, #171d27 0%, #121821 100%);
+  border: 1px solid rgba(215, 226, 238, 0.14);
+  border-radius: var(--evo-radius);
+  color: var(--text-primary, #e6edf5);
+  min-width: 0;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+  contain: content;
+}
+
+.evo-card--betting {
+  border-color: rgba(255, 216, 77, 0.6);
+  box-shadow: 0 0 0 1px rgba(255, 216, 77, 0.35), 0 0 18px rgba(255, 216, 77, 0.16), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+@keyframes evo-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255, 216, 77, 0.25), 0 8px 24px rgba(0, 0, 0, 0.35); }
+  50% { box-shadow: 0 0 0 1px rgba(255, 216, 77, 0.45), 0 0 22px rgba(255, 216, 77, 0.22), 0 8px 24px rgba(0, 0, 0, 0.35); }
+}
+.evo-card--armed { border-color: rgba(215, 226, 238, 0.28); }
+.evo-card--disabled { opacity: 0.55; }
+/* 예측·결과마다 카드 전체가 번쩍이던 플래시는 제거(2026-09-05, "화면 깜박거림"). 결과는 최신 셀 pop과 스트립으로 충분. */
+.evo-card.is-won { border-color: rgba(59, 213, 138, 0.75); box-shadow: 0 0 0 1px rgba(59, 213, 138, 0.35), 0 0 22px rgba(59, 213, 138, 0.28); }
+.evo-card.is-lost { border-color: rgba(255, 101, 117, 0.7); box-shadow: 0 0 0 1px rgba(255, 101, 117, 0.3); }
+
+@keyframes evo-flash {
+  0% { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+}
+
+/* ── 헤더: 금액 | 이름 | 라운드 ── */
+.evo-card__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 10px;
+}
+
+.evo-card__amount {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #aab7c6);
+  white-space: nowrap;
+}
+
+.evo-card__amount.is-live { color: #fff; }
+.evo-card.side-b .evo-card__amount.is-live { color: var(--banker-light, #ff8490); }
+.evo-card.side-p .evo-card__amount.is-live { color: var(--player-light, #79aaff); }
+.evo-card.side-t .evo-card__amount.is-live { color: var(--tie-color, #2ccb7f); }
+
+.evo-card__name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evo-card__round { justify-self: end; width: 84px; }
+
+/* ── 메타 줄: 상태 · 근거 · 단계 · 승패 · 손익 ── */
+.evo-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-secondary, #aab7c6);
+}
+
+.evo-chip {
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.evo-chip.tone-betting, .evo-chip.tone-pending { color: #ffd84d; border-color: rgba(255, 216, 77, 0.35); background: rgba(255, 216, 77, 0.1); }
+.evo-chip.tone-martin { color: #ff9f43; border-color: rgba(255, 159, 67, 0.4); background: rgba(255, 159, 67, 0.1); }
+.evo-chip.tone-observing { color: #56c7ff; }
+.evo-chip.tone-disabled { color: #8a97a6; }
+.evo-chip--reason { color: #c9d4e0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
+.evo-chip--reason.tie-tone { color: var(--tie-color, #2ccb7f); }
+
+.evo-card__stage { font-weight: 700; white-space: nowrap; }
+.evo-card__stage.is-warn { color: #ff9f43; }
+.evo-card__stage.is-danger { color: #ff6575; }
+.evo-card__wl { white-space: nowrap; margin-left: auto; font-variant-numeric: tabular-nums; }
+.evo-card__profit { font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.evo-card__profit.is-pos { color: #3bd58a; }
+.evo-card__profit.is-neg { color: #ff6575; }
+
+/* ── 배팅 자리(Evolution 배치): 페어 | 플레이어 | 무 | 뱅커 | 페어 ── */
+.evo-card__spots {
+  display: grid;
+  grid-template-columns: 0.55fr 1.45fr 0.7fr 1.45fr 0.55fr;
+  gap: 4px;
+  height: 46px;
+}
+
+.evo-spot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1.05;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.82);
+  overflow: hidden;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.evo-spot--pp, .evo-spot--bp { font-size: 10px; font-weight: 700; color: rgba(255, 255, 255, 0.6); }
+.evo-spot--pp { background: rgba(76, 141, 255, 0.14); border-color: rgba(76, 141, 255, 0.28); }
+.evo-spot--p  { background: rgba(76, 141, 255, 0.22); border-color: rgba(76, 141, 255, 0.45); }
+.evo-spot--t  { background: rgba(44, 203, 127, 0.16); border-color: rgba(44, 203, 127, 0.4); }
+.evo-spot--b  { background: rgba(255, 92, 108, 0.22); border-color: rgba(255, 92, 108, 0.45); }
+.evo-spot--bp { background: rgba(255, 92, 108, 0.14); border-color: rgba(255, 92, 108, 0.28); }
+
+.evo-spot.is-armed { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55); }
+.evo-spot.is-betting { color: #fff; box-shadow: 0 0 0 2px rgba(255, 216, 77, 0.85), 0 0 18px rgba(255, 216, 77, 0.35); }
+.evo-spot--p.is-betting { background: rgba(76, 141, 255, 0.62); }
+.evo-spot--t.is-betting { background: rgba(44, 203, 127, 0.55); }
+.evo-spot--b.is-betting { background: rgba(255, 92, 108, 0.62); }
+
+.evo-spot.is-betting .evo-spot__chip { animation: evo-chip-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+@keyframes evo-chip-pop {
+  0% { transform: translateY(-14px) scale(0.4); opacity: 0; }
+  60% { transform: translateY(1px) scale(1.12); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.evo-spot__chip {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ffd84d;
+  color: #17120a;
+  font-size: 10.5px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.evo-spot.is-armed .evo-spot__chip { background: rgba(255, 255, 255, 0.85); }
+
+/* ── 큰길 ── */
+.evo-card__road {
+  position: relative;
+  border-radius: 6px;
+  background: #0b0f15;
+  border: 1px solid rgba(215, 226, 238, 0.1);
+  padding: 3px;
+}
+
+.evo-road {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.evo-road--empty {
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted, #7f8c9b);
+}
+
+.evo-road__grid line { stroke: rgba(255, 255, 255, 0.05); stroke-width: 1; }
+.evo-road__cell circle { fill: none; stroke-width: 2.2; }
+.evo-road__cell.side-b circle { stroke: var(--banker-color, #ff5c6c); }
+.evo-road__cell.side-p circle { stroke: var(--player-color, #4c8dff); }
+.evo-road__cell.is-latest > circle:first-child {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: evo-cell-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes evo-cell-pop {
+  0% { transform: scale(0.2); opacity: 0; }
+  70% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.evo-road__cell .evo-road__tie { stroke: var(--tie-color, #2ccb7f); stroke-width: 2; stroke-linecap: round; }
+.evo-road__cell .evo-road__pair-p { fill: var(--player-color, #4c8dff); stroke: #0b0f15; stroke-width: 1; }
+.evo-road__cell .evo-road__pair-b { fill: var(--banker-color, #ff5c6c); stroke: #0b0f15; stroke-width: 1; }
+
+/* 결과 오버레이(4초) */
+.evo-card__result {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 6px;
+  backdrop-filter: blur(1px);
+  animation: evo-result-in 180ms ease-out;
+}
+.evo-card__result strong { font-size: 26px; font-weight: 900; letter-spacing: 0.04em; }
+.evo-card__result span { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.evo-card__result.is-win { background: rgba(59, 213, 138, 0.22); color: #3bd58a; box-shadow: inset 0 0 0 1px rgba(59, 213, 138, 0.5); }
+.evo-card__result.is-loss { background: rgba(255, 101, 117, 0.22); color: #ff6575; box-shadow: inset 0 0 0 1px rgba(255, 101, 117, 0.5); }
+.evo-card__result.is-win strong { animation: evo-win-pop 700ms cubic-bezier(0.34, 1.56, 0.64, 1); text-shadow: 0 0 18px rgba(59, 213, 138, 0.8); }
+.evo-card__result.is-loss strong { animation: evo-loss-shake 500ms ease-in-out; }
+.evo-card__result span { animation: evo-float-up 1400ms ease-out both; }
+
+@keyframes evo-win-pop { 0% { transform: scale(0.3); } 60% { transform: scale(1.35); } 100% { transform: scale(1); } }
+@keyframes evo-loss-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
+@keyframes evo-float-up { 0% { transform: translateY(10px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateY(-6px); opacity: 1; } }
+
+@keyframes evo-result-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ── 푸터: P?/B? 파생로드 예측 + 카운트 ── */
+.evo-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.evo-card__asks { display: flex; gap: 10px; }
+.evo-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.evo-ask b { font-size: 12px; font-weight: 900; }
+.evo-ask b.side-p { color: var(--player-light, #79aaff); }
+.evo-ask b.side-b { color: var(--banker-light, #ff8490); }
+.evo-ask__marks { display: block; }
+.evo-mark { stroke-width: 2; }
+.evo-mark.mark-r { stroke: var(--banker-color, #ff5c6c); }
+.evo-mark.mark-b { stroke: var(--player-color, #4c8dff); }
+.evo-mark.mark-none { stroke: rgba(255, 255, 255, 0.18); }
+.evo-mark--solid.mark-r { fill: var(--banker-color, #ff5c6c); }
+.evo-mark--solid.mark-b { fill: var(--player-color, #4c8dff); }
+.evo-mark--solid.mark-none { fill: rgba(255, 255, 255, 0.12); stroke: none; }
+.evo-mark--slash { stroke-linecap: round; stroke-width: 2.4; }
+
+.evo-card__counts { display: flex; gap: 6px; }
+.evo-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, #e6edf5);
+}
+.evo-count i {
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  color: #fff;
+}
+.evo-count.side-p i { background: var(--player-color, #4c8dff); }
+.evo-count.side-b i { background: var(--banker-color, #ff5c6c); }
+.evo-count.side-t i { background: var(--tie-color, #2ccb7f); color: #072b1a; }
+
+/* ── 카드 격자 ── */
+.auto-mode__evo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(324px, 1fr));
+  gap: 12px;
+  padding-bottom: 20px;
+  align-content: start;
+}
+
+/* ── 카지노 칩 ── */
+.evo-chip {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.55));
+}
+.evo-chip__layer { position: absolute; left: 0; }
+.evo-chip__edge { stroke: rgba(0, 0, 0, 0.35); stroke-width: 1; }
+.evo-chip__stripes { stroke: rgba(255, 255, 255, 0.92); }
+.evo-chip__inner { stroke: rgba(255, 255, 255, 0.55); stroke-width: 1.2; }
+.evo-chip__label { fill: #fff; font-family: inherit; paint-order: stroke; stroke: rgba(0, 0, 0, 0.35); stroke-width: 1.5px; }
+.evo-chip--blue  .evo-chip__edge, .evo-chip--blue  .evo-chip__inner { fill: #2f6fe4; }
+.evo-chip--red   .evo-chip__edge, .evo-chip--red   .evo-chip__inner { fill: #d8384a; }
+.evo-chip--green .evo-chip__edge, .evo-chip--green .evo-chip__inner { fill: #1f9d5a; }
+.evo-chip--black .evo-chip__edge, .evo-chip--black .evo-chip__inner { fill: #2b2f38; }
+.evo-chip--gold  .evo-chip__edge, .evo-chip--gold  .evo-chip__inner { fill: #d9a520; }
+.evo-chip--gold  .evo-chip__label { fill: #1d1300; stroke: rgba(255, 255, 255, 0.35); }
+.evo-chip--blue  .evo-chip__inner { fill: #3b7ff0; }
+.evo-chip--red   .evo-chip__inner { fill: #e64d5e; }
+.evo-chip--green .evo-chip__inner { fill: #27b46a; }
+.evo-chip--black .evo-chip__inner { fill: #3a3f4a; }
+.evo-chip--gold  .evo-chip__inner { fill: #f2bf3a; }
+
+.evo-spot .evo-chip { position: absolute; right: 5px; bottom: 4px; }
+.evo-spot.is-betting .evo-chip { animation: evo-chip-pop 460ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+.evo-spot.is-armed .evo-chip { opacity: 0.55; filter: grayscale(0.4); }
+
+/* ── 딜링 스트립(테이블) ── */
+.evo-deal {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  height: 66px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: radial-gradient(120% 140% at 50% 0%, #0f3b2c 0%, #0a2a20 60%, #071d17 100%);
+  border: 1px solid rgba(44, 203, 127, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  transition: box-shadow 200ms ease, border-color 200ms ease;
+}
+.evo-deal--previous { opacity: 0.55; }
+.evo-deal--empty { opacity: 0.5; }
+.evo-deal.is-win { border-color: rgba(59, 213, 138, 0.7); box-shadow: inset 0 0 0 1px rgba(59, 213, 138, 0.35), 0 0 16px rgba(59, 213, 138, 0.25); }
+.evo-deal.is-loss { border-color: rgba(255, 101, 117, 0.6); box-shadow: inset 0 0 0 1px rgba(255, 101, 117, 0.3); }
+
+.evo-deal__side { display: flex; align-items: center; min-width: 0; }
+.evo-deal__side--p { justify-content: flex-start; }
+.evo-deal__side--b { justify-content: flex-end; }
+
+.evo-hand { display: inline-flex; align-items: center; gap: 4px; perspective: 400px; }
+.evo-hand--b { flex-direction: row-reverse; }
+
+.evo-playcard {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 36px;
+  border-radius: 4px;
+  background: #f7f4ec;
+  color: #1a1a1a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  font-weight: 900;
+  line-height: 1;
+  backface-visibility: hidden;
+}
+.evo-playcard.is-red { color: #d4263a; }
+.evo-playcard__rank { font-size: 11px; }
+.evo-playcard__suit { font-size: 12px; }
+.evo-playcard.is-third { transform: rotate(90deg); margin: 0 5px; }
+.evo-playcard.is-back {
+  background: repeating-linear-gradient(135deg, #1f4d9c 0 3px, #163a78 3px 6px);
+  border: 2px solid #e9e4d8;
+  box-sizing: border-box;
+}
+.evo-playcard.is-flip { animation: evo-card-flip 520ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.evo-playcard.is-third.is-flip { animation: evo-card-flip-third 520ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+@keyframes evo-card-flip {
+  0% { transform: rotateY(90deg) translateY(-6px); opacity: 0; }
+  60% { opacity: 1; }
+  100% { transform: rotateY(0) translateY(0); opacity: 1; }
+}
+@keyframes evo-card-flip-third {
+  0% { transform: rotate(90deg) rotateX(90deg) translateY(-6px); opacity: 0; }
+  100% { transform: rotate(90deg) rotateX(0) translateY(0); opacity: 1; }
+}
+
+.evo-deal__center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 96px; }
+.evo-deal__score { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
+.evo-deal__num { font-size: 22px; font-weight: 900; line-height: 1; transition: transform 200ms ease; }
+.evo-deal__num.side-p { color: var(--player-light, #79aaff); }
+.evo-deal__num.side-b { color: var(--banker-light, #ff8490); }
+.evo-deal__num.is-winner { transform: scale(1.18); text-shadow: 0 0 12px currentColor; }
+.evo-deal__colon { font-size: 16px; font-weight: 800; color: rgba(255, 255, 255, 0.45); }
+.evo-deal__caption { font-size: 11.5px; font-weight: 700; color: rgba(255, 255, 255, 0.78); white-space: nowrap; }
+.evo-deal.is-win .evo-deal__caption { color: #3bd58a; }
+.evo-deal.is-loss .evo-deal__caption { color: #ff6575; }
+.evo-deal--dealing .evo-deal__caption::after {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px; margin-left: 5px; border-radius: 50%;
+  background: #56c7ff; vertical-align: middle;
+}
+@keyframes evo-blink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+.evo-deal__side.is-winner .evo-playcard { box-shadow: 0 0 0 1.5px #ffd84d, 0 0 12px rgba(255, 216, 77, 0.5); }
+
+/* ── 수동 배팅 ── */
+.evo-spot.is-clickable { cursor: pointer; font: inherit; color: rgba(255, 255, 255, 0.85); }
+.evo-spot.is-clickable:hover:not(:disabled) { filter: brightness(1.18); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.35); }
+.evo-spot.is-clickable:active:not(:disabled) { transform: scale(0.97); }
+.evo-spot.is-closed { cursor: not-allowed; opacity: 0.55; }
+.evo-spot.is-predicted { box-shadow: inset 0 0 0 2px rgba(255, 216, 77, 0.75); }
+.evo-spot__pred {
+  position: absolute;
+  left: 4px;
+  bottom: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 216, 77, 0.92);
+  color: #17120a;
+  font-size: 10px;
+  font-weight: 900;
+}
+.evo-chip--recommend { color: #17120a; background: #ffd84d; border-color: #ffd84d; }
+.evo-chip.tone-idle { color: #95a2b2; }
+.evo-card__mini-btn {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(215, 226, 238, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #e6edf5);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.evo-card__mini-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); }
+.evo-card__mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.evo-card__mini-btn.is-danger { color: #ff8490; border-color: rgba(255, 101, 117, 0.4); }
+
+.evo-card--manual .evo-card__meta { flex-wrap: wrap; overflow: visible; row-gap: 4px; }
+.evo-card__manual-actions { display: inline-flex; gap: 4px; margin-left: auto; }
+.evo-card__mini-btn { font-size: 12px; padding: 4px 9px; }

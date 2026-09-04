@@ -23,6 +23,7 @@ import { RoomFilterService } from '../services/RoomFilterService'
 import { MultiRoomPredictionService } from '../services/MultiRoomPredictionService'
 import { SemiAutoService } from '../services/SemiAutoService'
 import { AutoModeService } from '../services/AutoModeService'
+import { ManualBetService } from '../services/ManualBetService'
 import { MoveOnTieListener, FreshShoeTieMartingalePreset } from '../services/freshshoe'
 import type { FreshShoeTieMartingalePreset as FreshShoeTieMartingalePresetType } from '../services/freshshoe'
 
@@ -138,6 +139,7 @@ export function setupContainer(): void {
   MultiRoomPredictionService.initialize()
   SemiAutoService.initialize()
   AutoModeService.initialize()
+  ManualBetService.initialize()
 
   console.log('[DI] Services initialized with event subscriptions')
 }

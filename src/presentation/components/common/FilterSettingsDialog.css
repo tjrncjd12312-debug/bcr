@@ -249,7 +249,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap; /* 임계값 입력이 많은 필터(타이 빈도)는 컨트롤이 다음 줄로 내려가 라벨이 깨지지 않게 */
+  gap: 8px 12px;
   padding: 10px 12px;
   background: var(--modal-elevated);
   border: 1px solid var(--modal-border);
@@ -259,9 +260,12 @@
 .filter-settings__detail-name {
   font-size: 13px;
   color: var(--text-primary);
-  font-weight: 500;
-  flex: 1;
+  font-weight: 600;
+  flex: 1 1 140px;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .filter-settings__detail-controls {
@@ -270,6 +274,8 @@
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex: 0 1 auto;
+  margin-left: auto;
 }
 
 .filter-settings__patterns-btn {
