@@ -68,6 +68,7 @@ zstd = "0.13"
 windows = { version = "0.61.3", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Power",
 ] }
 
 

@@ -8,6 +8,7 @@
 pub mod commands;
 pub mod event_aggregator;
 pub mod metrics;
+pub mod power;
 pub mod state;
 pub mod task_registry;
 

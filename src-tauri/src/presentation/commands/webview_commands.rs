@@ -27,6 +27,72 @@ static MULTIWIDGET_CLIENT: Lazy<&TokioMutex<EvolutionMultiSocket>> =
 /// Global Chrome process ID for cleanup on exit
 static CHROME_PID: AtomicU32 = AtomicU32::new(0);
 
+/// CDP `/json` 폴링이 이만큼 연속 실패해야 "크롬 연결 끊김"으로 본다(2 초 간격 → 약 20 초).
+/// 첫 실패에 바로 끊는 옛 동작은 창 최소화·절전 복귀·순간적인 로컬 소켓 거절에서 거짓 끊김(UI idle)을 냈다.
+const CDP_POLL_MAX_CONSECUTIVE_FAILURES: u32 = 10;
+
+/// 🌉 브릿지 수신 생존 신호(2026-09-05): 현재 부착된 멀티위젯 소켓에서 마지막 프레임을 받은 시각(단조시계 ms).
+/// 0 = 아직 프레임 없음. 워치독이 이 값으로 "소켓이 조용히 죽었다"를 판정한다 — 브라우저 소켓이 닫혀도
+/// CDP는 webSocketClosed 처리를 안 하므로, 프레임 침묵이 유일한 신호다.
+static LAST_MW_FRAME_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BRIDGE_WATCHDOG_STARTED: AtomicBool = AtomicBool::new(false);
+static BRIDGE_STALL_REPORTED: AtomicBool = AtomicBool::new(false);
+/// 로비 v2 피드는 수십 테이블 결과·상태로 매초 프레임이 오므로 2 분 침묵은 확실한 정지다.
+const BRIDGE_STALL_SECS: u64 = 120;
+
+fn mono_ms() -> u64 {
+    static START: Lazy<std::time::Instant> = Lazy::new(std::time::Instant::now);
+    START.elapsed().as_millis() as u64
+}
+
+/// 브릿지 소켓에서 프레임을 받았다(또는 새로 부착했다) — 침묵 타이머 리셋.
+fn touch_bridge_frame() {
+    LAST_MW_FRAME_AT_MS.store(mono_ms(), Ordering::SeqCst);
+    BRIDGE_STALL_REPORTED.store(false, Ordering::SeqCst);
+}
+
+/// 브릿지 프레임 침묵 워치독(프로세스당 1개). 부착 상태인데 `BRIDGE_STALL_SECS` 동안 프레임이 없으면
+/// 프론트에 `evolution_multi_disconnected`(reason=receive_timeout:…)를 1회 알린다 — 프론트가 기존 복구
+/// 경로(자동 모드: 세션 로테이션 1회 / 예측 모드: CDP 재시작)를 탄다. 프레임이 다시 오면 자동 해제.
+/// 창 최소화·절전 등으로 브라우저 소켓이 조용히 끊긴 뒤 UI가 '연결됨'인 채 굳는 것을 막는다.
+fn spawn_bridge_watchdog(app: AppHandle) {
+    if BRIDGE_WATCHDOG_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            tick.tick().await;
+            let attached = MULTIWIDGET_CLIENT.lock().await.is_bridge_active();
+            if !attached {
+                continue;
+            }
+            let last = LAST_MW_FRAME_AT_MS.load(Ordering::SeqCst);
+            if last == 0 {
+                continue;
+            }
+            let silent_ms = mono_ms().saturating_sub(last);
+            if silent_ms >= BRIDGE_STALL_SECS * 1000
+                && !BRIDGE_STALL_REPORTED.swap(true, Ordering::SeqCst)
+            {
+                warn!(
+                    "🌉 [BRIDGE-WATCHDOG] 멀티위젯 프레임 {}초 무수신 — 브라우저 소켓 정지로 판단, 프론트에 끊김 통지",
+                    silent_ms / 1000
+                );
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.emit(
+                        "evolution_multi_disconnected",
+                        serde_json::json!({
+                            "url": "",
+                            "reason": format!("receive_timeout:bridge_no_frames_{}s", silent_ms / 1000)
+                        }),
+                    );
+                }
+            }
+        }
+    });
+}
+
 pub fn chrome_pid() -> u32 {
     CHROME_PID.load(Ordering::SeqCst)
 }
@@ -576,6 +642,7 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
             "✅ Existing Chrome remote debugging detected on {} - reusing",
             CDP_PORT
         );
+        crate::presentation::power::keep_awake(true);
         if let Some(main_window) = app.get_webview_window("main") {
             let _ = main_window.emit(
                 "chrome-cdp-ready",
@@ -729,6 +796,9 @@ pub async fn open_in_chrome(app: AppHandle, url: String) -> Result<(), String> {
 
     // Wait for Chrome to start
     std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // ☕ 카지노 세션이 사는 동안 시스템 대기 모드를 막는다(창 최소화 후 자리를 비우면 절전 → 소켓 사망 예방).
+    crate::presentation::power::keep_awake(true);
 
     // Notify frontend that Chrome is ready for CDP monitoring
     if let Some(main_window) = app.get_webview_window("main") {
@@ -1005,6 +1075,13 @@ pub async fn start_cdp_monitoring(
         // 탐지 방식:
         // - table_id가 URL에 있으면 → 방 페이지 (CDP 모니터링 안 함)
         // - Evolution WebSocket이 감지되면 → 로비 페이지 (CDP 모니터링)
+        // 로컬 CDP 조회는 타임아웃을 둔다(기본 클라이언트는 무한 대기 → 크롬이 멈추면 폴러가 조용히 굳음).
+        let cdp_poll_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+        let mut cdp_poll_failures: u32 = 0;
+
         loop {
             if CDP_SHOULD_STOP.load(std::sync::atomic::Ordering::SeqCst) {
                 info!("🛑 CDP polling stopped (stop flag set)");
@@ -1013,8 +1090,9 @@ pub async fn start_cdp_monitoring(
 
             let cdp_url = format!("http://127.0.0.1:{}/json", CDP_PORT);
 
-            match reqwest::get(&cdp_url).await {
+            match cdp_poll_client.get(&cdp_url).send().await {
                 Ok(response) => {
+                    cdp_poll_failures = 0;
                     if let Ok(pages) = response.json::<Vec<serde_json::Value>>().await {
                         for page in pages {
                             let page_type = page.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -1190,17 +1268,31 @@ pub async fn start_cdp_monitoring(
                     }
                 }
                 Err(e) => {
-                    // Chrome might have closed, stop monitoring
-                    warn!("❌ CDP connection lost: {}", e);
-                    if let Some(main_window) = app_handle.get_webview_window("main") {
-                        let _ = main_window.emit(
-                            "cdp-connection-failed",
-                            serde_json::json!({
-                                "error": e.to_string()
-                            }),
+                    // 🛡️ 일시 실패 내성(2026-09-05): /json 조회가 한 번 실패해도 바로 감시를 끝내지 않는다.
+                    //   종전엔 첫 실패에 즉시 `cdp-connection-failed`를 쏘고 루프를 끊어, 크롬은 살아 있고
+                    //   페이지 모니터·브릿지 프레임도 흐르는데 UI만 '연결 끊김(idle)'이 되는 거짓 끊김이 났다.
+                    //   연속 N회(약 20초) 실패에만 끊김으로 본다(크롬이 정말 닫혔으면 거절이 즉시 반복되어 도달).
+                    cdp_poll_failures += 1;
+                    if cdp_poll_failures < CDP_POLL_MAX_CONSECUTIVE_FAILURES {
+                        warn!(
+                            "⚠️ CDP /json 조회 실패 {}/{} — 재시도: {}",
+                            cdp_poll_failures, CDP_POLL_MAX_CONSECUTIVE_FAILURES, e
                         );
+                    } else {
+                        warn!(
+                            "❌ CDP connection lost ({}회 연속 실패): {}",
+                            cdp_poll_failures, e
+                        );
+                        if let Some(main_window) = app_handle.get_webview_window("main") {
+                            let _ = main_window.emit(
+                                "cdp-connection-failed",
+                                serde_json::json!({
+                                    "error": e.to_string()
+                                }),
+                            );
+                        }
+                        break;
                     }
-                    break;
                 }
             }
 
@@ -1729,6 +1821,26 @@ async fn monitor_page_continuously(
             );
         }
 
+        // 👁️ 가시성 셔밍(2026-09-05): 창 최소화/가림 시 게임 클라이언트가 document.hidden을 보고 스트림·소켓을
+        //   정리하지 않도록 문서를 항상 'visible'로 보이게 한다(에볼·프라 공통, WS 블로커와는 별개 스크립트).
+        let add_vis_shim = serde_json::json!({
+            "id": 79,
+            "method": "Page.addScriptToEvaluateOnNewDocument",
+            "params": {
+                "source": PAGE_VISIBILITY_SHIM_SCRIPT
+            }
+        });
+        if let Err(e) = write
+            .lock()
+            .await
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                add_vis_shim.to_string(),
+            ))
+            .await
+        {
+            debug!("Failed to register visibility shim for new documents: {}", e);
+        }
+
         let can_consume_pending_url =
             page_url_owned.is_empty() || page_url_owned.starts_with("about:blank");
         let pending_url = if can_consume_pending_url {
@@ -2133,6 +2245,8 @@ async fn monitor_page_continuously(
                                             match client.attach_bridge(ws_url_for_connect.clone(), out_tx).await {
                                                 Ok(_) => {
                                                     info!("🌉 [BRIDGE] 브라우저 소켓에 부착 완료 — 직접 접속·주차 없음");
+                                                    touch_bridge_frame();
+                                                    spawn_bridge_watchdog(app_handle_for_connect.clone());
                                                     drop(client);
                                                     let write_for_bridge = write_for_bridge.clone();
                                                     let session_for_bridge = session_for_bridge.clone();
@@ -2508,6 +2622,27 @@ async fn monitor_page_continuously(
                                             // Install the WebSocket blocker as soon as an Evolution context exists.
                                             // The blocker captures the WS URL via console and prevents the browser
                                             // from opening the real socket, so Rust can become the only session owner.
+                                            // 👁️ 가시성 셔밍은 제공자 무관(에볼·프라 iframe 모두) — 이미 로드된 문서/OOPIF 세션에도 즉시 적용.
+                                            {
+                                                let mut vis_msg = serde_json::json!({
+                                                    "id": 887000 + context_id,
+                                                    "method": "Runtime.evaluate",
+                                                    "params": {
+                                                        "expression": PAGE_VISIBILITY_SHIM_SCRIPT,
+                                                        "returnByValue": true,
+                                                        "contextId": context_id
+                                                    }
+                                                });
+                                                if let Some(ref sid) = context_session_id {
+                                                    vis_msg["sessionId"] = serde_json::json!(sid);
+                                                }
+                                                let _ = write.lock().await
+                                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                                        vis_msg.to_string(),
+                                                    ))
+                                                    .await;
+                                            }
+
                                             if origin.contains("evo-games")
                                                 || origin.contains("evolution")
                                             {
@@ -4590,6 +4725,7 @@ async fn monitor_page_continuously(
                                                 let is_current = client.bridge_url().is_some()
                                                     && client.bridge_url() == frame_url.map(|s| s.as_str());
                                                 if is_current {
+                                                    touch_bridge_frame();
                                                     client.ingest_bridge_frame(opcode, payload).await;
                                                 }
                                                 continue;
@@ -6102,6 +6238,36 @@ static WS_BLOCKER_SCRIPT_RESOLVED: Lazy<String> = Lazy::new(|| {
 
 /// 🎲 프라그마틱 플레이어 id(`ppc…`) 탐색 — 게임 iframe 컨텍스트에서 쿠키·스토리지·인라인 스크립트·전역 설정·
 /// 리소스 URL을 훑어 첫 매치를 돌려준다. 로비 좌석 프레임(currentUserId)이 안 올 때의 대안(세션마다 id가 바뀜).
+/// 👁️ 문서 가시성 셔밍(제공자 무관). 창 최소화·가림·다른 창 뒤로 갈 때 `document.hidden`/`visibilityState`가
+/// hidden으로 바뀌면 카지노 클라이언트가 스트림을 끊거나 백그라운드 절전 로직(소켓 정리·재접속 억제)을 타서
+/// "메인창을 내리면 소켓이 끊긴다"로 보인다. 항상 visible로 보이게 하고 visibilitychange 전파를 막는다.
+/// 크롬 자체 스로틀링은 런치 플래그(--disable-background-timer-throttling 등)가 담당 — 이 스크립트는 페이지 로직용.
+/// 멱등(window.__BCR_VIS_SHIM__) — new-document 등록과 컨텍스트 evaluate가 겹쳐도 한 번만 설치된다.
+const PAGE_VISIBILITY_SHIM_SCRIPT: &str = r#"
+    (function() {
+        try {
+            if (window.__BCR_VIS_SHIM__) return 'vis_shim_present';
+            window.__BCR_VIS_SHIM__ = true;
+            var proto = Document.prototype;
+            var define = function(prop, getter) {
+                try { Object.defineProperty(proto, prop, { get: getter, configurable: true }); } catch (e) {}
+            };
+            define('hidden', function() { return false; });
+            define('visibilityState', function() { return 'visible'; });
+            define('webkitHidden', function() { return false; });
+            define('webkitVisibilityState', function() { return 'visible'; });
+            try { proto.hasFocus = function() { return true; }; } catch (e) {}
+            var swallow = function(e) { try { e.stopImmediatePropagation(); } catch (_) {} };
+            ['visibilitychange', 'webkitvisibilitychange'].forEach(function(t) {
+                try { document.addEventListener(t, swallow, true); } catch (e) {}
+            });
+            return 'vis_shim_installed';
+        } catch (e) {
+            return 'vis_shim_err:' + e;
+        }
+    })();
+"#;
+
 const PRAG_FIND_USER_SCRIPT: &str = r#"
     (function() {
         var re = /ppc\d{10,16}/;
@@ -7717,6 +7883,7 @@ fn generate_lobby_url(room_url: &str) -> String {
 /// Kill Chrome process that was started by this app
 #[tauri::command]
 pub async fn kill_chrome() -> Result<(), String> {
+    crate::presentation::power::keep_awake(false);
     let pid = CHROME_PID.load(Ordering::SeqCst);
     if pid > 0 {
         info!("🔴 Killing Chrome process: {}", pid);
@@ -7759,6 +7926,7 @@ pub async fn kill_chrome() -> Result<(), String> {
 
 /// Cleanup function to be called on app exit
 pub fn cleanup_on_exit() {
+    crate::presentation::power::keep_awake(false);
     let pid = CHROME_PID.load(Ordering::SeqCst);
     if pid > 0 {
         info!("🧹 Cleanup: Killing Chrome process: {}", pid);
