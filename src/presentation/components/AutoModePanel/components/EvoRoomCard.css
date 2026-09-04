@@ -526,3 +526,15 @@
 .evo-road__mark.is-dot.mark-r { fill: var(--banker-color, #ff5c6c); }
 .evo-road__mark.is-dot.mark-b { fill: var(--player-color, #4c8dff); }
 .evo-road__mark.is-slash { stroke-width: 2.6; stroke-linecap: round; }
+
+/* 지연 마운트 자리 표시(화면 밖 카드) */
+.evo-lazy { display: block; min-width: 0; }
+.evo-lazy.is-placeholder {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(215, 226, 238, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+.evo-lazy__label { font-size: 14px; font-weight: 700; color: var(--text-muted, #7f8c9b); }

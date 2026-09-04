@@ -32,11 +32,12 @@ use wreq::ws::message::Message as WsMessage;
 use crate::evolution::browser_profile;
 use crate::evolution::crypto::MultiwidgetCrypto;
 
-/// 최대 구독 테이블 수 (제한 없음)
-const MAX_SUBSCRIBE_TABLES: usize = 60;
+/// 최대 구독 테이블 수. 2026-09-05(사용자: "구독방 제한 풀로") 60 → 사실상 무제한(로비 바카라 전체 ~85개).
+/// 봇 신호를 피하는 순차·지터 전송은 그대로라 85개 구독에 약 15~25초 걸린다.
+const MAX_SUBSCRIBE_TABLES: usize = 256;
 
-/// 이벤트 채널 버퍼 크기 (60개 방 기준 피크 부하 대응)
-const EVENT_CHANNEL_BUFFER: usize = 1024;
+/// 이벤트 채널 버퍼 크기 (전 테이블 구독 시 피크 부하 대응 — 결과·상태 프레임이 초당 수십 건)
+const EVENT_CHANNEL_BUFFER: usize = 4096;
 
 // ─── Human-like timing jitter (ms) ───────────────────────────────────────────
 const PRE_HANDSHAKE_MIN_MS: u64 = 200;

@@ -6,6 +6,7 @@ import type { RoomBettingState, AutoModeSettings } from '../../../../application
 import type { ManualRoomBet, ManualSide } from '../../../../application/services/ManualBetService'
 import { useRoomFilter } from '../hooks/useRoomFilter'
 import { EvoRoomCard } from './EvoRoomCard'
+import { LazyMount } from './LazyMount'
 import type { RoadView } from './EvoBigRoad'
 import '../AutoModePanel.css'
 
@@ -115,8 +116,8 @@ export function AutoModeRoomGrid({
   return (
     <div className="auto-mode__evo-grid">
       {filteredRooms.map(room => (
+        <LazyMount key={room.id} label={room.koreanName || room.name}>
         <EvoRoomCard
-          key={room.id}
           room={room}
           autoState={autoModeRoomStates.get(room.id) || null}
           isEnabled={enabledRoomIds.has(room.id)}
@@ -134,6 +135,7 @@ export function AutoModeRoomGrid({
           onManualClear={onManualClear}
           roadView={roadView}
         />
+        </LazyMount>
       ))}
     </div>
   )
