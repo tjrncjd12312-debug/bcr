@@ -83,7 +83,6 @@ export const EvoRoomCard = memo(function EvoRoomCard({
   const predSide: ManualSide | null = manualActive && prediction && !prediction.isSkip && prediction.prediction
     ? (prediction.prediction as ManualSide)
     : null
-  const predConf = Math.round((prediction?.confidence ?? 0) * 100)
   const isRecommended = manualActive && !!predSide && (prediction?.confidence ?? 0) >= RECOMMEND_CONFIDENCE
   const isBetting = manualActive ? !!manualBet : autoState?.waitingForResult === true
   const activeSide: ManualSide | null = manualActive
@@ -142,11 +141,12 @@ export const EvoRoomCard = memo(function EvoRoomCard({
       manualActive ? 'is-clickable' : '',
       manualActive && !windowOpen ? 'is-closed' : '',
       predictedHere ? 'is-predicted' : '',
+      on && !isBetting ? 'is-armed-side' : '',
     ].filter(Boolean).join(' ')
     const chip = hasManualChips
       ? <EvoChip amount={manualBet!.total} stack={manualBet!.chips.length} size={34} />
       : (!manualActive && on ? <EvoChip amount={amount} stack={progression.stage} size={34} /> : null)
-    const predTag = predictedHere ? <span className="evo-spot__pred">추천 {predConf}%</span> : null
+    const predTag = predictedHere ? <span className="evo-spot__pred">예측</span> : null
     if (manualActive) {
       return (
         <button
@@ -172,7 +172,7 @@ export const EvoRoomCard = memo(function EvoRoomCard({
 
   return (
     <article
-      className={`evo-card evo-card--${statusClass} ${sideClass} ${flashClass} ${manualActive ? 'evo-card--manual' : ''}`}
+      className={`evo-card evo-card--${statusClass} ${sideClass} ${flashClass} ${manualActive ? `evo-card--manual ${windowOpen ? 'is-open' : 'is-closed'}` : ''}`}
       aria-label={name}
     >
       <header className="evo-card__head">
@@ -193,22 +193,22 @@ export const EvoRoomCard = memo(function EvoRoomCard({
       <div className="evo-card__meta">
         {manualActive ? (
           <>
+            {windowOpen
+              ? <span className="evo-chip tone-open">배팅 가능</span>
+              : <span className="evo-chip tone-closed">{room.phase === 'dealing' ? '마감 · 딜링' : room.phase === 'result' ? '마감 · 결과' : '마감'}</span>}
             {manualBet ? (
               <span className="evo-chip tone-betting">
                 {manualBet.side === 'B' ? '뱅커' : manualBet.side === 'P' ? '플레이어' : '타이'} {manualBet.total.toLocaleString()}원
                 {manualBet.sending ? ' · 전송 중' : manualBet.unconfirmed ? ' · 확인 대기' : ''}
               </span>
-            ) : predSide ? (
-              <span className="evo-chip tone-observing" title={prediction?.reasoning || 'AI 예측'}>
-                AI 추천 {predSide === 'B' ? '뱅커' : predSide === 'P' ? '플레이어' : '타이'} {predConf}%
-              </span>
-            ) : (
-              <span className="evo-chip tone-idle">{prediction?.isSkip ? 'AI 패스' : windowOpen ? '예측 대기' : '다음 판 대기'}</span>
-            )}
-            {isRecommended && <span className="evo-chip evo-chip--recommend">추천 방</span>}
-            {filterLabel && (
-              <span className={`evo-chip evo-chip--reason ${isTieFilter ? 'tie-tone' : ''}`}>{filterLabel}</span>
-            )}
+            ) : predSide && !windowOpen ? (
+              <>
+                <span className="evo-card__pred-label">예측</span>
+                <span className={`evo-pred side-${predSide.toLowerCase()}`} title={prediction?.reasoning || 'AI 예측'}>
+                  {predSide === 'B' ? '뱅커' : predSide === 'P' ? '플레이어' : '타이'}
+                </span>
+              </>
+            ) : null}
             {/* 빼기·취소는 수동 모드에서 항상 보인다(칩이 없거나 마감이면 비활성) */}
             <span className="evo-card__manual-actions">
               <button type="button" className="evo-card__mini-btn" disabled={!manualBet || !windowOpen || manualBet.sending} onClick={() => onManualUndo?.(room)} title="마지막 칩 빼기">↶ 빼기</button>
@@ -242,7 +242,13 @@ export const EvoRoomCard = memo(function EvoRoomCard({
         <div className="evo-spot evo-spot--bp"><span className="evo-spot__label">뱅커<br />페어</span></div>
       </div>
 
-      <EvoDealStrip room={room} betLogs={betLogs} />
+      <EvoDealStrip
+        room={room}
+        betLogs={betLogs}
+        cta={manualActive && windowOpen
+          ? { side: predSide, betSide: manualBet?.side ?? null, betTotal: manualBet?.total ?? 0, secondsLeft: timer, recommended: isRecommended }
+          : null}
+      />
 
       <div className="evo-card__road">
         <EvoBigRoad model={model} />

@@ -4,14 +4,27 @@
 // 카드 코드가 없는 피드(프라그마틱 등)는 뒷면 카드 + 점수만으로 같은 흐름을 보여준다.
 import { memo } from 'react'
 import type { Room } from '../../../../domain/entities'
+import type { ManualSide } from '../../../../application/services/ManualBetService'
 import { parseCard } from '../utils/cards'
 import type { RoomBetLog } from './AutoModeRoomGrid'
+
+/** 수동 모드에서 배팅창이 열린 방: 어디에 걸지 크게 알려주는 배너 입력 */
+export interface ManualCta {
+  side: ManualSide | null
+  betSide: ManualSide | null
+  betTotal: number
+  secondsLeft: number
+  recommended: boolean
+}
 
 interface EvoDealStripProps {
   room: Room
   /** 이 방의 최근 배팅 로그(최신 먼저) */
   betLogs: RoomBetLog[]
+  cta?: ManualCta | null
 }
+
+const SIDE_LABEL: Record<ManualSide, string> = { B: '뱅커', P: '플레이어', T: '타이' }
 
 type Mode = 'empty' | 'previous' | 'dealing' | 'result'
 const RESULT_HOLD_MS = 25_000
@@ -39,8 +52,32 @@ function Hand({ side, cards, backs, animate }: { side: 'P' | 'B'; cards: unknown
   )
 }
 
-export const EvoDealStrip = memo(function EvoDealStrip({ room, betLogs }: EvoDealStripProps) {
+export const EvoDealStrip = memo(function EvoDealStrip({ room, betLogs, cta = null }: EvoDealStripProps) {
   const phase = room.phase
+
+  // 수동 모드 + 배팅창 열림: 이전 판 대신 '어디에 걸지'를 크게 보여준다.
+  if (cta) {
+    const side = cta.betSide ?? cta.side
+    const label = side ? SIDE_LABEL[side] : null
+    const hasBet = cta.betTotal > 0
+    const title = hasBet
+      ? `${label} ${cta.betTotal.toLocaleString()}원 걸림`
+      : label ? `${label}에 배팅하세요` : '예측 기다리는 중'
+    const sub = hasBet
+      ? '더 올리려면 같은 자리를 다시 누르세요'
+      : label ? `${cta.recommended ? '추천 방 · ' : ''}${label} 자리를 누르면 칩이 올라갑니다` : '배팅 가능 · 예측이 오면 자리를 알려드려요'
+    return (
+      <div className={`evo-deal evo-deal--cta side-${side ? side.toLowerCase() : 'none'} ${hasBet ? 'has-bet' : ''}`} role="status" aria-label={title}>
+        <div className="evo-deal__cta-main">
+          <strong>{title}</strong>
+          <span>{sub}</span>
+        </div>
+        <div className={`evo-deal__cta-timer ${cta.secondsLeft <= 3 ? 'is-urgent' : ''}`}>
+          <b>{cta.secondsLeft}</b>초
+        </div>
+      </div>
+    )
+  }
   const last = room.history[0]
   const recentResult = !!room.lastResultTime && Date.now() - room.lastResultTime < RESULT_HOLD_MS
 

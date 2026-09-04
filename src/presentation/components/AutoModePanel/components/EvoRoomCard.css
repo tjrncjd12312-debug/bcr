@@ -418,18 +418,43 @@
 .evo-spot.is-clickable:hover:not(:disabled) { filter: brightness(1.18); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.35); }
 .evo-spot.is-clickable:active:not(:disabled) { transform: scale(0.97); }
 .evo-spot.is-closed { cursor: not-allowed; opacity: 0.55; }
-.evo-spot.is-predicted { box-shadow: inset 0 0 0 2px rgba(255, 216, 77, 0.75); }
+/* 예측된 자리: 그 자리 색으로 빛난다(뱅커 빨강·플레이어 파랑·타이 초록). 글자 대신 색으로 읽힌다. */
+.evo-spot.is-predicted { color: #fff; }
+.evo-spot--b.is-predicted { background: rgba(255, 92, 108, 0.55); box-shadow: 0 0 0 2px var(--banker-color, #ff5c6c), 0 0 16px rgba(255, 92, 108, 0.55); }
+.evo-spot--p.is-predicted { background: rgba(76, 141, 255, 0.55); box-shadow: 0 0 0 2px var(--player-color, #4c8dff), 0 0 16px rgba(76, 141, 255, 0.55); }
+.evo-spot--t.is-predicted { background: rgba(44, 203, 127, 0.5); box-shadow: 0 0 0 2px var(--tie-color, #2ccb7f), 0 0 16px rgba(44, 203, 127, 0.5); }
 .evo-spot__pred {
   position: absolute;
   left: 4px;
-  bottom: 3px;
+  top: 3px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: rgba(255, 216, 77, 0.92);
+  background: rgba(255, 255, 255, 0.92);
   color: #17120a;
   font-size: 10px;
   font-weight: 900;
 }
+/* 자동 모드에서 배팅 전 예측 자리도 같은 색 강조 */
+.evo-spot--b.is-armed-side { box-shadow: 0 0 0 2px var(--banker-color, #ff5c6c), 0 0 12px rgba(255, 92, 108, 0.45); }
+.evo-spot--p.is-armed-side { box-shadow: 0 0 0 2px var(--player-color, #4c8dff), 0 0 12px rgba(76, 141, 255, 0.45); }
+.evo-spot--t.is-armed-side { box-shadow: 0 0 0 2px var(--tie-color, #2ccb7f), 0 0 12px rgba(44, 203, 127, 0.45); }
+
+/* 상태 줄의 예측 라벨: 큰 색 알약 */
+.evo-card__pred-label { font-size: 11px; font-weight: 700; color: var(--text-muted, #7f8c9b); }
+.evo-pred {
+  padding: 4px 12px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+.evo-pred.side-b { background: var(--banker-color, #ff5c6c); }
+.evo-pred.side-p { background: var(--player-color, #4c8dff); }
+.evo-pred.side-t { background: var(--tie-color, #2ccb7f); color: #072b1a; }
 .evo-chip--recommend { color: #17120a; background: #ffd84d; border-color: #ffd84d; }
 .evo-chip.tone-idle { color: #95a2b2; }
 .evo-card__mini-btn {
@@ -449,3 +474,37 @@
 .evo-card--manual .evo-card__meta { flex-wrap: wrap; overflow: visible; row-gap: 4px; }
 .evo-card__manual-actions { display: inline-flex; gap: 4px; margin-left: auto; }
 .evo-card__mini-btn { font-size: 12px; padding: 4px 9px; }
+
+/* 수동 모드: 배팅 가능한 방은 초록 테두리, 마감된 방은 흐리게 */
+.evo-card--manual.is-open { border-color: rgba(59, 213, 138, 0.65); box-shadow: 0 0 0 1px rgba(59, 213, 138, 0.25), 0 0 14px rgba(59, 213, 138, 0.14); }
+.evo-card--manual.is-open.evo-card--betting { border-color: rgba(255, 216, 77, 0.7); }
+.evo-card--manual.is-closed .evo-card__spots { opacity: 0.6; }
+.evo-chip.tone-open { color: #072b1a; background: #3bd58a; border-color: #3bd58a; }
+.evo-chip.tone-closed { color: #95a2b2; background: rgba(255, 255, 255, 0.05); }
+
+/* 수동 모드 CTA 배너(배팅창 열린 방): 어디에 걸지 한눈에 */
+.evo-deal--cta {
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  border-color: rgba(59, 213, 138, 0.6);
+}
+.evo-deal--cta.side-b { background: linear-gradient(90deg, rgba(255, 92, 108, 0.5), rgba(255, 92, 108, 0.12)); border-color: var(--banker-color, #ff5c6c); }
+.evo-deal--cta.side-p { background: linear-gradient(90deg, rgba(76, 141, 255, 0.5), rgba(76, 141, 255, 0.12)); border-color: var(--player-color, #4c8dff); }
+.evo-deal--cta.side-t { background: linear-gradient(90deg, rgba(44, 203, 127, 0.5), rgba(44, 203, 127, 0.12)); border-color: var(--tie-color, #2ccb7f); }
+.evo-deal--cta.has-bet { border-color: #ffd84d; box-shadow: inset 0 0 0 1px rgba(255, 216, 77, 0.4); }
+.evo-deal__cta-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.evo-deal__cta-main strong { font-size: 18px; font-weight: 900; color: #fff; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5); }
+.evo-deal__cta-main span { font-size: 11.5px; color: rgba(255, 255, 255, 0.82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.evo-deal__cta-timer { display: flex; align-items: baseline; gap: 2px; color: #fff; font-variant-numeric: tabular-nums; font-size: 12px; }
+.evo-deal__cta-timer b { font-size: 26px; font-weight: 900; line-height: 1; }
+.evo-deal__cta-timer.is-urgent b { color: #ff6575; }
+
+/* 배팅창이 열린 방의 예측 자리: 단색으로 꽉 채워 바로 보이게 */
+.evo-card--manual.is-open .evo-spot--b.is-predicted { background: var(--banker-color, #ff5c6c); }
+.evo-card--manual.is-open .evo-spot--p.is-predicted { background: var(--player-color, #4c8dff); }
+.evo-card--manual.is-open .evo-spot--t.is-predicted { background: var(--tie-color, #2ccb7f); }
+.evo-card--manual.is-open .evo-spot.is-predicted .evo-spot__label { font-size: 15px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
+.evo-card--manual .evo-card__spots { height: 52px; }
+
+/* 마감된 방은 뒤로 물러나고(흐리게), 배팅 걸린 방은 그대로 */
+.evo-card--manual.is-closed:not(.evo-card--betting) { opacity: 0.55; }

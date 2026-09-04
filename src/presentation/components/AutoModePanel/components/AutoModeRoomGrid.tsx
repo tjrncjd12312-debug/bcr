@@ -86,7 +86,7 @@ export function AutoModeRoomGrid({
     sortDirection,
     roomDataVersion,
     filterSettingsSignature,
-    bettingFirst: false, // 카드 자리 고정 — 배팅이 걸려도 카드가 위로 튀지 않는다
+    bettingFirst: !manualActive, // 자동: 배팅 중·마틴 진행 방을 위로(사용자 요청). 수동: 자리 고정(클릭 대상이 안 움직이게)
   })
 
   if (filteredRooms.length === 0) {

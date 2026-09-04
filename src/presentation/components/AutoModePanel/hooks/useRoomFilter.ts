@@ -79,7 +79,14 @@ export const useRoomFilter = ({
             const pCount = recent.filter(r => r.winner === 'P').length
             return bCount - pCount
         }
-        const isBetting = (roomId: string) => (bettingFirst && bettingStates.get(roomId)?.waitingForResult) ? 1 : 0
+        // 자동 모드 우선순위(사용자 요청 2026-09-05): 배팅 중(결과 대기) 방 → 마틴 진행 중 방 → 나머지(선택한 정렬).
+        const isBetting = (roomId: string) => {
+            if (!bettingFirst) return 0
+            const st = bettingStates.get(roomId)
+            if (st?.waitingForResult) return 2
+            if ((st?.martinLevel ?? 0) > 0) return 1
+            return 0
+        }
 
         const dir = sortDirection === 'asc' ? 1 : -1
 
