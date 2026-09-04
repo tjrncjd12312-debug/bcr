@@ -26,8 +26,10 @@ interface SessionServiceConfig {
   validationIntervalMs: number
 }
 
+// 🔒 한 계정 1인 접속(2026-09-05): 다른 기기가 같은 계정으로 로그인하면 서버가 이 세션(jti)을 지우고
+//   validate-token이 valid:false를 준다 → duplicate_login → 프로그램 종료. 감지가 빨라야 하므로 10초 간격.
 const DEFAULT_CONFIG: SessionServiceConfig = {
-  validationIntervalMs: 30000, // 30 seconds
+  validationIntervalMs: 10000, // 10 seconds
 }
 
 /**
@@ -202,25 +204,38 @@ class SessionServiceImpl {
   }
 
   private startValidation(): void {
+    // 🛡️ 일시적 네트워크/서버 오류 내성: 검증 요청이 연속 3회(≈30초) 실패해야 오프라인으로 본다.
+    //   종전엔 1회 실패에 바로 로그아웃돼 배팅이 멈췄다. 중복 로그인(valid:false)은 즉시 처리한다.
+    const OFFLINE_AFTER_FAILURES = 3
+    let consecutiveFailures = 0
     const validate = async () => {
       try {
         const status = await this.getAuthPort().validateSession()
 
         if (!status.isValid && status.invalidationReason) {
-          this.isValid = false
-          this.stopTimers()
-
           if (status.invalidationReason === 'offline') {
+            consecutiveFailures++
+            console.warn(`[SessionService] 세션 검증 오프라인 ${consecutiveFailures}/${OFFLINE_AFTER_FAILURES}`)
+            if (consecutiveFailures < OFFLINE_AFTER_FAILURES) return
+            this.isValid = false
+            this.stopTimers()
             this.isOnline = false
             this.emitOffline()
-          } else {
-            this.emitExpired(status.invalidationReason)
+            return
           }
+          this.isValid = false
+          this.stopTimers()
+          this.emitExpired(status.invalidationReason)
         } else {
+          consecutiveFailures = 0
           this.isOnline = true
         }
       } catch (error) {
-        console.warn('[SessionService] Validation failed:', error)
+        consecutiveFailures++
+        console.warn(`[SessionService] Validation failed (${consecutiveFailures}/${OFFLINE_AFTER_FAILURES}):`, error)
+        if (consecutiveFailures < OFFLINE_AFTER_FAILURES) return
+        this.isValid = false
+        this.stopTimers()
         this.isOnline = false
         this.emitOffline()
       }

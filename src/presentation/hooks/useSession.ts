@@ -2,7 +2,7 @@
 // Presentation Layer - React interface for SessionService
 // Clean Architecture: Uses Application Layer service (not direct invoke)
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { SessionService, formatSessionTime, isSessionWarning } from '../../application/services/SessionService'
 import type { SessionInvalidReason } from '../../domain/entities'
 
@@ -43,11 +43,21 @@ export function useSession({
   onWarning,
   onExpired,
   onOffline,
-  validationIntervalMs = 30000,
+  validationIntervalMs = 10000, // 한 계정 1인 접속 — 다른 기기 로그인을 10초 안에 감지
 }: UseSessionOptions): UseSessionReturn {
   const [remainingSeconds, setRemainingSeconds] = useState(initialSeconds)
   const [isValid, setIsValid] = useState(initialSeconds > 0)
   const [isOnline, setIsOnline] = useState(true)
+
+  // 🐞 2026-09-05: App이 인라인 콜백을 넘기고 이 훅이 1초마다 remainingSeconds를 갱신해 App을 재렌더하므로,
+  //   콜백을 effect 의존성에 두면 세션이 매초 stop→start를 반복해 검증 타이머(10초)가 영영 안 울렸다
+  //   (= 중복 로그인·만료가 실제로 감지되지 않음). 최신 콜백은 ref로 들고 effect는 세션 자체에만 의존한다.
+  const onWarningRef = useRef(onWarning)
+  const onExpiredRef = useRef(onExpired)
+  const onOfflineRef = useRef(onOffline)
+  onWarningRef.current = onWarning
+  onExpiredRef.current = onExpired
+  onOfflineRef.current = onOffline
 
   // Start session when initialSeconds changes
   useEffect(() => {
@@ -60,15 +70,15 @@ export function useSession({
     // Start session service
     SessionService.startSession(initialSeconds, { validationIntervalMs })
 
-    // Subscribe to events
-    const unsubWarning = SessionService.onWarning(onWarning)
+    // Subscribe to events (항상 최신 콜백으로)
+    const unsubWarning = SessionService.onWarning((minutes) => onWarningRef.current(minutes))
     const unsubExpired = SessionService.onExpired((reason) => {
       setIsValid(false)
-      onExpired(reason)
+      onExpiredRef.current(reason)
     })
     const unsubOffline = SessionService.onOffline(() => {
       setIsOnline(false)
-      onOffline()
+      onOfflineRef.current()
     })
 
     // Poll state for UI updates (every second)
@@ -87,7 +97,7 @@ export function useSession({
       clearInterval(stateInterval)
       SessionService.stopSession()
     }
-  }, [initialSeconds, validationIntervalMs, onWarning, onExpired, onOffline])
+  }, [initialSeconds, validationIntervalMs])
 
   // Stop session callback
   const stopSession = useCallback(() => {

@@ -225,6 +225,9 @@ pub fn is_session_expired(state: State<'_, AppState>) -> bool {
 #[tauri::command]
 pub fn exit_app(app: tauri::AppHandle) {
     info!("📲 Exit app request - session expired or forced logout");
+    // 🔒 중복 로그인/만료로 종료할 때 앱이 띄운 크롬(카지노 세션)과 절전 억제도 함께 정리한다 —
+    //   run()이 돌아오지 않을 수 있어 lib.rs의 사후 정리에 기대지 않는다.
+    super::webview_commands::cleanup_on_exit();
     app.exit(0);
 }
 

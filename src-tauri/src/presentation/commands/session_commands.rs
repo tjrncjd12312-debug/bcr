@@ -137,7 +137,8 @@ pub async fn force_quit_app(app: AppHandle, reason: String) -> Result<(), String
     // 잠시 대기 후 종료 (UI가 메시지를 표시할 시간)
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // 앱 종료
+    // 크롬·절전 억제 정리 후 앱 종료
+    super::webview_commands::cleanup_on_exit();
     app.exit(0);
 
     Ok(())
