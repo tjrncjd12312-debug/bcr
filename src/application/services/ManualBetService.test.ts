@@ -47,6 +47,7 @@ describe('ManualBetService (virtual)', () => {
     ManualBetService.initialize()
     ManualBetService.setVirtualMode(true)
     ManualBetService.setChip(10_000)
+    ManualBetService.setFollowMartin(false)
     ManualBetService.enable()
     ManualBetService.resetStats()
   })
@@ -136,5 +137,58 @@ describe('ManualBetService (virtual)', () => {
     expect(s.bets.size).toBe(0)
     expect(s.virtualBalance).toBe(INITIAL)
     expect(s.logs[s.logs.length - 1]?.kind).toBe('void')
+  })
+})
+
+describe('ManualBetService (martin + per-mode stats)', () => {
+  let adapter: MockAdapter
+  beforeEach(() => {
+    container.clear()
+    adapter = new MockAdapter()
+    container.register('casinoAdapter', adapter as unknown as ICasinoAdapter)
+    VirtualBettingService.updateSettings({ initialBalance: 1_000_000 })
+    ManualBetService.dispose()
+    ManualBetService.initialize()
+    ManualBetService.setVirtualMode(true)
+    ManualBetService.setChip(1_000)
+    ManualBetService.setFollowMartin(false)
+    ManualBetService.setProgression({ baseAmount: 5_000, strategy: 'martingale', maxMartin: 3 })
+    ManualBetService.enable()
+    ManualBetService.resetStats()
+  })
+  afterEach(() => ManualBetService.dispose())
+
+  it('follows the martin stage amount for the first chip and steps the level on losses', async () => {
+    ManualBetService.setFollowMartin(true)
+    const r = openRoom('r1')
+    adapter.setRoom(r)
+    await ManualBetService.addChip(r, 'P')
+    expect(ManualBetService.getBet('r1')?.total).toBe(5_000) // 1단계
+    adapter.emitResult({ roomId: 'r1', winner: 'B' })       // 패 → 2단계
+    expect(ManualBetService.getMartinLevel('r1')).toBe(1)
+    expect(ManualBetService.suggestedAmount('r1')).toBe(10_000)
+    await ManualBetService.addChip(r, 'P')
+    expect(ManualBetService.getBet('r1')?.total).toBe(10_000)
+    adapter.emitResult({ roomId: 'r1', winner: 'B' })       // 패 → 3단계
+    expect(ManualBetService.suggestedAmount('r1')).toBe(20_000)
+    await ManualBetService.addChip(r, 'P')
+    adapter.emitResult({ roomId: 'r1', winner: 'B' })       // 3단계 소진 → 0으로 재시작
+    expect(ManualBetService.getMartinLevel('r1')).toBe(0)
+    await ManualBetService.addChip(r, 'P')
+    adapter.emitResult({ roomId: 'r1', winner: 'P' })       // 승 → 0
+    expect(ManualBetService.getMartinLevel('r1')).toBe(0)
+    expect(ManualBetService.getState().stats).toMatchObject({ wins: 1, losses: 3 })
+  })
+
+  it('keeps virtual and real stats separate across mode switches', async () => {
+    const r = openRoom('r1')
+    adapter.setRoom(r)
+    await ManualBetService.addChip(r, 'P', 10_000)
+    adapter.emitResult({ roomId: 'r1', winner: 'P' })
+    expect(ManualBetService.getState().stats.profit).toBe(10_000)
+    ManualBetService.setVirtualMode(false)
+    expect(ManualBetService.getState().stats).toMatchObject({ wins: 0, losses: 0, profit: 0 })
+    ManualBetService.setVirtualMode(true)
+    expect(ManualBetService.getState().stats.profit).toBe(10_000)
   })
 })

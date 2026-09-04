@@ -429,4 +429,29 @@ describe('AutoModeService', () => {
     expect(VirtualBettingService.getGlobalBalance()).toBe(initialBalance - 1000)
   })
 
+  it('keeps virtual and real session stats separate when the mode switches (가상/실제 손익 분리)', async () => {
+    AutoModeService.resetStats()
+    const room = makeVirtualRoom('room1')
+    adapter.setRoom(room)
+    AutoModeService.start()
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 10, phase: 'start' })
+    await flush()
+    await flush()
+    adapter.emitBettingPhase({ roomId: 'room1', remainingSeconds: 0, phase: 'end' })
+    const h = [makeHistory(['P'])[0], ...room.history]
+    adapter.setRoom({ ...room, history: h, gameCount: h.length })
+    adapter.emitGameResult({ roomId: 'room1', winner: 'P' }) // B 예측 패배 → −1,000
+    expect(AutoModeService.getState().cumulativeProfit).toBe(-1000)
+    expect(AutoModeService.getState().totalLosses).toBe(1)
+
+    AutoModeService.stop()
+    AutoModeService.updateSettings({ isVirtualMode: false })
+    expect(AutoModeService.getState().cumulativeProfit).toBe(0)
+    expect(AutoModeService.getState().totalLosses).toBe(0)
+
+    AutoModeService.updateSettings({ isVirtualMode: true })
+    expect(AutoModeService.getState().cumulativeProfit).toBe(-1000)
+    expect(AutoModeService.getState().totalLosses).toBe(1)
+  })
+
 })

@@ -481,3 +481,23 @@
   font-size: 14px;
   color: var(--text-primary);
 }
+
+/* 모드별 세션 손익(가상/실제) */
+.ams-mode-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ams-mode-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--modal-border);
+  background: var(--modal-elevated);
+}
+.ams-mode-stat.is-current { border-color: var(--accent-primary); }
+.ams-mode-stat.is-real .ams-mode-stat__head span { color: #ff8490; }
+.ams-mode-stat__head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 800; color: var(--text-secondary); }
+.ams-mode-stat__head em { font-style: normal; font-size: 11px; color: var(--accent-primary); }
+.ams-mode-stat strong { font-size: 20px; font-weight: 900; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.ams-mode-stat strong.positive { color: #3bd58a; }
+.ams-mode-stat strong.negative { color: #ff6575; }
+.ams-mode-stat__line { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }

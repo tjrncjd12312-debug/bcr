@@ -8,7 +8,7 @@ import { useGame } from '../../context/GameContext'
 import { useError } from '../../context'
 import { useAutoMode } from '../../hooks'
 import { AutoModeSettingsDialog } from './components/AutoModeSettingsDialog'
-import { AutoModeRoomGrid, type RoomBetLog } from './components/AutoModeRoomGrid'
+import { AutoModeRoomGrid, type RoomBetLog, type GridViewFilter } from './components/AutoModeRoomGrid'
 import { AutoModeRoomList } from './components/AutoModeRoomList'
 import { AutoModeHistory } from './components/AutoModeHistory'
 import { RoomSelectorModal } from '../shared'
@@ -43,6 +43,14 @@ const VIEW_MODE_KEY = 'auto-mode:view-mode'
 const BET_MODE_KEY = 'auto-mode:bet-mode'
 // 로드맵 보기(6매/원매/2매/3매/4매) 저장 키
 const ROAD_VIEW_KEY = 'auto-mode:road-view'
+// 보기 필터(전체/추천 방/연패 방/배팅 중) 저장 키
+const VIEW_FILTER_KEY = 'auto-mode:view-filter'
+const VIEW_FILTERS: Array<{ value: GridViewFilter; label: string; title: string }> = [
+  { value: 'all', label: '전체', title: '모든 방' },
+  { value: 'recommended', label: '추천 방', title: '수동: 예측 신뢰도가 기준 이상인 방 / 자동: 예측·배팅이 걸린 방' },
+  { value: 'losing', label: '연패 방', title: '내가 지고 있는(마틴 진행 중) 방' },
+  { value: 'betting', label: '배팅 중', title: '지금 칩이 걸린 방' },
+]
 import { useCountUp } from '../../hooks/useCountUp'
 
 interface AutoModePanelProps {
@@ -130,6 +138,23 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     } catch { return 'big' }
   })
   useEffect(() => { try { localStorage.setItem(ROAD_VIEW_KEY, roadView) } catch { /* ignore */ } }, [roadView])
+  const [viewFilter, setViewFilter] = useState<GridViewFilter>(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_FILTER_KEY)
+      return VIEW_FILTERS.some(v => v.value === saved) ? (saved as GridViewFilter) : 'all'
+    } catch { return 'all' }
+  })
+  useEffect(() => { try { localStorage.setItem(VIEW_FILTER_KEY, viewFilter) } catch { /* ignore */ } }, [viewFilter])
+
+  // 수동 모드 마틴은 설정의 기본 배팅 전략(금액·전략·단계)을 그대로 따른다.
+  useEffect(() => {
+    ManualBetService.setProgression({
+      baseAmount: settings.baseBetAmount,
+      strategy: settings.betStrategy,
+      maxMartin: settings.maxMartin,
+      customAmounts: settings.customBetAmounts,
+    })
+  }, [settings.baseBetAmount, settings.betStrategy, settings.maxMartin, settings.customBetAmounts])
 
   // ✅/✕ 예측 적중 기록(운영바): 수동 모드는 방별 AI 예측 결과, 자동 모드는 배팅 결과. 최신이 오른쪽, 최대 40개.
   interface PredictionMark { id: number; won: boolean; roomName: string; at: number }
@@ -1338,6 +1363,16 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 </span>
               </div>
 
+              {viewMode === 'grid' && (
+                <div className="auto-mode__road-views auto-mode__view-filters" role="group" aria-label="보기 필터">
+                  {VIEW_FILTERS.map((v) => (
+                    <button key={v.value} className={viewFilter === v.value ? 'active' : ''} onClick={() => setViewFilter(v.value)} aria-pressed={viewFilter === v.value} title={v.title}>
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="auto-mode__pred-record" aria-label="예측 적중 기록" title="최근 예측이 맞았으면 O, 틀렸으면 X (최신이 오른쪽)">
                 <span className="auto-mode__pred-record-label">예측</span>
                 {predictionMarks.length === 0 ? (
@@ -1396,6 +1431,10 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   lastRoomName={manual.lastRoomId ? (manual.bets.get(manual.lastRoomId)?.roomName ?? null) : null}
                   onUndoLast={() => { void manual.undoLast().then(r => { if (!r.ok && r.error) showWarning(r.error) }) }}
                   onClearAll={() => { void manual.clearAll().then(r => { if (!r.ok && r.error) showWarning(r.error) }) }}
+                  followMartin={manual.followMartin}
+                  onToggleFollowMartin={manual.setFollowMartin}
+                  strategyLabel={settings.betStrategy === 'martingale' ? `마틴 ${settings.maxMartin}단계` : settings.betStrategy === 'fibonacci' ? '피보나치' : settings.betStrategy === 'paroli' ? '파롤리' : settings.betStrategy === 'flat' ? '플랫' : '단계별 금액'}
+                  presets={manual.chipPresets}
                 />
               )}
             </section>
@@ -1426,6 +1465,11 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   onManualUndo={handleManualUndo}
                   onManualClear={handleManualClear}
                   roadView={roadView}
+                  viewFilter={viewFilter}
+                  manualMartinLevels={manual.martinLevels}
+                  manualProgression={manual.progression}
+                  manualFollowMartin={manual.followMartin}
+                  recommendConfidence={manual.recommendConfidence}
                 />
               ) : (
                 <AutoModeRoomList
@@ -1505,6 +1549,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
           setShowSettings(false)
           setShowPatternModal(true)
         }}
+        modeStats={autoMode.modeStats}
       />
 
       {/* Pattern Manager Modal */}

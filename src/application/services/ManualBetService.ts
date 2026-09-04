@@ -20,6 +20,25 @@ const MIN_LEAD_MS = 1200
 const VOID_AFTER_MS = 120_000
 const CHIP_STORAGE_KEY = 'bcr-manual-bet:chip'
 export const MANUAL_CHIPS = [1_000, 5_000, 10_000, 50_000, 100_000] as const
+const PRESETS_STORAGE_KEY = 'bcr-manual-bet:chip-presets'
+const RECOMMEND_STORAGE_KEY = 'bcr-manual-bet:recommend-confidence'
+export const DEFAULT_RECOMMEND_CONFIDENCE = 0.65
+
+function loadPresets(): number[] {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PRESETS_STORAGE_KEY) : null
+    const arr = raw ? (JSON.parse(raw) as unknown) : null
+    if (Array.isArray(arr) && arr.length >= 1 && arr.every(n => Number.isFinite(n) && n > 0)) return arr.slice(0, 6).map(n => Math.round(n))
+  } catch { /* ignore */ }
+  return [...MANUAL_CHIPS]
+}
+function loadRecommendConfidence(): number {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(RECOMMEND_STORAGE_KEY) : null
+    const n = raw ? Number(raw) : NaN
+    return Number.isFinite(n) && n >= 0.5 && n <= 0.95 ? n : DEFAULT_RECOMMEND_CONFIDENCE
+  } catch { return DEFAULT_RECOMMEND_CONFIDENCE }
+}
 
 export interface ManualRoomBet {
   roomId: string
@@ -60,10 +79,41 @@ export interface ManualStats {
   profit: number
 }
 
+export type ManualStrategy = 'martingale' | 'fibonacci' | 'paroli' | 'flat' | 'custom'
+export interface ManualProgression {
+  baseAmount: number
+  strategy: ManualStrategy
+  maxMartin: number
+  customAmounts?: number[]
+}
+
+const FIB: number[] = (() => { const a = [1, 1]; for (let i = 2; i < 100; i++) a.push(a[i - 1] + a[i - 2]); return a })()
+
+/** 자동 모드와 같은 단계 금액 규칙(MartingaleManager.calculateBetAmount와 동일) */
+export function progressionAmount(level: number, p: ManualProgression): number {
+  const lv = Math.max(0, Math.min(level, Math.max(1, p.maxMartin) - 1))
+  switch (p.strategy) {
+    case 'martingale': return p.baseAmount * Math.pow(2, lv)
+    case 'fibonacci': return p.baseAmount * FIB[Math.min(lv, FIB.length - 1)]
+    case 'paroli': return p.baseAmount * Math.pow(2, Math.min(lv, 2))
+    case 'custom': return p.customAmounts && p.customAmounts.length > 0 ? p.customAmounts[Math.min(lv, p.customAmounts.length - 1)] : p.baseAmount
+    default: return p.baseAmount
+  }
+}
+
 export interface ManualBetState {
   enabled: boolean
   isVirtualMode: boolean
   selectedChip: number
+  /** 방별 마틴 단계(연패 수, 0부터). 승리 시 0, 최대 단계 소진 시 0으로 재시작 */
+  martinLevels: Map<string, number>
+  /** 켜면 방의 첫 칩은 선택 칩 대신 그 방의 마틴 단계 금액으로 올라간다 */
+  followMartin: boolean
+  progression: ManualProgression
+  /** 칩 트레이 액면(설정에서 편집) */
+  chipPresets: number[]
+  /** '추천 방' 배지 기준 신뢰도(0.5~0.95) */
+  recommendConfidence: number
   bets: Map<string, ManualRoomBet>
   stats: ManualStats
   /** 가상 모드 표시 잔고 = 초기잔액 + 손익 − 걸린 금액 */
@@ -101,6 +151,13 @@ class ManualBetServiceImpl {
   private enabled = false
   private isVirtualMode = true
   private selectedChip = loadChip()
+  private martinLevels = new Map<string, number>()
+  private followMartin = (() => { try { return window.localStorage.getItem('bcr-manual-bet:follow-martin') === '1' } catch { return false } })()
+  private progression: ManualProgression = { baseAmount: 10_000, strategy: 'martingale', maxMartin: 5 }
+  private chipPresets: number[] = loadPresets()
+  private recommendConfidence = loadRecommendConfidence()
+  /** 가상/실제 각각의 통계 — 모드 전환 시 맞바꾼다 */
+  private inactiveStats: ManualStats = { wins: 0, losses: 0, ties: 0, betCount: 0, totalBet: 0, profit: 0 }
   private bets = new Map<string, ManualRoomBet>()
   private logs: ManualBetLog[] = []
   private logSeq = 0
@@ -158,7 +215,44 @@ class ManualBetServiceImpl {
   setVirtualMode(virtual: boolean): void {
     if (this.isVirtualMode === virtual) return
     this.isVirtualMode = virtual
+    // 가상/실제 손익·승패는 따로 쌓는다.
+    const active = { ...this.stats }
+    this.stats = { ...this.inactiveStats }
+    this.inactiveStats = active
     this.emit()
+  }
+
+  setProgression(p: ManualProgression): void {
+    this.progression = { ...p }
+    this.emit()
+  }
+
+  setFollowMartin(on: boolean): void {
+    this.followMartin = on
+    try { window.localStorage.setItem('bcr-manual-bet:follow-martin', on ? '1' : '0') } catch { /* ignore */ }
+    this.emit()
+  }
+
+  getMartinLevel(roomId: string): number { return this.martinLevels.get(roomId) ?? 0 }
+
+  setChipPresets(presets: number[]): void {
+    const clean = presets.filter(n => Number.isFinite(n) && n > 0).map(n => Math.round(n)).slice(0, 6)
+    if (clean.length === 0) return
+    this.chipPresets = clean
+    try { window.localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(clean)) } catch { /* ignore */ }
+    this.emit()
+  }
+
+  setRecommendConfidence(v: number): void {
+    if (!Number.isFinite(v)) return
+    this.recommendConfidence = Math.max(0.5, Math.min(0.95, v))
+    try { window.localStorage.setItem(RECOMMEND_STORAGE_KEY, String(this.recommendConfidence)) } catch { /* ignore */ }
+    this.emit()
+  }
+
+  /** 이 방의 마틴 단계 금액(자동 모드와 같은 규칙) */
+  suggestedAmount(roomId: string): number {
+    return progressionAmount(this.getMartinLevel(roomId), this.progression)
   }
 
   setChip(amount: number): void {
@@ -171,6 +265,7 @@ class ManualBetServiceImpl {
   resetStats(): void {
     this.stats = { wins: 0, losses: 0, ties: 0, betCount: 0, totalBet: 0, profit: 0 }
     this.virtualInitial = VirtualBettingService.getSettings().initialBalance
+    this.martinLevels.clear()
     this.logs = []
     this.emit()
   }
@@ -186,6 +281,11 @@ class ManualBetServiceImpl {
       pendingAmount: this.pendingAmount(),
       logs: this.logs.slice(-100),
       lastRoomId: this.lastRoomId && this.bets.has(this.lastRoomId) ? this.lastRoomId : null,
+      martinLevels: new Map(this.martinLevels),
+      followMartin: this.followMartin,
+      progression: { ...this.progression },
+      chipPresets: [...this.chipPresets],
+      recommendConfidence: this.recommendConfidence,
     }
   }
 
@@ -254,7 +354,8 @@ class ManualBetServiceImpl {
     if (existing && existing.side !== side) {
       return { ok: false, error: `이 방은 이미 ${sideLabel(existing.side)}에 걸려 있어요 — 먼저 빼거나 취소하세요` }
     }
-    const chip = Math.round(chipAmount)
+    // 마틴 따라가기: 이 방의 첫 칩은 마틴 단계 금액으로(이후 추가 칩은 선택 칩)
+    const chip = Math.round(!existing && this.followMartin ? this.suggestedAmount(room.id) : chipAmount)
     if (!(chip > 0)) return { ok: false, error: '칩 금액이 없어요' }
     const isVirtual = this.isVirtualMode
     if (isVirtual && this.virtualBalance() < chip) {
@@ -450,6 +551,13 @@ class ManualBetServiceImpl {
     if (kind === 'win') this.stats.wins++
     else if (kind === 'loss') this.stats.losses++
     else this.stats.ties++
+    // 방별 마틴 단계: 승리 → 0, 패배 → +1(최대 단계 소진 시 0으로 재시작, 자동 모드와 같은 정책), 타이 → 유지
+    if (kind === 'win') this.martinLevels.delete(roomId)
+    else if (kind === 'loss') {
+      const next = this.getMartinLevel(roomId) + 1
+      if (next >= Math.max(1, this.progression.maxMartin)) this.martinLevels.delete(roomId)
+      else this.martinLevels.set(roomId, next)
+    }
     this.bets.delete(roomId)
     const label = kind === 'win' ? `적중 +${profit.toLocaleString()}원` : kind === 'loss' ? `미적중 ${profit.toLocaleString()}원` : '타이 — 환불'
     this.pushLog(kind, bet, bet.total, `${sideLabel(bet.side)} ${bet.total.toLocaleString()}원 → ${sideLabel(winner)} 승 · ${label}`, profit, winner)

@@ -45,6 +45,23 @@
 }
 .manual-tray__selected { margin-left: auto; font-size: 13px; color: var(--text-secondary); }
 .manual-tray__actions { display: inline-flex; gap: 6px; margin-left: 8px; }
+.manual-tray__follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(215, 226, 238, 0.2);
+  background: var(--bg-surface);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-left: 8px;
+}
+.manual-tray__follow input { accent-color: #ffd84d; }
+.manual-tray__follow.is-on { border-color: #ffd84d; color: var(--text-primary); }
+.manual-tray__follow b { color: #ffd84d; font-weight: 800; }
 .manual-tray__action {
   padding: 7px 12px;
   border-radius: 8px;

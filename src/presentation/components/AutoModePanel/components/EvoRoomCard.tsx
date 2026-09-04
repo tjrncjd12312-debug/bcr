@@ -37,6 +37,10 @@ export interface EvoRoomCardProps {
   onManualClear?: (room: Room) => void
   /** 로드맵 보기: 6매·원매·2매·3매·4매 */
   roadView?: RoadView
+  /** 수동 모드: 이 방의 마틴 단계(연패 수)와 단계 금액, 따라가기 여부 */
+  manualMartin?: { level: number; maxStage: number; nextAmount: number; follow: boolean } | null
+  /** '추천 방' 기준 신뢰도(설정) */
+  recommendConfidence?: number
 }
 
 const RESULT_OVERLAY_MS = 4000
@@ -75,6 +79,8 @@ export const EvoRoomCard = memo(function EvoRoomCard({
   onManualUndo,
   onManualClear,
   roadView = 'big',
+  manualMartin = null,
+  recommendConfidence = RECOMMEND_CONFIDENCE,
 }: EvoRoomCardProps) {
   const model = useMemo(() => buildBigRoad(room.history), [room.history])
   const asks = useMemo(
@@ -86,7 +92,7 @@ export const EvoRoomCard = memo(function EvoRoomCard({
   const predSide: ManualSide | null = manualActive && prediction && !prediction.isSkip && prediction.prediction
     ? (prediction.prediction as ManualSide)
     : null
-  const isRecommended = manualActive && !!predSide && (prediction?.confidence ?? 0) >= RECOMMEND_CONFIDENCE
+  const isRecommended = manualActive && !!predSide && (prediction?.confidence ?? 0) >= recommendConfidence
   const isBetting = manualActive ? !!manualBet : autoState?.waitingForResult === true
   const activeSide: ManualSide | null = manualActive
     ? (manualBet?.side ?? predSide)
@@ -105,7 +111,7 @@ export const EvoRoomCard = memo(function EvoRoomCard({
     [settings, autoState, isTieFilter],
   )
   const amount = manualActive
-    ? (manualBet?.total ?? 0)
+    ? (manualBet?.total ?? (manualMartin?.follow ? manualMartin.nextAmount : 0))
     : (isBetting && (autoState?.lastBetAmount ?? 0) > 0 ? autoState!.lastBetAmount : progression.amount)
   const stageRisk = progression.stage >= Math.max(3, progression.maxStage - 1)
   const stageWarn = progression.stage > 1
@@ -199,6 +205,12 @@ export const EvoRoomCard = memo(function EvoRoomCard({
             {windowOpen
               ? <span className="evo-chip tone-open">배팅 가능</span>
               : <span className="evo-chip tone-closed">{room.phase === 'dealing' ? '마감 · 딜링' : room.phase === 'result' ? '마감 · 결과' : '마감'}</span>}
+            {manualMartin && (manualMartin.level > 0 || manualMartin.follow) && (
+              <span className={`evo-chip ${manualMartin.level >= Math.max(2, manualMartin.maxStage - 1) ? 'tone-martin' : manualMartin.level > 0 ? 'tone-betting' : 'tone-idle'}`}
+                title="이 방에서 내가 진 연속 횟수 기준 마틴 단계와 다음 금액">
+                마틴 {manualMartin.level + 1}/{manualMartin.maxStage}단계 · 다음 {manualMartin.nextAmount.toLocaleString()}원
+              </span>
+            )}
             {manualBet ? (
               <span className="evo-chip tone-betting">
                 {manualBet.side === 'B' ? '뱅커' : manualBet.side === 'P' ? '플레이어' : '타이'} {manualBet.total.toLocaleString()}원
@@ -249,7 +261,11 @@ export const EvoRoomCard = memo(function EvoRoomCard({
         room={room}
         betLogs={betLogs}
         cta={manualActive && windowOpen
-          ? { side: predSide, betSide: manualBet?.side ?? null, betTotal: manualBet?.total ?? 0, secondsLeft: timer, recommended: isRecommended }
+          ? {
+              side: predSide, betSide: manualBet?.side ?? null, betTotal: manualBet?.total ?? 0, secondsLeft: timer, recommended: isRecommended,
+              suggestedAmount: manualMartin?.follow ? manualMartin.nextAmount : null,
+              martinStage: manualMartin && manualMartin.level > 0 ? manualMartin.level + 1 : null,
+            }
           : null}
       />
 

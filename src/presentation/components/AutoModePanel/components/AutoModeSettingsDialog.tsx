@@ -6,14 +6,16 @@
 import { useEffect, useState, useMemo } from 'react'
 import type { BetStrategyType } from '../../../../domain/entities'
 import type { CustomStrategyDefinitionV1 } from '../../../../domain/strategies/customStrategy'
-import type { AutoModeSettings } from '../../../../application/services/AutoModeService'
+import type { AutoModeSettings, AutoModeState } from '../../../../application/services/AutoModeService'
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
+import { useManualBet } from '../../../hooks/useManualBet'
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
 import { StatCard } from '../../common/StatCard'
 import './AutoModeSettingsDialog.css'
 
-type SettingsTab = 'general' | 'strategy' | 'safety' | 'rooms'
+type SettingsTab = 'general' | 'strategy' | 'safety' | 'rooms' | 'manual'
+const PRESET_CONFIDENCE = [55, 60, 65, 70, 75, 80].map(v => ({ label: `${v}%`, value: v }))
 
 // 빠른 선택 칩 — 타이핑 없이 흔한 값을 한 번에(2026-09-05 설정 UX)
 const KRW = (n: number) => (n >= 10000 ? `${n / 10000}만` : n >= 1000 ? `${n / 1000}천` : `${n}`)
@@ -32,11 +34,13 @@ const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: strin
   { value: 'custom', label: '단계별 금액', desc: '기본 단계 금액 직접 설정' },
 ]
 
+// 도메인 순서: 무엇으로(가상/실제) → 얼마씩(전략) → 언제 멈출지(위험 관리) → 어디에(방·조건) → 손으로 할 때(수동)
 const TABS: SettingsTabDef<SettingsTab>[] = [
-  { value: 'general', label: '일반' },
-  { value: 'strategy', label: '기본 배팅 전략' },
-  { value: 'safety', label: '안전 장치' },
-  { value: 'rooms', label: '방·필터' },
+  { value: 'general', label: '배팅 모드' },
+  { value: 'strategy', label: '배팅 전략' },
+  { value: 'safety', label: '위험 관리' },
+  { value: 'rooms', label: '방·조건' },
+  { value: 'manual', label: '수동 배팅' },
 ]
 
 interface AutoModeSettingsDialogProps {
@@ -44,7 +48,7 @@ interface AutoModeSettingsDialogProps {
   onClose: () => void
   settings: AutoModeSettings
   onUpdateSettings: (settings: Partial<AutoModeSettings>) => void
-  onResetStats: () => void
+  onResetStats: (options?: { allModes?: boolean }) => void
   totalWins: number
   totalLosses: number
   cumulativeProfit: number
@@ -58,6 +62,8 @@ interface AutoModeSettingsDialogProps {
   onOpenRoomSelector?: () => void
   onOpenFilterDialog?: () => void
   onOpenPatternManager?: () => void
+  /** 가상/실제 각각의 세션 통계(각 모드 손익은 따로 쌓인다) */
+  modeStats?: AutoModeState['modeStats']
 }
 
 export function AutoModeSettingsDialog({
@@ -78,8 +84,16 @@ export function AutoModeSettingsDialog({
   onOpenRoomSelector,
   onOpenFilterDialog,
   onOpenPatternManager,
+  modeStats,
 }: AutoModeSettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
+  const manual = useManualBet()
+  const [presetDraft, setPresetDraft] = useState<string>(() => manual.chipPresets.join(', '))
+  useEffect(() => { if (isOpen) setPresetDraft(manual.chipPresets.join(', ')) }, [isOpen, manual.chipPresets])
+  const applyPresets = () => {
+    const nums = presetDraft.split(/[,\s]+/).map(v => Number(v.replace(/[^0-9]/g, ''))).filter(n => Number.isFinite(n) && n >= 1000)
+    if (nums.length > 0) manual.setChipPresets(nums)
+  }
 
   // 가상 잔액 상태 - VirtualBettingService에서 초기화
   const [virtualBalance, setVirtualBalance] = useState(() =>
@@ -223,9 +237,38 @@ export function AutoModeSettingsDialog({
             </div>
           )}
 
+          {/* 현재 상태 — 가상/실제 각각(손익·승패는 모드별로 따로 쌓인다) */}
+          {modeStats && (
+            <div className="ams-section">
+              <div className="ams-section-title">모드별 세션 손익 (자동 배팅)</div>
+              <div className="ams-mode-stats">
+                {(['virtual', 'real'] as const).map((mode) => {
+                  const st = modeStats[mode]
+                  const games = st.totalWins + st.totalLosses
+                  const rate = games > 0 ? Math.round((st.totalWins / games) * 100) : 0
+                  const isCurrent = settings.isVirtualMode === (mode === 'virtual')
+                  return (
+                    <div key={mode} className={`ams-mode-stat ${mode === 'real' ? 'is-real' : ''} ${isCurrent ? 'is-current' : ''}`}>
+                      <div className="ams-mode-stat__head">
+                        <span>{mode === 'virtual' ? '가상' : '실제'}</span>
+                        {isCurrent && <em>지금 모드</em>}
+                      </div>
+                      <strong className={st.cumulativeProfit > 0 ? 'positive' : st.cumulativeProfit < 0 ? 'negative' : ''}>
+                        {st.cumulativeProfit > 0 ? '+' : ''}{st.cumulativeProfit.toLocaleString()}원
+                      </strong>
+                      <span className="ams-mode-stat__line">{st.totalWins}승 {st.totalLosses}패 · 적중률 {rate}% · 배팅 {st.totalBetAmount.toLocaleString()}원</span>
+                      <span className="ams-mode-stat__line">최대 +{st.maxProfit.toLocaleString()} / {st.maxLoss.toLocaleString()}</span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="ams-hint">모드를 바꾸면 그 모드의 손익으로 이어서 셉니다. 통계 초기화는 지금 모드만 지웁니다.</div>
+            </div>
+          )}
+
           {/* 현재 상태 */}
           <div className="ams-section">
-            <div className="ams-section-title">현재 상태</div>
+            <div className="ams-section-title">현재 모드 요약</div>
             <div className="settings-stat-grid">
               <StatCard
                 label={settings.isVirtualMode ? '가상 잔액' : '잔액'}
@@ -262,13 +305,13 @@ export function AutoModeSettingsDialog({
           <div className="ams-section">
             <div className="ams-section-title">데이터 관리</div>
             <div className="ams-data-actions">
-              <button className="ams-btn-outline" onClick={onResetStats}>
-                통계 초기화
+              <button className="ams-btn-outline" onClick={() => onResetStats()}>
+                {settings.isVirtualMode ? '가상' : '실제'} 통계 초기화
               </button>
               <button
                 className="ams-btn-outline ams-btn-danger"
                 onClick={() => {
-                  onResetStats()
+                  onResetStats({ allModes: true })
                   VirtualBettingService.reset()
                   handleResetVirtualBalance()
                 }}
@@ -276,7 +319,7 @@ export function AutoModeSettingsDialog({
                 전체 세션 초기화
               </button>
             </div>
-            <div className="ams-hint">전체 세션 초기화: 통계 + 가상잔액 + 마틴레벨 모두 리셋</div>
+            <div className="ams-hint">통계 초기화는 지금 모드(가상/실제)만 지웁니다 · 전체 세션 초기화: 가상·실제 통계 + 가상잔액 + 마틴레벨 모두 리셋</div>
           </div>
         </>
       )}
@@ -510,6 +553,86 @@ export function AutoModeSettingsDialog({
                 ? '중지 후 재시작 시 1단계부터 시작'
                 : '중지 후 재시작 시 이전 마틴 레벨 유지'}
             </div>
+          </div>
+        </>
+      )}
+
+      {/* ========== Tab: 수동 배팅 ========== */}
+      {activeTab === 'manual' && (
+        <>
+          <div className="ams-section">
+            <div className="ams-section-title">칩 액면 (트레이)</div>
+            <div className="settings-field">
+              <span className="settings-field__head"><span className="settings-field__label">칩 금액 목록 (쉼표로 구분, 최대 6개)</span></span>
+              <span className="settings-field__input-wrap">
+                <input
+                  className="settings-field__input"
+                  value={presetDraft}
+                  onChange={(e) => setPresetDraft(e.target.value)}
+                  onBlur={applyPresets}
+                  onKeyDown={(e) => { if (e.key === 'Enter') applyPresets() }}
+                  aria-label="칩 금액 목록"
+                />
+                <span className="settings-field__suffix">원</span>
+              </span>
+              <span className="settings-field__presets">
+                {[
+                  { label: '1천·5천·1만·5만·10만', value: [1000, 5000, 10000, 50000, 100000] },
+                  { label: '5천·1만·3만·5만·10만·30만', value: [5000, 10000, 30000, 50000, 100000, 300000] },
+                  { label: '1만·2만·5만·10만·50만', value: [10000, 20000, 50000, 100000, 500000] },
+                ].map((p) => (
+                  <button key={p.label} type="button" className={`settings-field__preset ${p.value.join(',') === manual.chipPresets.join(',') ? 'is-active' : ''}`} onClick={() => { manual.setChipPresets(p.value); setPresetDraft(p.value.join(', ')) }}>
+                    {p.label}
+                  </button>
+                ))}
+              </span>
+            </div>
+            <div className="ams-hint">현재: {manual.chipPresets.map(n => n.toLocaleString()).join(' · ')}원</div>
+          </div>
+
+          <div className="ams-section">
+            <div className="ams-section-title">마틴 따라가기</div>
+            <div className="ams-toggle-row">
+              <label className="ams-toggle-label">
+                <input type="checkbox" checked={manual.followMartin} onChange={(e) => manual.setFollowMartin(e.target.checked)} />
+                <span className="ams-toggle-text">방의 첫 칩을 그 방의 마틴 단계 금액으로 올리기</span>
+              </label>
+            </div>
+            <div className="ams-hint">
+              단계 금액은 '배팅 전략' 탭의 기본 배팅금·전략·최대 단계를 그대로 씁니다. 지면 다음 단계, 이기면 1단계, 최대 단계를 다 쓰면 1단계부터 다시.
+              카드에 "마틴 n/최대단계 · 다음 금액"으로 보입니다.
+            </div>
+          </div>
+
+          <div className="ams-section">
+            <div className="ams-section-title">추천 방 기준</div>
+            <div className="settings-field-row">
+              <NumberFieldWithSuffix
+                label="예측 신뢰도가 이 값 이상이면 '추천 방'"
+                value={Math.round(manual.recommendConfidence * 100)}
+                suffix="%"
+                min={50}
+                max={95}
+                step={5}
+                presets={PRESET_CONFIDENCE}
+                onChange={(n) => manual.setRecommendConfidence(n / 100)}
+              />
+            </div>
+            <div className="ams-hint">운영바의 '추천 방' 보기 필터와 카드의 추천 표시가 이 기준을 씁니다.</div>
+          </div>
+
+          <div className="ams-section">
+            <div className="ams-section-title">수동 배팅 통계</div>
+            <div className="settings-stat-grid">
+              <StatCard label="손익" value={`${manual.stats.profit > 0 ? '+' : ''}${manual.stats.profit.toLocaleString()}`} tone={manual.stats.profit > 0 ? 'positive' : manual.stats.profit < 0 ? 'negative' : 'neutral'} />
+              <StatCard label="승/패/무" value={`${manual.stats.wins} / ${manual.stats.losses} / ${manual.stats.ties}`} />
+              <StatCard label="배팅 횟수" value={String(manual.stats.betCount)} />
+              <StatCard label="총 배팅" value={manual.stats.totalBet.toLocaleString()} />
+            </div>
+            <div className="ams-data-actions" style={{ marginTop: 10 }}>
+              <button className="ams-btn-outline" onClick={manual.resetStats}>수동 통계 초기화</button>
+            </div>
+            <div className="ams-hint">수동 배팅 손익도 가상/실제가 따로 쌓입니다(지금: {settings.isVirtualMode ? '가상' : '실제'}).</div>
           </div>
         </>
       )}

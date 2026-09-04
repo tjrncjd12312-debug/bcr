@@ -16,11 +16,17 @@ interface ManualBetTrayProps {
   lastRoomName: string | null
   onUndoLast: () => void
   onClearAll: () => void
+  /** 마틴 따라가기: 방의 첫 칩을 그 방의 마틴 단계 금액으로 */
+  followMartin: boolean
+  onToggleFollowMartin: (on: boolean) => void
+  strategyLabel: string
+  /** 칩 액면(설정에서 편집) */
+  presets?: readonly number[]
 }
 
-export function ManualBetTray({ selectedChip, onSelectChip, stats, pendingAmount, openBetCount, isVirtual, onResetStats, lastRoomName, onUndoLast, onClearAll }: ManualBetTrayProps) {
+export function ManualBetTray({ selectedChip, onSelectChip, stats, pendingAmount, openBetCount, isVirtual, onResetStats, lastRoomName, onUndoLast, onClearAll, followMartin, onToggleFollowMartin, strategyLabel, presets = MANUAL_CHIPS }: ManualBetTrayProps) {
   const [custom, setCustom] = useState('')
-  const isPreset = (MANUAL_CHIPS as readonly number[]).includes(selectedChip)
+  const isPreset = presets.includes(selectedChip)
   const applyCustom = () => {
     const n = Number(custom.replace(/[^0-9]/g, ''))
     if (Number.isFinite(n) && n >= 1000) onSelectChip(Math.round(n / 1000) * 1000)
@@ -29,7 +35,7 @@ export function ManualBetTray({ selectedChip, onSelectChip, stats, pendingAmount
     <section className="manual-tray" aria-label="수동 배팅 칩 트레이">
       <div className="manual-tray__chips" role="radiogroup" aria-label="칩 선택">
         <span className="manual-tray__label">칩 선택</span>
-        {MANUAL_CHIPS.map((amount) => (
+        {presets.map((amount) => (
           <button
             key={amount}
             type="button"
@@ -57,6 +63,10 @@ export function ManualBetTray({ selectedChip, onSelectChip, stats, pendingAmount
         <span className="manual-tray__selected">
           선택한 칩 <strong>{selectedChip.toLocaleString()}원</strong>
         </span>
+        <label className={`manual-tray__follow ${followMartin ? 'is-on' : ''}`} title="켜면 방의 첫 칩이 그 방의 마틴 단계 금액으로 올라갑니다(설정의 기본 배팅 전략 기준). 지면 다음 단계, 이기면 1단계.">
+          <input type="checkbox" checked={followMartin} onChange={(e) => onToggleFollowMartin(e.target.checked)} />
+          <span>마틴 따라가기 <b>({strategyLabel})</b></span>
+        </label>
         <span className="manual-tray__actions">
           <button type="button" className="manual-tray__action" disabled={openBetCount === 0} onClick={onUndoLast}
             title={lastRoomName ? `${lastRoomName}의 마지막 칩 빼기` : '올린 칩이 없어요'}>

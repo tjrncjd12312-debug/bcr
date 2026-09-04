@@ -15,6 +15,10 @@ export interface ManualCta {
   betTotal: number
   secondsLeft: number
   recommended: boolean
+  /** 마틴 따라가기일 때 이 방에 올라갈 금액 */
+  suggestedAmount?: number | null
+  /** 연패 중이면 현재 마틴 단계(1부터) */
+  martinStage?: number | null
 }
 
 interface EvoDealStripProps {
@@ -60,12 +64,14 @@ export const EvoDealStrip = memo(function EvoDealStrip({ room, betLogs, cta = nu
     const side = cta.betSide ?? cta.side
     const label = side ? SIDE_LABEL[side] : null
     const hasBet = cta.betTotal > 0
+    const amountText = cta.suggestedAmount ? ` ${cta.suggestedAmount.toLocaleString()}원` : ''
+    const stageText = cta.martinStage ? ` · 마틴 ${cta.martinStage}단계` : ''
     const title = hasBet
       ? `${label} ${cta.betTotal.toLocaleString()}원 걸림`
-      : label ? `${label}에 배팅하세요` : '예측 기다리는 중'
+      : label ? `${label}에${amountText} 배팅하세요` : '예측 기다리는 중'
     const sub = hasBet
       ? '더 올리려면 같은 자리를 다시 누르세요'
-      : label ? `${cta.recommended ? '추천 방 · ' : ''}${label} 자리를 누르면 칩이 올라갑니다` : '배팅 가능 · 예측이 오면 자리를 알려드려요'
+      : label ? `${cta.recommended ? '추천 방 · ' : ''}${label} 자리를 누르면 칩이 올라갑니다${stageText}` : `배팅 가능 · 예측이 오면 자리를 알려드려요${stageText}`
     return (
       <div className={`evo-deal evo-deal--cta side-${side ? side.toLowerCase() : 'none'} ${hasBet ? 'has-bet' : ''}`} role="status" aria-label={title}>
         <div className="evo-deal__cta-main">

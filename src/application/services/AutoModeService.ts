@@ -154,6 +154,17 @@ export interface AutoModeState {
   realNetProfit?: number | null
   /** 🆕 실모드 표시용 보유금 = 시작잔액 + 누적손익 − 실배팅 pending. 배팅 즉시 차감 반영(가상모드와 동일 모델). */
   realDisplayBalance?: number | null
+  /** 🆕 2026-09-05 가상/실제 각각의 세션 통계(설정창 표시용). 현재 모드 쪽이 위 필드들과 같다. */
+  modeStats?: { virtual: ModeSessionStats; real: ModeSessionStats }
+}
+
+export interface ModeSessionStats {
+  totalWins: number
+  totalLosses: number
+  totalBetAmount: number
+  cumulativeProfit: number
+  maxProfit: number
+  maxLoss: number
 }
 
 // 로그 이벤트 타입
@@ -302,6 +313,24 @@ class AutoModeServiceImpl {
     lastEventTime: null,
     startTime: null,
     startBalance: 0,
+  }
+
+  /** 🆕 2026-09-05 가상/실제 손익·승패 분리(사용자: "가상과 실제 손익이 공유됨"). 지금 모드가 아닌 쪽의 통계를
+   *  여기 보관했다가 모드가 바뀌면 state의 6개 필드와 맞바꾼다. 통계 초기화는 현재 모드만 지운다. */
+  private inactiveModeStats = { totalWins: 0, totalLosses: 0, totalBetAmount: 0, cumulativeProfit: 0, maxProfit: 0, maxLoss: 0 }
+
+  private clearInactiveModeStats(): void {
+    this.inactiveModeStats = { totalWins: 0, totalLosses: 0, totalBetAmount: 0, cumulativeProfit: 0, maxProfit: 0, maxLoss: 0 }
+  }
+
+  private swapModeStats(): void {
+    const active = {
+      totalWins: this.state.totalWins, totalLosses: this.state.totalLosses, totalBetAmount: this.state.totalBetAmount,
+      cumulativeProfit: this.state.cumulativeProfit, maxProfit: this.state.maxProfit, maxLoss: this.state.maxLoss,
+    }
+    Object.assign(this.state, this.inactiveModeStats)
+    this.inactiveModeStats = active
+    console.log(`[AutoMode] 🔀 모드 전환 — 통계 맞바꿈 (현재 모드 손익 ${this.state.cumulativeProfit}, 보관 ${active.cumulativeProfit})`)
   }
 
   private stateManager = new CallbackManager<StateChangeCallback>('AutoMode')
@@ -517,6 +546,14 @@ class AutoModeServiceImpl {
       realNetProfit: this.getRealNetProfit(),
       // 🆕 실모드 표시용 보유금(배팅 즉시 차감 반영). UI 보유금 pod가 이 값을 쓴다.
       realDisplayBalance: this.getRealDisplayBalance(),
+      modeStats: (() => {
+        const active: ModeSessionStats = {
+          totalWins: this.state.totalWins, totalLosses: this.state.totalLosses, totalBetAmount: this.state.totalBetAmount,
+          cumulativeProfit: this.state.cumulativeProfit, maxProfit: this.state.maxProfit, maxLoss: this.state.maxLoss,
+        }
+        const other: ModeSessionStats = { ...this.inactiveModeStats }
+        return this.settings.isVirtualMode ? { virtual: active, real: other } : { virtual: other, real: active }
+      })(),
     }
   }
 
@@ -897,9 +934,10 @@ class AutoModeServiceImpl {
       console.log(`[AutoMode] 🛡️ AutoBettingService virtual mode synced: ${currentVirtualMode}`)
     }
 
-    // Bug Fix: 모드 전환 시 pending 배팅 정리
+    // Bug Fix: 모드 전환 시 pending 배팅 정리 + 가상/실제 통계 맞바꿈(각 모드의 손익·승패는 따로 쌓인다)
     if (newSettings.isVirtualMode !== undefined && prevVirtualMode !== newSettings.isVirtualMode) {
       this.cleanupPendingBetsForModeChange(prevVirtualMode, newSettings.isVirtualMode)
+      this.swapModeStats()
     }
 
     this.saveToStorage()
@@ -962,7 +1000,8 @@ class AutoModeServiceImpl {
     this.repository.saveSettings(this.settings)
   }
 
-  resetStats(): void {
+  /** @param options.allModes true면 지금 모드뿐 아니라 보관 중인 다른 모드(가상↔실제) 통계도 지운다 — '전체 세션 초기화'용 */
+  resetStats(options?: { allModes?: boolean }): void {
     const pendingRealBetCount = Array.from(this.state.roomStates.values())
       .filter(rs => rs.waitingForResult && rs.wasVirtualBet !== true)
       .length
@@ -979,6 +1018,7 @@ class AutoModeServiceImpl {
     this.state.cumulativeProfit = 0
     this.state.maxProfit = 0
     this.state.maxLoss = 0
+    if (options?.allModes) this.clearInactiveModeStats()
 
     // ✅ MartingaleManager 전체 리셋 (Single Source of Truth)
     this.martingaleManager.resetAllLevels()
@@ -3140,6 +3180,15 @@ class AutoModeServiceImpl {
     this._casinoAdapter = null
     this._multiRoomPredictionPort = null
     this._patternPredictionService = null
+    // 세션 통계(활성 + 보관 중인 다른 모드) 해체 — 다음 initialize/updateSettings의 모드 전환이 이전 세션 손익을 물려받지 않게.
+    // dispose는 앱 코드에서 부르지 않고 테스트 해체에서만 쓴다(2026-09-05 기준).
+    this.state.totalWins = 0
+    this.state.totalLosses = 0
+    this.state.totalBetAmount = 0
+    this.state.cumulativeProfit = 0
+    this.state.maxProfit = 0
+    this.state.maxLoss = 0
+    this.clearInactiveModeStats()
   }
 }
 

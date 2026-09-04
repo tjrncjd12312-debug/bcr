@@ -32,6 +32,8 @@ export interface UseAutoModeResult {
   realDisplayBalance?: number | null
   /** 🆕 실모드 '진짜 돈' 손익(실잔액 − 시작잔액 + pending). 자체추정 아님. 가상/미수신 시 null/undefined. */
   realNetProfit?: number | null
+  /** 🆕 가상/실제 각각의 세션 통계(설정창 표시용) */
+  modeStats?: AutoModeState['modeStats']
   // tie_frequent 자동 배팅에서 이 슈 동안 이미 적중한 방 ID 목록
   tieAutoCompletedRoomIds: string[]
 
@@ -40,7 +42,7 @@ export interface UseAutoModeResult {
   start: (realBalance?: number) => void
   stop: () => void
   updateSettings: (settings: Partial<AutoModeSettings>) => void
-  resetStats: () => void
+  resetStats: (options?: { allModes?: boolean }) => void
   toggleRoom: (roomId: string) => void
   isRoomEnabled: (roomId: string) => boolean
   getRoomState: (roomId: string) => RoomBettingState | null
@@ -77,8 +79,8 @@ export function useAutoMode(): UseAutoModeResult {
     AutoModeService.updateSettings(settings)
   }, [])
 
-  const resetStats = useCallback(() => {
-    AutoModeService.resetStats()
+  const resetStats = useCallback((options?: { allModes?: boolean }) => {
+    AutoModeService.resetStats(options)
   }, [])
 
   const toggleRoom = useCallback((roomId: string) => {
@@ -116,6 +118,7 @@ export function useAutoMode(): UseAutoModeResult {
     startTime: state.startTime,
     startBalance: state.startBalance,
     realDisplayBalance: state.realDisplayBalance,
+    modeStats: state.modeStats,
     realNetProfit: state.realNetProfit,
     tieAutoCompletedRoomIds: state.tieAutoCompletedRoomIds,
     // Actions

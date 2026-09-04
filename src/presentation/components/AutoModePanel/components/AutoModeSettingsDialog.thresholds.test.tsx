@@ -77,7 +77,7 @@ describe('AutoModeSettingsDialog — strategy ownership', () => {
       onOpenStrategyBuilder,
     })
 
-    fireEvent.click(screen.getByRole('button', { name: '기본 배팅 전략' }))
+    fireEvent.click(screen.getByRole('button', { name: '배팅 전략' })) // 탭 라벨은 도메인 이름으로(2026-09-05)
 
     expect(screen.getByText('15회 무3연속 · 2연승')).toBeInTheDocument()
     expect(screen.getByText(/기본 배팅 전략은 중복 적용되지 않고 저장 상태로만 유지됩니다/)).toBeInTheDocument()
