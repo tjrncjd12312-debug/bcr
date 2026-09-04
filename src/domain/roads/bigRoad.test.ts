@@ -94,3 +94,24 @@ describe('derived roads', () => {
     expect(predictDerived(buildBigRoad(hist('B')).columns, 'P').bigEye).toBeNull()
   })
 })
+
+import { layoutBeadPlate, layoutDerivedRoad } from './bigRoad'
+
+describe('6매·파생로드 배치', () => {
+  it('bead plate fills columns top-to-bottom including ties', () => {
+    const { cells, colsUsed } = layoutBeadPlate(hist('BPTBBPBP'), 6)
+    expect(cells.map(c => [c.col, c.row, c.winner])).toEqual([
+      [0, 0, 'B'], [0, 1, 'P'], [0, 2, 'T'], [0, 3, 'B'], [0, 4, 'B'], [0, 5, 'P'], [1, 0, 'B'], [1, 1, 'P'],
+    ])
+    expect(colsUsed).toBe(2)
+    expect(layoutBeadPlate([], 6)).toEqual({ cells: [], colsUsed: 0 })
+  })
+
+  it('derived road stacks same-colour marks in a column and breaks on change', () => {
+    const { cells, colsUsed } = layoutDerivedRoad(['R', 'R', 'B', 'R', 'R', 'R'], 6)
+    expect(cells.map(c => [c.col, c.row, c.mark])).toEqual([
+      [0, 0, 'R'], [0, 1, 'R'], [1, 0, 'B'], [2, 0, 'R'], [2, 1, 'R'], [2, 2, 'R'],
+    ])
+    expect(colsUsed).toBe(3)
+  })
+})

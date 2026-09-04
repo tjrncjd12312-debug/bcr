@@ -6,6 +6,7 @@ import type { RoomBettingState, AutoModeSettings } from '../../../../application
 import type { ManualRoomBet, ManualSide } from '../../../../application/services/ManualBetService'
 import { useRoomFilter } from '../hooks/useRoomFilter'
 import { EvoRoomCard } from './EvoRoomCard'
+import type { RoadView } from './EvoBigRoad'
 import '../AutoModePanel.css'
 
 type RoomBetStatus = 'pending' | 'win' | 'loss' | 'tie' | 'failed' | 'pass'
@@ -46,6 +47,7 @@ interface AutoModeRoomGridProps {
   onManualSpot?: (room: Room, side: ManualSide) => void
   onManualUndo?: (room: Room) => void
   onManualClear?: (room: Room) => void
+  roadView?: RoadView
 }
 
 const NO_MANUAL_BETS = new Map<string, ManualRoomBet>()
@@ -72,6 +74,7 @@ export function AutoModeRoomGrid({
   onManualSpot,
   onManualUndo,
   onManualClear,
+  roadView = 'big',
 }: AutoModeRoomGridProps) {
   const roomList = useMemo(() => Array.from(rooms.values()), [rooms])
   const filteredRooms = useRoomFilter({
@@ -129,6 +132,7 @@ export function AutoModeRoomGrid({
           onManualSpot={onManualSpot}
           onManualUndo={onManualUndo}
           onManualClear={onManualClear}
+          roadView={roadView}
         />
       ))}
     </div>

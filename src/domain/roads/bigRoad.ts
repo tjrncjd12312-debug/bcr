@@ -179,3 +179,55 @@ export function predictDerived(columns: BigRoadColumn[], next: Side): DerivedPre
     cockroach: derivedMarkAt(cols, c, r, 3),
   }
 }
+
+// ==================== 6매(주판)·2매/3매/4매(파생로드) 배치 ====================
+
+export interface BeadCell {
+  col: number
+  row: number
+  winner: Winner
+  playerPair: boolean
+  bankerPair: boolean
+  originalIndex: number
+}
+
+/** 6매(주판로): 모든 결과(타이 포함)를 오래된 순으로 세로로 채운다(위→아래, 다음 열). */
+export function layoutBeadPlate(history: RoadResult[], rows = 6): { cells: BeadCell[]; colsUsed: number } {
+  const cells: BeadCell[] = []
+  let col = 0
+  let row = 0
+  for (let i = history.length - 1; i >= 0; i--) {
+    const r = history[i]
+    cells.push({ col, row, winner: r.winner, playerPair: !!r.isPlayerPair, bankerPair: !!r.isBankerPair, originalIndex: i })
+    row++
+    if (row >= rows) { row = 0; col++ }
+  }
+  const colsUsed = cells.length === 0 ? 0 : (row === 0 ? col : col + 1)
+  return { cells, colsUsed }
+}
+
+export interface DerivedCell {
+  col: number
+  row: number
+  mark: DerivedMark
+}
+
+/**
+ * 파생로드(2매/3매/4매)를 큰길과 같은 규칙으로 배치한다: 같은 색이 이어지면 아래로, 색이 바뀌면 새 열,
+ * 6행을 넘거나 막히면 오른쪽으로 꺾인다(드래곤 테일).
+ */
+export function layoutDerivedRoad(marks: DerivedMark[], rows = 6): { cells: DerivedCell[]; colsUsed: number } {
+  const columns: BigRoadColumn[] = []
+  marks.forEach((m, i) => {
+    const side: Side = m === 'R' ? 'B' : 'P'
+    const cell: BigRoadCell = { winner: side, ties: 0, playerPair: false, bankerPair: false, originalIndex: i }
+    const last = columns[columns.length - 1]
+    if (last && last.winner === side) last.cells.push(cell)
+    else columns.push({ winner: side, cells: [cell] })
+  })
+  const layout = layoutBigRoad({ columns, leadingTies: 0, counts: { B: 0, P: 0, T: 0 } }, rows)
+  return {
+    cells: layout.cells.map(c => ({ col: c.col, row: c.row, mark: c.winner === 'B' ? 'R' : 'B' })),
+    colsUsed: layout.colsUsed,
+  }
+}

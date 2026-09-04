@@ -24,6 +24,7 @@ import MultiRoomPredictionService from '../../../application/services/MultiRoomP
 import ManualBetService, { type ManualBetLog } from '../../../application/services/ManualBetService'
 import { useManualBet } from '../../hooks/useManualBet'
 import { ManualBetTray } from './components/ManualBetTray'
+import { ROAD_VIEWS, type RoadView } from './components/EvoBigRoad'
 import { winProfit } from '../../../domain/betting/payout'
 import AutoModeService, { type AutoModeBetLogEvent } from '../../../application/services/AutoModeService'
 import type { RoomFilterType, RoomSortType, CustomPattern } from '../../../domain/entities'
@@ -40,6 +41,8 @@ import {
 const VIEW_MODE_KEY = 'auto-mode:view-mode'
 // 배팅 방식(자동/수동) 저장 키
 const BET_MODE_KEY = 'auto-mode:bet-mode'
+// 로드맵 보기(6매/원매/2매/3매/4매) 저장 키
+const ROAD_VIEW_KEY = 'auto-mode:road-view'
 import { useCountUp } from '../../hooks/useCountUp'
 
 interface AutoModePanelProps {
@@ -120,6 +123,30 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
   })
   const isManual = betMode === 'manual'
   const manual = useManualBet()
+  const [roadView, setRoadView] = useState<RoadView>(() => {
+    try {
+      const saved = localStorage.getItem(ROAD_VIEW_KEY)
+      return ROAD_VIEWS.some(v => v.value === saved) ? (saved as RoadView) : 'big'
+    } catch { return 'big' }
+  })
+  useEffect(() => { try { localStorage.setItem(ROAD_VIEW_KEY, roadView) } catch { /* ignore */ } }, [roadView])
+
+  // ✅/✕ 예측 적중 기록(운영바): 수동 모드는 방별 AI 예측 결과, 자동 모드는 배팅 결과. 최신이 오른쪽, 최대 40개.
+  interface PredictionMark { id: number; won: boolean; roomName: string; at: number }
+  const [predictionMarks, setPredictionMarks] = useState<PredictionMark[]>([])
+  const markSeqRef = useRef(0)
+  const pushPredictionMark = useCallback((won: boolean, roomName: string) => {
+    setPredictionMarks(prev => [...prev, { id: ++markSeqRef.current, won, roomName, at: Date.now() }].slice(-40))
+  }, [])
+  useEffect(() => {
+    if (!isManual) return
+    return MultiRoomPredictionService.onResult((roomId, _winner, won, isReplay) => {
+      if (isReplay) return
+      const room = rooms.get(roomId)
+      pushPredictionMark(won, room?.koreanName || room?.name || roomId)
+    })
+  }, [isManual, rooms, pushPredictionMark])
+  const predictionHits = predictionMarks.filter(m => m.won).length
 
   // State
   const [showSettings, setShowSettings] = useState(false)
@@ -604,6 +631,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
 
         setLastBetTime(new Date())
         setLastBetResult(won === null ? null : (won ? 'win' : 'loss'))
+        if (won !== null) pushPredictionMark(won, roomName)
 
         // Validate betAmount for result logs
         const resultBetAmount = typeof betAmount === 'number' && !isNaN(betAmount) ? betAmount : 0
@@ -695,7 +723,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
       }
     })
     return unsubscribe
-  }, [onBetLog, addHistoryLog, settings.isVirtualMode, settings.betStrategy, cumulativeProfit])
+  }, [onBetLog, addHistoryLog, settings.isVirtualMode, settings.betStrategy, cumulativeProfit, pushPredictionMark])
 
   // 수동 모드 진입/이탈: 자동배팅은 끄고, 모든 방 예측을 켠다(예측만 — 배팅은 사용자 클릭).
   useEffect(() => {
@@ -1286,12 +1314,50 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                 </button>
               </div>
 
+              {viewMode === 'grid' && (
+                <div className="auto-mode__road-views" role="group" aria-label="로드맵 보기">
+                  {ROAD_VIEWS.map((v) => (
+                    <button
+                      key={v.value}
+                      className={roadView === v.value ? 'active' : ''}
+                      onClick={() => setRoadView(v.value)}
+                      aria-pressed={roadView === v.value}
+                      title={v.title}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="auto-mode__workspace-counts" aria-label="운영 현황">
                 <span>전체 <strong>{roomsForAutoModeDisplay.size}</strong></span>
                 <span>대상 <strong>{filteredBettingRoomIds.length}</strong></span>
                 <span className={currentBettingInfo.bettingRoomCount > 0 ? 'is-live' : ''}>
                   배팅 중 <strong>{currentBettingInfo.bettingRoomCount}</strong>
                 </span>
+              </div>
+
+              <div className="auto-mode__pred-record" aria-label="예측 적중 기록" title="최근 예측이 맞았으면 O, 틀렸으면 X (최신이 오른쪽)">
+                <span className="auto-mode__pred-record-label">예측</span>
+                {predictionMarks.length === 0 ? (
+                  <span className="auto-mode__pred-record-empty">기록 없음</span>
+                ) : (
+                  <>
+                    <span className="auto-mode__pred-record-marks">
+                      {predictionMarks.slice(-16).map((m) => (
+                        <span key={m.id} className={`auto-mode__pred-mark ${m.won ? 'is-win' : 'is-loss'}`} title={`${m.roomName} · ${m.won ? '적중' : '미적중'}`}>
+                          {m.won ? 'O' : 'X'}
+                        </span>
+                      ))}
+                    </span>
+                    <span className="auto-mode__pred-record-rate">
+                      <strong>{predictionHits}</strong>/{predictionMarks.length}
+                      <em>{Math.round((predictionHits / predictionMarks.length) * 100)}%</em>
+                    </span>
+                    <button type="button" className="auto-mode__pred-record-reset" onClick={() => setPredictionMarks([])} title="기록 지우기">지움</button>
+                  </>
+                )}
               </div>
 
               <div className="auto-mode__header-sort" aria-label="방 정렬">
@@ -1359,6 +1425,7 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
                   onManualSpot={handleManualSpot}
                   onManualUndo={handleManualUndo}
                   onManualClear={handleManualClear}
+                  roadView={roadView}
                 />
               ) : (
                 <AutoModeRoomList

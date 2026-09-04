@@ -508,3 +508,21 @@
 
 /* 마감된 방은 뒤로 물러나고(흐리게), 배팅 걸린 방은 그대로 */
 .evo-card--manual.is-closed:not(.evo-card--betting) { opacity: 0.55; }
+
+/* ── 로드맵 보기: 6매(속 찬 원+글자) / 2·3·4매(링·점·사선) ── */
+.evo-road__bead circle:first-child { stroke: none; }
+.evo-road__bead.side-b circle:first-child { fill: var(--banker-color, #ff5c6c); }
+.evo-road__bead.side-p circle:first-child { fill: var(--player-color, #4c8dff); }
+.evo-road__bead.side-t circle:first-child { fill: var(--tie-color, #2ccb7f); }
+.evo-road__bead text { fill: #fff; font-family: inherit; }
+.evo-road__bead.side-t text { fill: #072b1a; }
+.evo-road__bead .evo-road__pair-p { fill: var(--player-color, #4c8dff); stroke: #fff; stroke-width: 1; }
+.evo-road__bead .evo-road__pair-b { fill: var(--banker-color, #ff5c6c); stroke: #fff; stroke-width: 1; }
+.evo-road__bead.is-latest circle:first-child { transform-box: fill-box; transform-origin: center; animation: evo-cell-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+.evo-road__mark.mark-r { stroke: var(--banker-color, #ff5c6c); }
+.evo-road__mark.mark-b { stroke: var(--player-color, #4c8dff); }
+.evo-road__mark.is-ring { fill: none; stroke-width: 2.2; }
+.evo-road__mark.is-dot { stroke: none; }
+.evo-road__mark.is-dot.mark-r { fill: var(--banker-color, #ff5c6c); }
+.evo-road__mark.is-dot.mark-b { fill: var(--player-color, #4c8dff); }
+.evo-road__mark.is-slash { stroke-width: 2.6; stroke-linecap: round; }

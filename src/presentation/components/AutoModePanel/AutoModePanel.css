@@ -4048,3 +4048,67 @@
 /* 깜박임 제거(2026-09-05): 반복 애니메이션 없음 */
 }
 @keyframes bcr-live-dot { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+/* 로드맵 보기 전환(6매/원매/2매/3매/4매) — 운영 바 안 세그먼트 */
+.auto-mode__road-views {
+  display: inline-flex;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.auto-mode__road-views button {
+  padding: 8px 12px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.auto-mode__road-views button:last-child { border-right: none; }
+.auto-mode__road-views button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.auto-mode__road-views button.active { background: var(--accent-primary); color: var(--accent-text); }
+
+/* 운영바 예측 적중 기록(O/X) */
+.auto-mode__pred-record {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  max-width: 100%;
+}
+.auto-mode__pred-record-label { font-size: 12px; font-weight: 800; color: var(--text-secondary); }
+.auto-mode__pred-record-empty { font-size: 12px; color: var(--text-muted); }
+.auto-mode__pred-record-marks { display: inline-flex; gap: 3px; }
+.auto-mode__pred-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+.auto-mode__pred-mark.is-win { background: rgba(59, 213, 138, 0.22); color: #3bd58a; border: 1.5px solid #3bd58a; }
+.auto-mode__pred-mark.is-loss { background: rgba(255, 101, 117, 0.22); color: #ff6575; border: 1.5px solid #ff6575; }
+.auto-mode__pred-mark:last-child { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25); }
+.auto-mode__pred-record-rate { font-size: 12.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; display: inline-flex; gap: 6px; align-items: baseline; }
+.auto-mode__pred-record-rate strong { color: var(--text-primary); }
+.auto-mode__pred-record-rate em { font-style: normal; font-weight: 800; color: var(--accent-primary); }
+.auto-mode__pred-record-reset {
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.auto-mode__pred-record-reset:hover { color: var(--text-primary); background: var(--bg-hover); }

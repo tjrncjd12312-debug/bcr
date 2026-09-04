@@ -11,7 +11,7 @@ import type { ManualRoomBet, ManualSide } from '../../../../application/services
 import { buildBigRoad, predictDerived, type DerivedMark, type DerivedPrediction } from '../../../../domain/roads/bigRoad'
 import { getRoomStatusChip, getFilterShortLabel, getRoomProgressionDisplay, isTieFilterLabel } from '../utils/autoModeStatus'
 import { RoundProgress } from './RoundProgress'
-import { EvoBigRoad } from './EvoBigRoad'
+import { EvoBigRoad, type RoadView } from './EvoBigRoad'
 import { EvoChip } from './EvoChip'
 import { EvoDealStrip } from './EvoDealStrip'
 import type { RoomBetLog } from './AutoModeRoomGrid'
@@ -35,6 +35,8 @@ export interface EvoRoomCardProps {
   onManualSpot?: (room: Room, side: ManualSide) => void
   onManualUndo?: (room: Room) => void
   onManualClear?: (room: Room) => void
+  /** 로드맵 보기: 6매·원매·2매·3매·4매 */
+  roadView?: RoadView
 }
 
 const RESULT_OVERLAY_MS = 4000
@@ -72,6 +74,7 @@ export const EvoRoomCard = memo(function EvoRoomCard({
   onManualSpot,
   onManualUndo,
   onManualClear,
+  roadView = 'big',
 }: EvoRoomCardProps) {
   const model = useMemo(() => buildBigRoad(room.history), [room.history])
   const asks = useMemo(
@@ -251,7 +254,7 @@ export const EvoRoomCard = memo(function EvoRoomCard({
       />
 
       <div className="evo-card__road">
-        <EvoBigRoad model={model} />
+        <EvoBigRoad model={model} history={room.history} view={roadView} />
       </div>
 
       <footer className="evo-card__foot">
