@@ -90,6 +90,12 @@ export function getRoomStatusChip(
   }
 
   if (martinLevel > 0) {
+    // 패턴 묶음 마틴: 이 판은 패턴이 안 맞아 건너뛰는 중 — 단계는 살아 있고 패턴이 다시 맞는 판에 배팅한다.
+    if (autoState?.patternWait) {
+      return brief
+        ? { text: `마틴 ${martinLevel + 1} · 패턴 대기`, tone: 'martin' }
+        : { text: `마틴 ${martinLevel + 1}단계 · 패턴 대기`, tone: 'martin' }
+    }
     return brief
       ? { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }
       : { text: `마틴 ${martinLevel + 1}단계`, tone: 'martin' }

@@ -459,6 +459,27 @@ export function AutoModeSettingsDialog({
           </div>
           </fieldset>
 
+          {/* 마틴 이어치기 — 패턴에 묶기(2026-09-05 사용자: "패턴 설정 시 마틴을 걸어도 그 패턴에만 배팅") */}
+          <div className="ams-section">
+            <div className="ams-section-title">마틴 이어치기 조건</div>
+            <div className="ams-toggle-row">
+              <label className="ams-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={settings.martinRequiresPattern ?? true}
+                  onChange={(e) => onUpdateSettings({ martinRequiresPattern: e.target.checked })}
+                />
+                <span className="ams-toggle-text">선택한 패턴이 다시 맞는 판에만 이어치기</span>
+              </label>
+            </div>
+            <div className="ams-hint">
+              {settings.martinRequiresPattern ?? true
+                ? '졌던 방은 마틴 단계를 기억하고, 패턴이 그 방에서 다시 맞을 때만 다음 단계 금액으로 배팅합니다. 패턴이 안 맞는 판은 건너뜁니다(단계 유지).'
+                : '패턴과 상관없이 이길 때까지 같은 방향으로 매판 이어칩니다.'}
+              {' '}패턴 없이(전체) 돌릴 때와 타이 자동(타이 계열 필터)은 이 옵션과 무관하게 매판 이어칩니다.
+            </div>
+          </div>
+
           <div className="ams-section">
             <div className="ams-section-title">동시 배팅 제한</div>
             <div className="settings-field-row">
@@ -669,7 +690,7 @@ export function AutoModeSettingsDialog({
               )}
             </div>
             <div className="ams-hint">
-              방과 필터는 언제든 바꿀 수 있고, 진행 중인 마틴 방은 승리할 때까지 대상에 남습니다.
+              방과 필터는 언제든 바꿀 수 있고, 진행 중인 마틴 방은 승리할 때까지 대상에 남습니다(배팅 전략 탭의 '마틴 이어치기 조건'에 따라 패턴이 다시 맞는 판에만 배팅).
             </div>
           </div>
 

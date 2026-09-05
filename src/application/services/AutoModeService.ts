@@ -85,6 +85,14 @@ export interface AutoModeSettings {
   patternConfigs: PatternBetConfig[] // 패턴별 배팅 설정
   // 강제 배팅 방향: 프리셋/필터가 예측 방향을 무시하고 Tie 등 고정 방향을 적용할 때 사용
   forceBetDirection?: 'auto' | 'tie_only'
+  /**
+   * 🆕 2026-09-05 마틴 이어치기를 패턴에 묶는다(사용자: "패턴 설정 시 마틴을 걸어도 그 패턴에만 배팅돼야 해").
+   * true(기본): 졌던 방은 마틴 단계를 기억하되, 선택한 패턴이 그 방에서 **다시 맞는 판에만** 다음 단계 금액으로
+   *   배팅한다(방향도 그 판의 패턴이 정함). 패턴이 안 맞는 판은 건너뛰고 단계는 유지.
+   * false: 예전 동작 — 패턴과 무관하게 이길 때까지 같은 방향으로 매판 이어친다.
+   * 필터가 'all'(패턴 없음)·타이 계열(타이 자동: 타이 나올 때까지 T 이어치기)·커스텀 전략 진행 중이면 관여하지 않는다.
+   */
+  martinRequiresPattern?: boolean
   // 🆕 Tie 베팅 전용 최대 한도 (Evolution 테이블은 Tie를 별도로 낮게 제한하지만 CDP 캡처에는
   //   tableMaxLimit 하나만 들어옴). 0 = 사용 안 함 (tableMaxLimit로만 캡).
   tieMaxBetLimit?: number
@@ -124,6 +132,10 @@ export interface RoomBettingState {
   customStrategyStage?: number
   customStrategyAttempt?: number
   customStrategyStatus?: CustomStrategySessionStatus
+  /** 마틴 진행 중인데 선택한 패턴이 이 판엔 안 맞아 건너뛴 상태(martinRequiresPattern). 배팅이 나가면 풀린다. */
+  patternWait?: boolean
+  /** 이 마틴 체인을 시작한 패턴 필터. 체인 중 사용자가 필터를 바꿔도 이어치기 판정은 이 패턴으로 한다(martinLevel>0일 때만 의미). */
+  martinChainFilter?: RoomFilterType | 'all' | null
 }
 
 export interface AutoModeState {
@@ -228,6 +240,7 @@ const DEFAULT_SETTINGS: AutoModeSettings = {
   baseUrl: '',
   patternConfigs: [],
   forceBetDirection: 'auto',
+  martinRequiresPattern: true,
   // 🆕 Tie 베팅 최대 한도 (선택). 0 = 사용 안 함. 사용자가 명시적으로 설정한 경우에만
   //   클라이언트 측에서 캡을 강제한다. 기본은 사용자가 설정한 마틴 금액 그대로 보낸다.
   tieMaxBetLimit: 0,
@@ -1663,7 +1676,19 @@ class AutoModeServiceImpl {
           return
         }
 
-        const storedRecoveryPrediction = isInMartinRecovery ? roomState.martinRecoveryPrediction : null
+        // 🔒 패턴 묶음 마틴(기본): 패턴 필터가 걸려 있으면 마틴 중에도 '고정 방향 이어치기'를 쓰지 않고
+        //    매판 패턴 예측을 다시 돌린다 → 패턴이 안 맞는 판은 스킵(단계 유지), 맞는 판에만 다음 단계 금액.
+        //    타이 자동(타이 계열 필터)은 "타이가 나올 때까지 T 이어치기"가 기능 자체라 이 옵션과 무관하게 이어친다.
+        //    판정 기준 패턴 = 체인을 시작한 필터(사용자가 체인 중 필터를 바꿔도 그 방은 자기 패턴으로 이어간다).
+        const chainFilter: RoomFilterType | 'all' = (isInMartinRecovery && roomState.martinChainFilter)
+          ? roomState.martinChainFilter
+          : this.currentPatternFilter
+        const martinKeepsDirection = isInMartinRecovery
+          && (this.settings.martinRequiresPattern === false
+            || chainFilter === 'all'
+            || this.isTieOnlyFilter(chainFilter))
+        const martinWaitsForPattern = isInMartinRecovery && !martinKeepsDirection
+        const storedRecoveryPrediction = martinKeepsDirection ? roomState.martinRecoveryPrediction : null
         // 같은 마틴 이어치기 reasoning이 라운드마다 누적되지 않도록 매번 베이스에서 한 번만 붙인다.
         const MARTIN_KEEP_SUFFIX = ' / 승리 전까지 같은 방향 유지'
         const baseReasoning = (storedRecoveryPrediction?.reasoning || '마틴 이어치기')
@@ -1678,6 +1703,8 @@ class AutoModeServiceImpl {
 
         if (recoveryPrediction) {
           console.log(`[AutoMode] ${room.koreanName} - 마틴 이어치기 고정 방향 사용: ${recoveryPrediction.prediction}`)
+        } else if (martinWaitsForPattern) {
+          console.log(`[AutoMode] ${room.koreanName} - 마틴 ${roomState.martinLevel + 1}단계 대기: 패턴(${String(chainFilter)})이 다시 맞는 판에만 배팅`)
         } else if (isInMartinRecovery && this.isTieOnlyFilter(this.currentPatternFilter)) {
           // 마틴 회복 중 + 타이 계열 필터: 패턴 매칭 우회하여 즉시 T 배팅 유지
           console.log(`[AutoMode] ${room.koreanName} - 마틴 회복 중 타이 필터 강제 T 배팅`)
@@ -1698,11 +1725,18 @@ class AutoModeServiceImpl {
 
         const predictStartedAt = Date.now()
         const prediction = customStrategyPrediction ?? recoveryPrediction
-          ?? (isInMartinRecovery && this.isTieOnlyFilter(this.currentPatternFilter)
+          ?? (martinKeepsDirection && this.isTieOnlyFilter(chainFilter)
             ? { roomId, prediction: 'T' as const, confidence: 90, reasoning: '마틴 회복 (타이 유지)', isSkip: false, timestamp: Date.now() }
-            : await this.getPatternBasedPrediction(room, remainingSeconds))
+            : await this.getPatternBasedPrediction(room, remainingSeconds, martinWaitsForPattern ? chainFilter : undefined))
         // ⏱️ 예측에 걸린 시간 — 7초 창(슈퍼 스피드) 테이블에서 마감 전 전송 여부를 좌우한다.
         this.feDiag(`PREDICT-DONE room=${room.koreanName} ms=${Date.now() - predictStartedAt} src=${customStrategyPrediction ? 'strategy' : recoveryPrediction ? 'martin-keep' : 'api'} result=${prediction?.prediction ?? 'null'}`)
+
+        // 🔒 패턴 묶음 마틴: 이번 판 패턴 미매칭이면 카드에 '패턴 대기'로 보이게 플래그를 켠다(바뀔 때만 알림).
+        const nextPatternWait = martinWaitsForPattern && (!prediction || prediction.isSkip === true)
+        if ((roomState.patternWait ?? false) !== nextPatternWait) {
+          roomState.patternWait = nextPatternWait
+          this.emitStateChange()
+        }
 
         // 예측 없음 (shouldBet 호출 전 체크 - null 예측은 shouldBet에서 처리 불가)
         if (!prediction) {
@@ -1750,7 +1784,9 @@ class AutoModeServiceImpl {
             code: 'decision_skip',
             level: 'info',
             status: 'pass',
-            message: betDecision.skipReason || prediction.reasoning || '스킵',
+            message: martinWaitsForPattern && prediction.isSkip
+              ? `마틴 ${roomState.martinLevel + 1}단계 대기 — ${prediction.reasoning || '패턴 미매칭'}`
+              : (betDecision.skipReason || prediction.reasoning || '스킵'),
           })
           console.log(`[AutoMode] shouldBet=false: ${betDecision.skipReason} - 스킵`)
           return
@@ -1978,6 +2014,8 @@ class AutoModeServiceImpl {
 
       roomState.lastBetAmount = betAmount
       roomState.waitingForResult = true
+      roomState.patternWait = false
+      if (roomState.martinLevel === 0 || !roomState.martinChainFilter) roomState.martinChainFilter = this.currentPatternFilter
       roomState.lastBetTime = Date.now()
       roomState.lastBetHistoryLength = hasReliableHistory ? room.history.length : null
       roomState.martinRecoveryPrediction = prediction
@@ -3114,7 +3152,11 @@ class AutoModeServiceImpl {
    * @param room 방 정보
    * @param remainingSeconds 남은 배팅 시간
    */
-  private async getPatternBasedPrediction(room: Room, remainingSeconds: number): Promise<Prediction | null> {
+  private async getPatternBasedPrediction(
+    room: Room,
+    remainingSeconds: number,
+    filterOverride?: RoomFilterType | 'all',
+  ): Promise<Prediction | null> {
     // 방의 예측 상태(연승/연패 stats)를 함께 넘긴다. 디스플레이(AutoModePanel)가 매칭 판정에 쓰는
     // 것과 동일한 MultiRoomPredictionService 상태를 사용해야 연승/연패 필터에서 "보이는 방은
     // 매칭인데 봇은 스킵" 불일치가 사라진다(pattern-streak-1).
@@ -3122,7 +3164,7 @@ class AutoModeServiceImpl {
     return this.patternPredictionService.getPatternBasedPrediction(
       room,
       remainingSeconds,
-      this.currentPatternFilter,
+      filterOverride ?? this.currentPatternFilter,
       {
         maxMartin: this.settings.maxMartin,
         // per-filter 전략이 있으면 그것을 PatternPredictionService에도 전달
