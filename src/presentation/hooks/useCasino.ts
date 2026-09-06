@@ -170,6 +170,14 @@ export const SESSION_ROTATION_DEFAULTS = {
    * 이보다 묵은 pending은 회전을 막지 못한다. 한 판은 길어도 1~2분이다.
    */
   pendingBetMaxAgeMs: 180_000,
+  /**
+   * 롤링 런치 예산. 회전 1회 = 중계사이트 런치 1회이고, 애그리게이터는 짧은 시간의 잦은 런치를 `403 [G.8]`로
+   * 막는다(2026-09-01 실측: 90분에 10여 회 → 차단). 2026-09-06 실측: `.se` 환경은 배팅 없이 10분마다
+   * inactivity 킥 → 가상 모드로 방치하면 시간당 6회 런치가 쌓여 그 문턱에 닿는다. 창 안에서 한도에 닿으면
+   * 회전을 보류하고(가장 오래된 런치가 창을 벗어날 때 재시도) 사용자에게 알린다.
+   */
+  maxLaunchesPerWindow: 5,
+  launchWindowMs: 3_600_000,
 } as const
 
 export interface SessionRotationScheduler {
@@ -192,6 +200,10 @@ export function createSessionRotationScheduler(
     onError?: (error: unknown) => void
     /** 짧은 간격 재로테이션이 한계를 넘어 로테이션을 포기했을 때. */
     onGaveUp?: () => void
+    /** 롤링 런치 예산(창 안 최대 회전 수). 넘으면 회전을 보류하고 `onBudgetExceeded(retryInMs)`를 부른다. */
+    maxLaunchesPerWindow?: number
+    launchWindowMs?: number
+    onBudgetExceeded?: (retryInMs: number) => void
     /** 테스트용 시계 주입. */
     now?: () => number
   } = {},
@@ -201,7 +213,11 @@ export function createSessionRotationScheduler(
   const deferDelayMs = options.deferDelayMs ?? SESSION_ROTATION_DEFAULTS.deferDelayMs
   const minIntervalMs = options.minIntervalMs ?? SESSION_ROTATION_DEFAULTS.minIntervalMs
   const maxRapidRotations = options.maxRapidRotations ?? SESSION_ROTATION_DEFAULTS.maxRapidRotations
+  const maxLaunchesPerWindow = options.maxLaunchesPerWindow ?? SESSION_ROTATION_DEFAULTS.maxLaunchesPerWindow
+  const launchWindowMs = options.launchWindowMs ?? SESSION_ROTATION_DEFAULTS.launchWindowMs
   const now = options.now ?? (() => Date.now())
+  /** 창 안의 회전(=런치) 시각들. 예산 판정용. */
+  let launchTimes: number[] = []
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = true
   let inFlight = false
@@ -224,8 +240,18 @@ export function createSessionRotationScheduler(
       schedule(deferDelayMs)
       return
     }
+    // 런치 예산: 창 안 회전 수가 한도면 보류. 강제(소켓 사망) 회전도 예외가 아니다 — 런치를 더 해봐야 밴만 앞당긴다.
+    const t = now()
+    launchTimes = launchTimes.filter((at) => t - at < launchWindowMs)
+    if (maxLaunchesPerWindow > 0 && launchTimes.length >= maxLaunchesPerWindow) {
+      const retryInMs = Math.max(1000, launchTimes[0] + launchWindowMs - t)
+      options.onBudgetExceeded?.(retryInMs)
+      schedule(retryInMs, force)
+      return
+    }
+    launchTimes.push(t)
     inFlight = true
-    lastRotateAt = now()
+    lastRotateAt = t
     try {
       await rotate()
     } catch (error) {
@@ -365,6 +391,8 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   const sessionRotationSchedulerRef = useRef<SessionRotationScheduler | null>(null)
   /** 반응형/주기 회전이 진행 중인지 — connected 이벤트에서 '재접속 완료' 로그를 한 번만 남기기 위해. */
   const rotationInFlightRef = useRef(false)
+  /** 런치 예산 초과 안내를 보류 구간당 한 번만 띄우기 위해. 재접속되면 풀린다. */
+  const launchBudgetWarnedRef = useRef(false)
 
   const pendingRoomUpdatesRef = useRef<Set<string>>(new Set())
   const roomUpdateRafIdRef = useRef<number | null>(null)
@@ -676,6 +704,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         rotationInFlightRef.current = false
         ConnectionLogService.log('info', '재접속 완료 — 새 세션으로 게임 데이터 수신 재개')
       }
+      launchBudgetWarnedRef.current = false
       if (!sessionRotationSchedulerRef.current) {
         sessionRotationSchedulerRef.current = createSessionRotationScheduler(
           async () => {
@@ -700,6 +729,16 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
               console.error('[useCasino] ❌ 세션이 반복해서 즉시 끊겨 로테이션을 중단했습니다.')
               ConnectionLogService.log('error', '연결이 반복해서 끊어져 자동 재접속을 중단했습니다')
               showWarning('연결이 반복해서 끊어져 자동 복구를 중단했습니다. 잠시 후 다시 시도해주세요.')
+            },
+            onBudgetExceeded: (retryInMs) => {
+              const mins = Math.max(1, Math.round(retryInMs / 60_000))
+              const perHour = SESSION_ROTATION_DEFAULTS.maxLaunchesPerWindow
+              console.warn(`[useCasino] ⏸️ 런치 예산 초과(${perHour}회/시간) — ${mins}분 뒤 재접속 재시도`)
+              if (!launchBudgetWarnedRef.current) {
+                launchBudgetWarnedRef.current = true
+                ConnectionLogService.log('warn', `재접속 보류 — 1시간에 ${perHour}회까지만 재입장합니다(잦은 재입장은 계정 차단 위험). 약 ${mins}분 뒤 다시 시도합니다. 가상 모드는 배팅이 나가지 않아 10분마다 비활성으로 끊길 수 있습니다.`)
+                showWarning(`재접속을 ${mins}분 보류합니다 — 잦은 재입장은 계정 차단 위험이 있습니다.`)
+              }
             },
           },
         )

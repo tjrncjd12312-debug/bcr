@@ -270,6 +270,40 @@ describe('Evolution session lifecycle helpers', () => {
     periodic.stop()
   })
 
+  it('holds rotation once the rolling launch budget is spent and resumes when the window frees', async () => {
+    vi.useFakeTimers()
+    const rotate = vi.fn(async () => undefined)
+    const exceeded = vi.fn()
+    const scheduler = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 1_000_000,
+      nextDelayMs: 1_000_000,
+      minIntervalMs: 0,
+      maxLaunchesPerWindow: 2,
+      launchWindowMs: 60_000,
+      onBudgetExceeded: exceeded,
+    })
+
+    scheduler.start()
+    scheduler.rotateNow()
+    await vi.advanceTimersByTimeAsync(0)
+    scheduler.rotateNow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rotate).toHaveBeenCalledTimes(2)
+
+    // 세 번째는 창(60초) 안이라 보류 — 런치는 나가지 않고 알림만
+    scheduler.rotateNow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rotate).toHaveBeenCalledTimes(2)
+    expect(exceeded).toHaveBeenCalledTimes(1)
+    expect(exceeded.mock.calls[0][0]).toBeGreaterThan(0)
+
+    // 첫 런치가 창을 벗어나면 보류했던 회전이 실행된다
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(rotate).toHaveBeenCalledTimes(3)
+
+    scheduler.stop()
+  })
+
   it('does not manually rotate while a recent real bet is pending', async () => {
     installImmediateListenMock()
     vi.spyOn(AutoBettingService, 'getRecentPendingBetCount').mockReturnValue(1)
