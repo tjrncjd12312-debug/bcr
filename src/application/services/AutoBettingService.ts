@@ -104,6 +104,18 @@ class AutoBettingServiceImpl {
     return this.pendingBets.size
   }
 
+  /**
+   * 최근 `maxAgeMs` 안에 걸린 배팅만 센다 — 세션 회전을 "배팅 중"이라고 미룰지 판단할 때 쓴다.
+   * 소켓이 죽으면 결과가 영원히 안 와 pending이 지워지지 않는다(2026-09-06 실측: 킥 뒤 재접속이 12초마다
+   * 무한 연기 → 사용자 체감 "자동배팅 중에 팅김"). 묵은 pending은 회전을 막지 못하게 나이 상한을 둔다.
+   */
+  getRecentPendingBetCount(maxAgeMs: number): number {
+    const now = Date.now()
+    let n = 0
+    this.pendingBets.forEach((b) => { if (now - b.timestamp <= maxAgeMs) n += 1 })
+    return n
+  }
+
   /** 배팅 가능 여부 확인 */
   canPlaceBet(tableId: string): { canBet: boolean; reason?: string } {
     const gameId = EvolutionAdapter.getCurrentGameId(tableId) || EvolutionAdapter.ensureGameId(tableId)

@@ -11,6 +11,7 @@ import { useService } from '../context'
 import { useError } from '../context'
 import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter'
 import { AutoBettingService } from '../../application/services/AutoBettingService'
+import ConnectionLogService, { describeDisconnectReason } from '../../application/services/ConnectionLogService'
 import MultiRoomPredictionService from '../../application/services/MultiRoomPredictionService'
 
 // ==================== Pragmatic Types ====================
@@ -163,6 +164,12 @@ export const SESSION_ROTATION_DEFAULTS = {
    * (계속 런치해봐야 밴만 앞당긴다 — 사람이 개입해야 하는 상황).
    */
   maxRapidRotations: 3,
+  /**
+   * "배팅 중이면 회전을 미룬다"에서 배팅으로 인정하는 최대 나이. 소켓이 죽으면 결과가 영원히 안 와
+   * pending이 안 지워지므로(2026-09-06 실측: 킥 뒤 재접속이 12초마다 무한 연기 → "자동배팅 중에 팅김"),
+   * 이보다 묵은 pending은 회전을 막지 못한다. 한 판은 길어도 1~2분이다.
+   */
+  pendingBetMaxAgeMs: 180_000,
 } as const
 
 export interface SessionRotationScheduler {
@@ -201,17 +208,19 @@ export function createSessionRotationScheduler(
   let lastRotateAt: number | null = null
   let rapidRotations = 0
 
-  const schedule = (delayMs: number) => {
+  const schedule = (delayMs: number, force = false) => {
     if (stopped || timer !== null) return
     timer = setTimeout(() => {
       timer = null
-      void run()
+      void run(force)
     }, delayMs)
   }
 
-  const run = async () => {
+  // force=true: 소켓이 이미 죽어서 하는 반응형 회전. 배팅 대기가 있어도 미루지 않는다 — 죽은 소켓으로는
+  // 그 배팅의 결과를 영원히 못 받고, 새 세션이 붙어야 히스토리 폴백이 정산한다(2026-09-06).
+  const run = async (force = false) => {
     if (stopped || inFlight) return
-    if (options.shouldDefer?.()) {
+    if (!force && options.shouldDefer?.()) {
       schedule(deferDelayMs)
       return
     }
@@ -272,10 +281,10 @@ export function createSessionRotationScheduler(
       }
       // 최소 간격이 남았으면 즉시 실행하지 않고 남은 시간만큼 미룬다.
       if (since < minIntervalMs) {
-        schedule(minIntervalMs - since)
+        schedule(minIntervalMs - since, true)
         return
       }
-      void run()
+      void run(true)
     },
   }
 }
@@ -354,6 +363,8 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   // 🔒 중계사이트 URL이 캡처되면 잠금 - 이후 덮어쓰기 방지
   const evolutionBaseUrlLockedRef = useRef<boolean>(false)
   const sessionRotationSchedulerRef = useRef<SessionRotationScheduler | null>(null)
+  /** 반응형/주기 회전이 진행 중인지 — connected 이벤트에서 '재접속 완료' 로그를 한 번만 남기기 위해. */
+  const rotationInFlightRef = useRef(false)
 
   const pendingRoomUpdatesRef = useRef<Set<string>>(new Set())
   const roomUpdateRafIdRef = useRef<number | null>(null)
@@ -661,18 +672,33 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
       setMessageCount(0)
       setProvider('evolution')
       // Keep the last room snapshot visible while a replacement session is captured.
+      if (rotationInFlightRef.current) {
+        rotationInFlightRef.current = false
+        ConnectionLogService.log('info', '재접속 완료 — 새 세션으로 게임 데이터 수신 재개')
+      }
       if (!sessionRotationSchedulerRef.current) {
         sessionRotationSchedulerRef.current = createSessionRotationScheduler(
           async () => {
             console.log('[useCasino] Starting atomic Evolution session rotation')
+            rotationInFlightRef.current = true
+            ConnectionLogService.log('info', '재접속 시도 — 중계사이트에서 새 세션을 받습니다')
             await invoke<boolean>('rotate_evolution_session', { appMode: appModeRef.current })
           },
           {
-            shouldDefer: () => AutoBettingService.getPendingBetCount() > 0,
-            onError: (error) => console.warn('[useCasino] Session rotation failed:', error),
+            // 최근 배팅만 "배팅 중"으로 본다 — 묵은 pending(죽은 소켓)이 회전을 무한 연기하지 않게.
+            shouldDefer: () => AutoBettingService.getRecentPendingBetCount(SESSION_ROTATION_DEFAULTS.pendingBetMaxAgeMs) > 0,
+            onError: (error) => {
+              rotationInFlightRef.current = false
+              const detail = error instanceof Error ? error.message : String(error)
+              console.warn('[useCasino] Session rotation failed:', error)
+              // 예: 에어라인처럼 런처 마크업이 달라 "Evolution launcher was not found" — 사용자에게 보이게 한다.
+              ConnectionLogService.log('error', `재접속 실패 — ${detail}`)
+              showWarning('자동 재접속에 실패했습니다. 카지노 창에서 에볼루션에 다시 입장해 주세요.')
+            },
             onGaveUp: () => {
               // 짧은 간격으로 계속 끊긴다 = 런치를 더 해봐야 밴만 앞당긴다. 사람이 개입해야 한다.
               console.error('[useCasino] ❌ 세션이 반복해서 즉시 끊겨 로테이션을 중단했습니다.')
+              ConnectionLogService.log('error', '연결이 반복해서 끊어져 자동 재접속을 중단했습니다')
               showWarning('연결이 반복해서 끊어져 자동 복구를 중단했습니다. 잠시 후 다시 시도해주세요.')
             },
           },
@@ -717,6 +743,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
         }
 
         // Only mark the UI disconnected for real disconnects. Upgrade-forbidden is expected under the one-session policy while the browser lobby remains active.
+        ConnectionLogService.log('warn', describeDisconnectReason(reason))
         setStatus('idle')
         setProvider(null)
         setEvolutionBaseUrl(null)
@@ -745,6 +772,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
             return
           }
           console.warn('[useCasino] Session expired and no scheduler is active. A fresh login is required.', reason)
+          ConnectionLogService.log('error', '자동 재접속 불가 — 카지노 창에서 에볼루션에 다시 입장해 주세요')
           showWarning('카지노 세션이 만료되었습니다. 다시 로그인하거나 로비를 새로 열어주세요.')
           return
         }
@@ -1196,7 +1224,7 @@ export function useCasino(initialCasinoUrl?: string, appMode: AppMode = 'auto'):
   // 로비 재연결 (세션 만료 시 사용)
   // Rust 멀티클라이언트를 먼저 해제한 뒤 새 세션을 캡처한다.
   const reconnectLobby = useCallback(async () => {
-    if (AutoBettingService.getPendingBetCount() > 0) {
+    if (AutoBettingService.getRecentPendingBetCount(SESSION_ROTATION_DEFAULTS.pendingBetMaxAgeMs) > 0) {
       showWarning('진행 중인 베팅이 있어 세션 갱신을 잠시 미룹니다.')
       return
     }

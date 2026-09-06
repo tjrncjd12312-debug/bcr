@@ -22,6 +22,7 @@ import CustomStrategyService from '../../../application/services/CustomStrategyS
 import VirtualBettingService from '../../../application/services/VirtualBettingService'
 import MultiRoomPredictionService from '../../../application/services/MultiRoomPredictionService'
 import ManualBetService, { type ManualBetLog } from '../../../application/services/ManualBetService'
+import ConnectionLogService from '../../../application/services/ConnectionLogService'
 import { useManualBet } from '../../hooks/useManualBet'
 import { ManualBetTray } from './components/ManualBetTray'
 import { ROAD_VIEWS, type RoadView } from './components/EvoBigRoad'
@@ -749,6 +750,14 @@ export default function AutoModePanel({ onLogout, sessionWarning, isOnline }: Au
     })
     return unsubscribe
   }, [onBetLog, addHistoryLog, settings.isVirtualMode, settings.betStrategy, cumulativeProfit, pushPredictionMark])
+
+  // 연결 끊김·재접속 사유를 히스토리에 남긴다(사용자가 "왜 끊겼는지" 볼 수 있게, 2026-09-06).
+  useEffect(() => {
+    return ConnectionLogService.subscribe((entry) => {
+      addHistoryLog('-', entry.message, entry.level === 'error' ? 'error' : 'info')
+    }, { replay: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 수동 모드 진입/이탈: 자동배팅은 끄고, 모든 방 예측을 켠다(예측만 — 배팅은 사용자 클릭).
   useEffect(() => {

@@ -238,9 +238,41 @@ describe('Evolution session lifecycle helpers', () => {
     scheduler.stop()
   })
 
-  it('does not manually rotate while a real bet is pending', async () => {
+  it('rotateNow ignores the pending-bet deferral because a dead socket can never settle that bet', async () => {
+    vi.useFakeTimers()
+    const rotate = vi.fn(async () => undefined)
+    const scheduler = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 1_000_000,
+      nextDelayMs: 1_000_000,
+      shouldDefer: () => true,
+      deferDelayMs: 5,
+      minIntervalMs: 0,
+    })
+
+    scheduler.start()
+    scheduler.rotateNow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rotate).toHaveBeenCalledTimes(1)
+
+    // 주기 회전은 여전히 배팅 중이면 미룬다(살아 있는 소켓의 배팅을 끊지 않게).
+    rotate.mockClear()
+    const periodic = createSessionRotationScheduler(rotate, {
+      firstDelayMs: 10,
+      nextDelayMs: 20,
+      shouldDefer: () => true,
+      deferDelayMs: 5,
+    })
+    periodic.start()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(rotate).not.toHaveBeenCalled()
+
+    scheduler.stop()
+    periodic.stop()
+  })
+
+  it('does not manually rotate while a recent real bet is pending', async () => {
     installImmediateListenMock()
-    vi.spyOn(AutoBettingService, 'getPendingBetCount').mockReturnValue(1)
+    vi.spyOn(AutoBettingService, 'getRecentPendingBetCount').mockReturnValue(1)
     const { result, unmount } = renderHook(() => useCasino('https://example.com'))
 
     await act(async () => {
