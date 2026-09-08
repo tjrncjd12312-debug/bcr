@@ -4,6 +4,7 @@ import type { ICasinoAdapter } from '../../domain/interfaces'
 import { container } from '../di/Container'
 import { ManualBetService } from './ManualBetService'
 import { VirtualBettingService } from './VirtualBettingService'
+import AccountLimitsService from './AccountLimitsService'
 
 class MockAdapter implements ICasinoAdapter {
   readonly name = 'Mock'
@@ -50,10 +51,12 @@ describe('ManualBetService (virtual)', () => {
     ManualBetService.setFollowMartin(false)
     ManualBetService.enable()
     ManualBetService.resetStats()
+    AccountLimitsService.reset()
   })
 
   afterEach(() => {
     ManualBetService.dispose()
+    AccountLimitsService.reset()
     vi.useRealTimers()
   })
 
@@ -155,8 +158,9 @@ describe('ManualBetService (martin + per-mode stats)', () => {
     ManualBetService.setProgression({ baseAmount: 5_000, strategy: 'martingale', maxMartin: 3 })
     ManualBetService.enable()
     ManualBetService.resetStats()
+    AccountLimitsService.reset()
   })
-  afterEach(() => ManualBetService.dispose())
+  afterEach(() => { ManualBetService.dispose(); AccountLimitsService.reset() })
 
   it('follows the martin stage amount for the first chip and steps the level on losses', async () => {
     ManualBetService.setFollowMartin(true)
@@ -190,5 +194,64 @@ describe('ManualBetService (martin + per-mode stats)', () => {
     expect(ManualBetService.getState().stats).toMatchObject({ wins: 0, losses: 0, profit: 0 })
     ManualBetService.setVirtualMode(true)
     expect(ManualBetService.getState().stats.profit).toBe(10_000)
+  })
+  // 🔒 관리자가 지정한 계정 동시배팅 상한은 자동배팅뿐 아니라 수동 칩 배팅에도 걸린다.
+  //    (이게 없으면 사용자가 '수동 배팅'으로 전환해 원하는 만큼 방을 열어 상한을 통째로 우회한다)
+  describe('계정 동시배팅 상한', () => {
+    it('상한 2인 계정은 세 번째 방에 칩을 올리지 못한다', async () => {
+      AccountLimitsService.set({ maxConcurrentBets: 2 })
+      const rooms = ['r1', 'r2', 'r3'].map(id => openRoom(id))
+      rooms.forEach(r => adapter.setRoom(r))
+
+      expect(await ManualBetService.addChip(rooms[0], 'P')).toMatchObject({ ok: true })
+      expect(await ManualBetService.addChip(rooms[1], 'P')).toMatchObject({ ok: true })
+
+      const third = await ManualBetService.addChip(rooms[2], 'P')
+      expect(third.ok).toBe(false)
+      expect(third.error).toContain('2개 방')
+    })
+
+    it('이미 칩이 올라간 방에는 상한과 무관하게 칩을 더 얹을 수 있다 — 슬롯을 새로 먹지 않는다', async () => {
+      AccountLimitsService.set({ maxConcurrentBets: 1 })
+      ManualBetService.setChip(10_000)
+      const r = openRoom('r1')
+      adapter.setRoom(r)
+
+      expect(await ManualBetService.addChip(r, 'P')).toMatchObject({ ok: true })
+      expect(await ManualBetService.addChip(r, 'P')).toMatchObject({ ok: true })
+      expect(ManualBetService.getBet('r1')?.total).toBe(20_000)
+    })
+
+    it('정산되어 슬롯이 비면 다시 새 방에 걸 수 있다', async () => {
+      AccountLimitsService.set({ maxConcurrentBets: 1 })
+      const r1 = openRoom('r1')
+      const r2 = openRoom('r2')
+      adapter.setRoom(r1); adapter.setRoom(r2)
+
+      await ManualBetService.addChip(r1, 'P')
+      expect((await ManualBetService.addChip(r2, 'P')).ok).toBe(false)
+
+      adapter.emitResult({ roomId: 'r1', winner: 'P' })   // r1 정산 → 슬롯 반환
+
+      expect(await ManualBetService.addChip(r2, 'P')).toMatchObject({ ok: true })
+    })
+
+    it('상한 미주입(null)이면 방 개수 제한이 없다 — 기존 동작 그대로', async () => {
+      expect(AccountLimitsService.getMaxConcurrentBets()).toBeNull()
+      const rooms = ['r1', 'r2', 'r3', 'r4'].map(id => openRoom(id))
+      rooms.forEach(r => adapter.setRoom(r))
+
+      for (const r of rooms) expect(await ManualBetService.addChip(r, 'P')).toMatchObject({ ok: true })
+      expect(ManualBetService.getState().bets).toHaveLength(4)
+    })
+
+    it('상한 0(관리자가 제한 풀기)이면 방 개수 제한이 없다', async () => {
+      AccountLimitsService.set({ maxConcurrentBets: 0 })
+      const rooms = ['r1', 'r2', 'r3', 'r4'].map(id => openRoom(id))
+      rooms.forEach(r => adapter.setRoom(r))
+
+      for (const r of rooms) expect(await ManualBetService.addChip(r, 'P')).toMatchObject({ ok: true })
+      expect(ManualBetService.getState().bets).toHaveLength(4)
+    })
   })
 })

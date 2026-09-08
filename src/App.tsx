@@ -28,6 +28,7 @@ import { ManualBetService } from './application/services/ManualBetService'
 import { SemiAutoService } from './application/services/SemiAutoService'
 import { RoomFilterService } from './application/services/RoomFilterService'
 import { MultiRoomPredictionService } from './application/services/MultiRoomPredictionService'
+import { AccountLimitsService } from './application/services/AccountLimitsService'
 
 function App() {
   const [user, setUser] = useState<User | null>(null)
@@ -66,6 +67,7 @@ function App() {
       SemiAutoService.dispose()
       RoomFilterService.dispose()
       MultiRoomPredictionService.dispose()
+      AccountLimitsService.reset()  // 🔒 계정별 상한은 다음 로그인 때 다시 주입받는다
 
       // Logout and exit after 3 seconds
       try {
@@ -99,6 +101,7 @@ function App() {
       SemiAutoService.dispose()
       RoomFilterService.dispose()
       MultiRoomPredictionService.dispose()
+      AccountLimitsService.reset()
 
       // Logout user when offline
       setUser(null)
@@ -133,6 +136,12 @@ function App() {
           }, 3000)
           throw new Error('요금제가 만료되었습니다.')
         }
+
+        // 🔒 계정별 동시배팅 상한 주입 — setUser보다 먼저 해야 첫 렌더의 설정 UI가 이미 조여진 값을 본다.
+        //   서버가 안 주면(구서버/필드 없음) null → clamp는 no-op이라 기존 동작 그대로.
+        AccountLimitsService.set({
+          maxConcurrentBets: typeof result.maxConcurrentBets === 'number' ? result.maxConcurrentBets : null,
+        })
 
         setUser(result.user)
         setSessionSeconds(seconds)
@@ -188,6 +197,7 @@ function App() {
       SemiAutoService.dispose()
       RoomFilterService.dispose()
       MultiRoomPredictionService.dispose()
+      AccountLimitsService.reset()  // 🔒 계정별 상한은 다음 로그인 때 다시 주입받는다
 
       await invoke('logout')
       setUser(null)

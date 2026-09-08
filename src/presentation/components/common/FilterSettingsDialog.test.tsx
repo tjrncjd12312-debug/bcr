@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { FilterSettingsDialog } from './FilterSettingsDialog'
 import PatternBettingService from '../../../application/services/PatternBettingService'
+import AccountLimitsService from '../../../application/services/AccountLimitsService'
 import type { RoomFilter } from '../../../domain/entities'
 
 const isEnabled = vi.fn(() => false)
@@ -30,6 +31,9 @@ describe('FilterSettingsDialog', () => {
     isEnabled.mockClear()
     enable.mockClear()
     disable.mockClear()
+    // 계정 동시배팅 상한은 싱글턴이라 케이스 사이에 남으면 안 된다.
+    // null(미주입)이면 clamp가 no-op이라 아래 기존 케이스들은 상한 기능이 없던 때와 100% 동일하게 돈다.
+    AccountLimitsService.reset()
   })
 
   function renderDialog(overrides: Partial<Parameters<typeof FilterSettingsDialog>[0]> = {}) {
@@ -197,6 +201,26 @@ describe('FilterSettingsDialog', () => {
       expect(AutoModeService.getState().settings.baseBetAmount).toBe(20000)
       expect(AutoModeService.getState().settings.maxMartin).toBe(7)
       expect(AutoModeService.getState().settings.maxConcurrentBets).toBe(3)
+    })
+
+    // 관리자가 계정에 건 동시배팅 상한(AccountLimitsService)이 이 입력칸에도 걸린다.
+    // ⚠️ 클라이언트 UX 가드일 뿐 보안 경계가 아니다(서버가 배팅을 중계하지 않음).
+    it('clamps 동시 배팅 최대 방 수 to the admin cap (cap=10 → 11 입력이 10으로)', async () => {
+      const AutoModeService = (await import('../../../application/services/AutoModeService')).default
+      AutoModeService.updateSettings({ maxConcurrentBets: 3 })
+      AccountLimitsService.set({ maxConcurrentBets: 10 })
+
+      renderDialog({ activeFilters: ['tie_frequent'] })
+
+      const concurrent = screen.getByLabelText('동시 배팅 최대 방 수') as HTMLInputElement
+      // 상한 계정에선 0(무제한)을 못 고르니 입력칸 자체가 1~10으로 좁혀진다
+      expect(concurrent.min).toBe('1')
+      expect(concurrent.max).toBe('10')
+
+      fireEvent.change(concurrent, { target: { value: '11' } })
+
+      expect(AutoModeService.getState().settings.maxConcurrentBets).toBe(10)
+      expect(screen.getByText('최대 10개')).toBeInTheDocument()
     })
 
     it('clicking 켜기 activates the tie_frequent filter via toggleFilter', () => {

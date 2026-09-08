@@ -876,6 +876,7 @@ impl PredictionApi {
                 valid: false,
                 expired: false,
                 remaining_seconds: 0,
+                max_concurrent_bets: None,
             });
         }
 
@@ -897,6 +898,7 @@ impl PredictionApi {
             valid: api_response.valid,
             expired: api_response.expired.unwrap_or(false),
             remaining_seconds: api_response.remaining_seconds.unwrap_or(0),
+            max_concurrent_bets: api_response.max_concurrent_bets,
         })
     }
 
@@ -1098,6 +1100,8 @@ pub struct TokenValidationResponse {
     pub valid: bool,
     pub expired: bool,
     pub remaining_seconds: i64,
+    /// 동시배팅 최대 개수 (0 = 무제한, None = 서버가 안 내려줌)
+    pub max_concurrent_bets: Option<i64>,
 }
 
 /// 토큰 검증 API 응답 (서버에서 받는 형식)
@@ -1109,6 +1113,10 @@ struct TokenValidationApiResponse {
     expired: Option<bool>,
     #[serde(default)]
     remaining_seconds: Option<i64>,
+    /// 동시배팅 최대 개수 — 서버가 camelCase(maxConcurrentBets)로 주지만
+    /// snake_case로 주는 구버전도 조용히 None이 되지 않도록 alias를 함께 건다
+    #[serde(default, alias = "max_concurrent_bets")]
+    max_concurrent_bets: Option<i64>,
 }
 
 /// 로그인 API 응답
@@ -1132,6 +1140,10 @@ pub struct LoginApiResponse {
     pub username: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
+    /// 동시배팅 최대 개수 (0 = 무제한) — 서버가 camelCase(maxConcurrentBets)로 주지만
+    /// snake_case로 주는 구버전도 조용히 None이 되지 않도록 alias를 함께 건다
+    #[serde(default, alias = "max_concurrent_bets")]
+    pub max_concurrent_bets: Option<i64>,
 }
 
 /// 공지사항 API 응답

@@ -115,6 +115,7 @@ impl UserAuthenticationUseCase {
                     remaining_seconds: None,
                     expires_at: None,
                     invalidation_reason: Some(SessionInvalidReason::TokenRevoked),
+                    max_concurrent_bets: None,
                 });
             }
         };
@@ -131,14 +132,21 @@ impl UserAuthenticationUseCase {
             None => return Ok(SessionStatus::token_revoked()),
         };
 
-        match self.user_repository.validate_token(&token).await {
-            Ok(true) => {
+        // ⚠️ 중복 로그인 판정 의미는 그대로다 — 서버가 valid:false를 주면 duplicate_login → 앱 종료.
+        //    validate_token()(Result<bool>) 대신 validate_token_with_time()을 쓰는 이유는
+        //    같은 응답에 실려오는 동시배팅 상한을 버리지 않기 위해서다 (분기는 1:1 동일).
+        match self.user_repository.validate_token_with_time(&token).await {
+            Ok(r) if r.valid => {
                 // Token is valid, return remaining time
                 let remaining = user.remaining_seconds().unwrap_or(0);
                 let expires_at = user.session_expires_at.unwrap_or(0);
-                Ok(SessionStatus::valid(remaining, expires_at))
+                Ok(SessionStatus::valid(
+                    remaining,
+                    expires_at,
+                    r.max_concurrent_bets,
+                ))
             }
-            Ok(false) => {
+            Ok(_) => {
                 // Token is invalid - likely duplicate login
                 warn!(
                     "⚠️ Token invalidated for user: {} (possible duplicate login)",

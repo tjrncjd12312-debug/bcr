@@ -78,6 +78,8 @@ export interface LoginResult {
   remainingSeconds?: number
   /** 공지사항 정보 */
   notice?: NoticeData | null
+  /** 관리자가 지정한 계정별 동시배팅 상한. 0=무제한, undefined=서버 미제공 */
+  maxConcurrentBets?: number
 }
 
 // ==================== Session Types ====================
@@ -88,6 +90,8 @@ export interface SessionStatus {
   remainingSeconds?: number
   expiresAt?: number
   invalidationReason?: SessionInvalidReason
+  /** 관리자가 지정한 계정별 동시배팅 상한. 0=무제한, undefined=서버 미제공 */
+  maxConcurrentBets?: number
 }
 
 /** 세션 무효화 사유 */

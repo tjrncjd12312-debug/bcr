@@ -24,6 +24,7 @@ import { VirtualBettingService } from './VirtualBettingService'
 import { PatternBettingService } from './PatternBettingService'
 import { CustomPatternService } from './CustomPatternService'
 import FilterThresholdsService from './FilterThresholdsService'
+import AccountLimitsService from './AccountLimitsService'
 
 class MockCasinoAdapter implements ICasinoAdapter {
   readonly name = 'Mock'
@@ -95,6 +96,9 @@ describe('AutoModeService — Tie bet propagation', () => {
   beforeEach(() => {
     localStorage.clear()
     container.clear()
+    // 계정 동시배팅 상한은 싱글턴이라 다른 테스트의 값이 남으면 안 된다.
+    // null(미주입)로 되돌리면 clamp가 no-op이라 이 파일은 상한 기능이 없던 때와 100% 동일하게 돈다.
+    AccountLimitsService.reset()
     adapter = new MockCasinoAdapter()
     const predictionPort: IMultiRoomPredictionPort = {
       requestPredictionForRoom: vi.fn(async () => null),

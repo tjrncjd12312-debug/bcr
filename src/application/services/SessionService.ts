@@ -11,6 +11,7 @@ import {
   getWarningMinutes 
 } from '../../domain/utils/converters'
 import { container } from '../di'
+import AccountLimitsService from './AccountLimitsService'
 
 // Re-export domain utilities for convenience
 export { SESSION_WARNING_THRESHOLDS, formatSessionTime, isSessionWarning, getWarningMinutes }
@@ -229,6 +230,12 @@ class SessionServiceImpl {
         } else {
           consecutiveFailures = 0
           this.isOnline = true
+          // 🔒 계정별 동시배팅 상한 갱신 — 관리자가 값을 바꾸면 재로그인 없이 10초 안에 반영된다.
+          //   AutoModeService가 이 변경을 구독해 현재 설정을 즉시 재clamp한다.
+          //   ⚠️ 성공 분기에서만 건드린다(네트워크가 끊겼다고 상한이 날아가면 안 됨).
+          if (typeof status.maxConcurrentBets === 'number') {
+            AccountLimitsService.set({ maxConcurrentBets: status.maxConcurrentBets })
+          }
         }
       } catch (error) {
         consecutiveFailures++

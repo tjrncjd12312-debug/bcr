@@ -8,6 +8,7 @@ import type { BetStrategyType } from '../../../../domain/entities'
 import type { CustomStrategyDefinitionV1 } from '../../../../domain/strategies/customStrategy'
 import type { AutoModeSettings, AutoModeState } from '../../../../application/services/AutoModeService'
 import VirtualBettingService from '../../../../application/services/VirtualBettingService'
+import AccountLimitsService from '../../../../application/services/AccountLimitsService'
 import { useManualBet } from '../../../hooks/useManualBet'
 import { NumberFieldWithSuffix } from '../../common/NumberFieldWithSuffix'
 import { SettingsDialogFrame, type SettingsTabDef } from '../../common/SettingsDialogFrame'
@@ -24,7 +25,8 @@ const PRESET_BET = [1_000, 5_000, 10_000, 30_000, 50_000, 100_000].map(v => ({ l
 const PRESET_STAGE = [3, 5, 7, 10].map(v => ({ label: `${v}단계`, value: v }))
 const PRESET_CUT = [{ label: '끄기', value: 0 }, ...[50_000, 100_000, 300_000, 500_000, 1_000_000].map(v => ({ label: `${KRW(v)}원`, value: v }))]
 const PRESET_STREAK = [3, 5, 7, 10].map(v => ({ label: `${v}연패`, value: v }))
-const PRESET_CONCURRENT = [{ label: '제한 없음', value: 0 }, ...[1, 3, 6, 10].map(v => ({ label: `${v}개`, value: v }))]
+// 동시 배팅 칩의 기본 후보 — 관리자 상한(계정별)에 따라 컴포넌트 안에서 걸러 쓴다
+const CONCURRENT_PRESET_VALUES = [1, 3, 6, 10]
 
 const BET_STRATEGY_OPTIONS: { value: BetStrategyType; label: string; desc: string }[] = [
   { value: 'martingale', label: '마틴게일', desc: '패배시 2배 증가' },
@@ -120,6 +122,23 @@ export function AutoModeSettingsDialog({
     VirtualBettingService.reset()
     onResetStats()
   }
+
+  // 관리자가 계정에 건 동시 배팅 상한 — null=미주입(기존 동작 그대로), 0=무제한, 1~50=그 수까지만 선택 가능.
+  // ⚠️ 이건 클라이언트 UX 가드일 뿐 보안 경계가 아니다(서버가 배팅을 중계하지 않음).
+  const [cap, setCap] = useState(() => AccountLimitsService.getMaxConcurrentBets())
+  useEffect(() => AccountLimitsService.onChange(v => setCap(v.maxConcurrentBets)), [])
+  const hasCap = cap !== null && cap > 0
+
+  // 상한이 없으면 기존 칩 그대로. 상한이 있으면 '제한 없음'을 빼고 상한 이하 값 + 상한 자체(예: 7처럼
+  // 프리셋에 없는 상한도 한 번에 고를 수 있게)를 중복 없이 오름차순으로.
+  const presetConcurrent = useMemo(() => {
+    if (!hasCap) {
+      return [{ label: '제한 없음', value: 0 }, ...CONCURRENT_PRESET_VALUES.map(v => ({ label: `${v}개`, value: v }))]
+    }
+    const capped = cap as number
+    const values = [...CONCURRENT_PRESET_VALUES.filter(v => v <= capped), capped]
+    return Array.from(new Set(values)).sort((a, b) => a - b).map(v => ({ label: `${v}개`, value: v }))
+  }, [cap, hasCap])
 
   const betPreview = useMemo(() => {
     const base = settings.baseBetAmount || 10000
@@ -485,16 +504,19 @@ export function AutoModeSettingsDialog({
             <div className="settings-field-row">
               <NumberFieldWithSuffix
                 label="최대 동시 배팅 수"
-                value={settings.maxConcurrentBets ?? 0}
+                value={AccountLimitsService.clampConcurrentBets(settings.maxConcurrentBets ?? 0)}
                 suffix="개"
-                min={0}
-                presets={PRESET_CONCURRENT}
-                zeroLabel="제한 없음"
-                onChange={(n) => onUpdateSettings({ maxConcurrentBets: Math.max(0, n) })}
+                min={hasCap ? 1 : 0}
+                max={hasCap ? (cap as number) : undefined}
+                presets={presetConcurrent}
+                zeroLabel={hasCap ? undefined : '제한 없음'}
+                onChange={(n) => onUpdateSettings({ maxConcurrentBets: AccountLimitsService.clampConcurrentBets(n) })}
               />
             </div>
             <div className="ams-hint" style={{ fontSize: '0.75rem', color: '#888', marginTop: '4px' }}>
-              0 = 전체 방 배팅 (동시배팅 제한없음)
+              {hasCap
+                ? `관리자 설정: 최대 ${cap}개까지 선택할 수 있어요`
+                : '0 = 전체 방 배팅 (동시배팅 제한없음)'}
             </div>
           </div>
         </>

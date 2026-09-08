@@ -30,6 +30,9 @@ pub struct LoginResult {
     pub remaining_seconds: Option<i64>,
     /// 공지사항 정보
     pub notice: Option<NoticeData>,
+    /// 동시배팅 최대 개수 (0 = 무제한, null = 서버 미제공)
+    /// ⚠️ 클라이언트 UX 가드일 뿐 보안 경계가 아니다 (서버가 배팅을 중계하지 않음)
+    pub max_concurrent_bets: Option<i64>,
 }
 
 /// Notice data for frontend
@@ -90,6 +93,7 @@ pub async fn login(
                         user: None,
                         remaining_seconds: Some(0),
                         notice: None,
+                        max_concurrent_bets: None,
                     });
                 }
 
@@ -105,6 +109,7 @@ pub async fn login(
                 success: login_response.success,
                 message: login_response.message,
                 remaining_seconds: login_response.remaining_seconds,
+                max_concurrent_bets: login_response.max_concurrent_bets,
                 user: login_response.user.map(|u| UserInfo {
                     id: u.id,
                     username: u.username,
@@ -132,6 +137,7 @@ pub async fn login(
             user: None,
             remaining_seconds: None,
             notice: None,
+            max_concurrent_bets: None,
         }),
     }
 }

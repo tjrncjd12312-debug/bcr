@@ -76,6 +76,7 @@ impl UserRepositoryImpl {
             valid: response.valid,
             expired: response.expired,
             remaining_seconds: Some(response.remaining_seconds),
+            max_concurrent_bets: response.max_concurrent_bets,
         })
     }
 }
@@ -105,6 +106,8 @@ impl UserRepository for UserRepositoryImpl {
 
         // Get session seconds (정액 시간) from server response
         let session_seconds = result.seconds;
+        // 동시배팅 최대 개수 (0 = 무제한, None = 서버 미제공) - 프론트 UX 가드용
+        let max_concurrent_bets = result.max_concurrent_bets;
         let now = chrono::Utc::now().timestamp();
         let session_expires_at = session_seconds.map(|s| now + s);
 
@@ -160,6 +163,7 @@ impl UserRepository for UserRepositoryImpl {
             message: "Login successful".to_string(),
             remaining_seconds: session_seconds,
             notice,
+            max_concurrent_bets,
         })
     }
 

@@ -26,6 +26,7 @@ import AutoModeService, { type AutoModeBetLogEvent } from './AutoModeService'
 import { VirtualBettingService } from './VirtualBettingService'
 import { PatternBettingService } from './PatternBettingService'
 import FilterThresholdsService from './FilterThresholdsService'
+import AccountLimitsService from './AccountLimitsService'
 
 class MockCasinoAdapter implements ICasinoAdapter {
   readonly name = 'Mock'
@@ -105,6 +106,9 @@ describe('AutoModeService — per-filter strategy override', () => {
 
   beforeEach(() => {
     localStorage.removeItem('smart-helper:auto-mode-settings')
+    // 계정 동시배팅 상한은 싱글턴이라 다른 테스트 파일/케이스의 값이 남으면 안 된다.
+    // null(미주입)로 되돌리면 clamp가 no-op이라 이 파일은 상한 기능이 없던 때와 100% 동일하게 돈다.
+    AccountLimitsService.reset()
     localStorage.removeItem('bcr-pattern-betting-configs')
     container.clear()
 

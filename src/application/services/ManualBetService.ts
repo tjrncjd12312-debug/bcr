@@ -13,6 +13,7 @@ import { EvolutionAdapter } from '../../infrastructure/adapters/EvolutionAdapter
 import { PragmaticAdapter } from '../../infrastructure/adapters/PragmaticAdapter'
 import { TauriAdapter } from '../../infrastructure/adapters/TauriAdapter'
 import VirtualBettingService from './VirtualBettingService'
+import AccountLimitsService from './AccountLimitsService'
 
 export type ManualSide = 'B' | 'P' | 'T'
 const PRAGMATIC_PREFIX = 'pragmatic:'
@@ -353,6 +354,16 @@ class ManualBetServiceImpl {
     if (existing?.sending) return { ok: false, error: '이전 칩을 전송하는 중이에요' }
     if (existing && existing.side !== side) {
       return { ok: false, error: `이 방은 이미 ${sideLabel(existing.side)}에 걸려 있어요 — 먼저 빼거나 취소하세요` }
+    }
+    // 🔒 관리자가 지정한 계정 동시배팅 상한 — 자동배팅뿐 아니라 수동 칩 배팅도 같은 상한을 받는다.
+    //   bets는 정산되면 지워지므로 size = 지금 걸려 있는 방 수. 새 방을 여는 경우에만 막고,
+    //   이미 칩이 올라간 방에 칩을 더 얹는 건 슬롯을 새로 먹지 않으므로 통과시킨다.
+    //   ⚠️ 클라이언트 UX 가드이지 보안 경계가 아니다(서버가 배팅을 중계하지 않음).
+    if (!existing) {
+      const cap = AccountLimitsService.getMaxConcurrentBets()
+      if (cap !== null && cap > 0 && this.bets.size >= cap) {
+        return { ok: false, error: `동시에 최대 ${cap}개 방까지만 배팅할 수 있어요 (관리자 설정)` }
+      }
     }
     // 마틴 따라가기: 이 방의 첫 칩은 마틴 단계 금액으로(이후 추가 칩은 선택 칩)
     const chip = Math.round(!existing && this.followMartin ? this.suggestedAmount(room.id) : chipAmount)

@@ -11,6 +11,7 @@ import PatternBettingService from '../../../application/services/PatternBettingS
 import FilterThresholdsService from '../../../application/services/FilterThresholdsService'
 import AutoModeService from '../../../application/services/AutoModeService'
 import CustomStrategyService from '../../../application/services/CustomStrategyService'
+import AccountLimitsService from '../../../application/services/AccountLimitsService'
 import type { RoomFilter, RoomFilterType } from '../../../domain/entities'
 import './FilterSettingsDialog.css'
 
@@ -84,13 +85,19 @@ function useTieFrequentControls() {
 // "타이 자동"이 켜져 있을 땐 다른 필터가 모두 꺼진 상태(exclusive)라 사실상 타이에만 적용됨.
 function useAutoBetSettings() {
   const [s, setS] = useState(() => AutoModeService.getState().settings)
+  // 관리자가 계정에 건 동시 배팅 상한(null=미주입, 0=무제한, 1~50=그 수까지만).
+  // ⚠️ 클라이언트 UX 가드일 뿐 보안 경계가 아니다(서버가 배팅을 중계하지 않음).
+  const [accountMax, setAccountMax] = useState(() => AccountLimitsService.getMaxConcurrentBets())
   useEffect(() => {
     return AutoModeService.onStateChange(next => setS(next.settings))
   }, [])
+  useEffect(() => AccountLimitsService.onChange(v => setAccountMax(v.maxConcurrentBets)), [])
   return {
     baseBetAmount: s.baseBetAmount,
     maxMartin: s.maxMartin,
     maxConcurrentBets: s.maxConcurrentBets ?? 0,
+    /** 0 = 상한 없음(미주입 포함) — 아래 입력칸 min/max와 힌트 문구가 이 값을 본다 */
+    accountMax: accountMax ?? 0,
   }
 }
 
@@ -110,15 +117,18 @@ export function FilterSettingsDialog({
   // 타이 자동이 켜져 있으면 "전체"는 강제 OFF — 다른 필터로 빠지지 않도록.
   const isAllActive = !tieAutoOn && activeFilters.length === 0
   const { start: tieStart, window: tieWindow, min: tieMin, max: tieMax, requireFullWindow: tieRequireFullWindow } = useTieFrequentControls()
-  const { baseBetAmount, maxMartin, maxConcurrentBets } = useAutoBetSettings()
+  const { baseBetAmount, maxMartin, maxConcurrentBets, accountMax } = useAutoBetSettings()
+  // 상한 계정에선 0(무제한)이 상한값으로 정규화된다 → 아래 문구도 실제로 걸리는 수를 말한다.
+  // 상한이 없으면(미주입·무제한) clamp가 no-op라 지금과 100% 동일.
+  const effectiveConcurrent = AccountLimitsService.clampConcurrentBets(maxConcurrentBets)
   const tieMatchCount = filterCounts.tie_frequent ?? 0
-  const tieConcurrentLimit = maxConcurrentBets > 0
-    ? Math.min(tieMatchCount, maxConcurrentBets)
+  const tieConcurrentLimit = effectiveConcurrent > 0
+    ? Math.min(tieMatchCount, effectiveConcurrent)
     : tieMatchCount
-  const tieConcurrentLabel = maxConcurrentBets > 0
-    ? `동시 최대 ${maxConcurrentBets}개`
+  const tieConcurrentLabel = effectiveConcurrent > 0
+    ? `동시 최대 ${effectiveConcurrent}개`
     : '동시 제한 없음'
-  const isTieConcurrentLimited = tieAutoOn && maxConcurrentBets > 0 && maxConcurrentBets < tieMatchCount
+  const isTieConcurrentLimited = tieAutoOn && effectiveConcurrent > 0 && effectiveConcurrent < tieMatchCount
   const [customStrategies, setCustomStrategies] = useState(() => CustomStrategyService.getEnabledStrategies())
   const activeStrategyId = activeFilters.find(filter => typeof filter === 'string' && filter.startsWith('strategy:'))
     ?.slice('strategy:'.length)
@@ -171,7 +181,8 @@ export function FilterSettingsDialog({
     (raw: string) => {
       const n = parseInt(raw, 10)
       if (Number.isFinite(n)) {
-        AutoModeService.updateSettings({ [key]: key === 'maxConcurrentBets' ? Math.max(0, n) : n })
+        // 동시 배팅만 계정 상한으로 클램프 — 상한이 없으면 기존 Math.max(0, n)과 같은 결과다.
+        AutoModeService.updateSettings({ [key]: key === 'maxConcurrentBets' ? AccountLimitsService.clampConcurrentBets(n) : n })
       }
     }
 
@@ -282,14 +293,14 @@ export function FilterSettingsDialog({
           <input
             className="filter-settings__quick-count"
             type="number"
-            min={0}
-            max={999}
-            value={maxConcurrentBets}
+            min={accountMax > 0 ? 1 : 0}
+            max={accountMax > 0 ? accountMax : 999}
+            value={effectiveConcurrent}
             onChange={(e) => setIntAutoSetting('maxConcurrentBets')(e.target.value)}
             aria-label="동시 배팅 최대 방 수"
           />
           <span className="filter-settings__quick-row-label">개까지</span>
-          <span className="filter-settings__quick-row-hint">0=제한 없음</span>
+          <span className="filter-settings__quick-row-hint">{accountMax > 0 ? `최대 ${accountMax}개` : '0=제한 없음'}</span>
         </div>
         <div className="filter-settings__quick-status">
           {tieAutoOn
@@ -298,7 +309,7 @@ export function FilterSettingsDialog({
         </div>
         {isTieConcurrentLimited && (
           <div className="filter-settings__quick-warning">
-            조건은 {tieMatchCount}개지만 동시 배팅 제한이 {maxConcurrentBets}개라 실제 배팅은 한 번에 최대 {maxConcurrentBets}개만 진행됩니다.
+            조건은 {tieMatchCount}개지만 동시 배팅 제한이 {effectiveConcurrent}개라 실제 배팅은 한 번에 최대 {effectiveConcurrent}개만 진행됩니다.
           </div>
         )}
       </section>

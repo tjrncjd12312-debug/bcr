@@ -107,6 +107,11 @@ pub struct LoginResponse {
     /// Notice from server (공지사항)
     #[serde(default)]
     pub notice: Option<NoticeInfo>,
+
+    /// 동시배팅 최대 개수 (0 = 무제한, None = 서버 미제공)
+    /// ⚠️ 클라이언트 UX 가드일 뿐 보안 경계가 아니다 (서버가 배팅을 중계하지 않음)
+    #[serde(default)]
+    pub max_concurrent_bets: Option<i64>,
 }
 
 /// Notice information from server

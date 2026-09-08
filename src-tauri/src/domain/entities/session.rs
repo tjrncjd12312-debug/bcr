@@ -17,16 +17,21 @@ pub struct SessionStatus {
     pub expires_at: Option<i64>,
     /// 세션 무효화 사유
     pub invalidation_reason: Option<SessionInvalidReason>,
+    /// 동시배팅 최대 개수 (0 = 무제한, None = 서버 미제공)
+    /// ⚠️ 클라이언트 UX 가드일 뿐 보안 경계가 아니다 (서버가 배팅을 중계하지 않음)
+    #[serde(default)]
+    pub max_concurrent_bets: Option<i64>,
 }
 
 impl SessionStatus {
-    /// 유효한 세션 생성
-    pub fn valid(remaining_seconds: i64, expires_at: i64) -> Self {
+    /// 유효한 세션 생성 (서버가 준 동시배팅 상한을 함께 실어 보낸다)
+    pub fn valid(remaining_seconds: i64, expires_at: i64, max_concurrent_bets: Option<i64>) -> Self {
         Self {
             is_valid: true,
             remaining_seconds: Some(remaining_seconds),
             expires_at: Some(expires_at),
             invalidation_reason: None,
+            max_concurrent_bets,
         }
     }
 
@@ -37,6 +42,7 @@ impl SessionStatus {
             remaining_seconds: Some(0),
             expires_at: None,
             invalidation_reason: Some(SessionInvalidReason::Expired),
+            max_concurrent_bets: None,
         }
     }
 
@@ -47,6 +53,7 @@ impl SessionStatus {
             remaining_seconds: None,
             expires_at: None,
             invalidation_reason: Some(SessionInvalidReason::DuplicateLogin),
+            max_concurrent_bets: None,
         }
     }
 
@@ -57,6 +64,7 @@ impl SessionStatus {
             remaining_seconds: None,
             expires_at: None,
             invalidation_reason: Some(SessionInvalidReason::TokenRevoked),
+            max_concurrent_bets: None,
         }
     }
 
@@ -67,6 +75,7 @@ impl SessionStatus {
             remaining_seconds: None,
             expires_at: None,
             invalidation_reason: Some(SessionInvalidReason::Offline),
+            max_concurrent_bets: None,
         }
     }
 }
@@ -112,9 +121,10 @@ mod tests {
 
     #[test]
     fn test_session_status_valid() {
-        let status = SessionStatus::valid(3600, 1234567890);
+        let status = SessionStatus::valid(3600, 1234567890, Some(3));
         assert!(status.is_valid);
         assert_eq!(status.remaining_seconds, Some(3600));
+        assert_eq!(status.max_concurrent_bets, Some(3));
         assert!(status.invalidation_reason.is_none());
     }
 

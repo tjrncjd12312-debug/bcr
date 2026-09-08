@@ -35,6 +35,7 @@ const PRAGMATIC_PREFIX = 'pragmatic:'
 import { MultiRoomPredictionService } from './MultiRoomPredictionService'
 import { PatternBettingService } from './PatternBettingService'
 import FilterThresholdsService from './FilterThresholdsService'
+import AccountLimitsService from './AccountLimitsService'
 import CustomStrategyService from './CustomStrategyService'
 import CustomStrategyRuntime, {
   type CustomStrategyBetDecision,
@@ -251,6 +252,9 @@ const DEFAULT_SETTINGS: AutoModeSettings = {
 class AutoModeServiceImpl {
   private settings: AutoModeSettings
 
+  /** 🔒 계정별 동시배팅 상한 구독 해제 함수 (중복 구독 방지용 보관) */
+  private accountLimitsUnsubscribe: (() => void) | null = null
+
   constructor() {
     // Load settings from localStorage, but ALWAYS start with enabled: false
     const saved = this.loadFromStorage()
@@ -263,6 +267,10 @@ class AutoModeServiceImpl {
       autoBetting: false,
     }
 
+    // 🔒 계정 상한은 "로그인 후에" 도착한다. 주입/변경되면 UI가 다시 그려지도록 구독해 둔다.
+    //   settings에 저장된 값은 사용자 원본 그대로 두고, 실제 적용은 effectiveMaxConcurrentBets에서 조인다.
+    this.subscribeAccountLimits()
+
     // globalMaxConsecutiveLosses는 maxMartin과 항상 동일하게 유지 (하위 호환) — 마틴은 MAX 단까지
     // 진행(이길 때까지)이 정상 동작이므로 연패 횟수로 방을 중간에 멈추지 않는다(사용자 확인 2026-06-24).
     this.settings.globalMaxConsecutiveLosses = this.settings.maxMartin
@@ -273,6 +281,54 @@ class AutoModeServiceImpl {
     this.martingaleManager.setMaxLevel(this.settings.maxMartin)
 
     console.log('[AutoMode] Settings loaded, enabled forced to false for safety, maxMartin synced:', this.settings.maxMartin)
+  }
+
+  /**
+   * 🔒 동시배팅 개수를 관리자 계정 상한으로 조인다.
+   * 규칙은 AccountLimitsService 한 곳에만 두고 위임한다(UI와 같은 규칙을 쓰기 위해).
+   * ⚠️ 이 상한은 클라이언트 UX 가드이며 보안 경계가 아니다(서버가 배팅을 중계하지 않으므로 앱 조작으로 우회 가능).
+   */
+  private clampConcurrent(n: number): number {
+    return AccountLimitsService.clampConcurrentBets(n)
+  }
+
+  /**
+   * 🔒 실제로 적용되는 동시배팅 상한 = 사용자 설정을 관리자 계정 상한으로 조인 값.
+   *
+   * settings.maxConcurrentBets에는 **사용자가 고른 원본**을 그대로 둔다(조인 값을 저장하지 않는다).
+   * localStorage 키가 계정 무관 단일 키라, 조인 값을 저장해 버리면
+   *   - 관리자가 상한을 풀어줘도 조여진 값이 그대로 남고,
+   *   - 같은 PC에서 상한 없는 다른 계정으로 로그인해도 앞 계정의 상한이 따라간다.
+   * 여기서만 조이면 상한이 풀리는 즉시 원래 값이 되살아난다.
+   */
+  getEffectiveMaxConcurrentBets(): number {
+    return this.clampConcurrent(this.settings.maxConcurrentBets)
+  }
+
+  /**
+   * 🔒 계정 상한 구독 (중복 구독 방지: 이미 걸려 있으면 먼저 해제)
+   *
+   * 상한이 바뀌면 설정창의 최대값·프리셋·표시값이 전부 달라지므로 항상 상태변경을 발화한다.
+   * settings 자체는 건드리지 않는다 — 사용자 원본은 보존하고 실제 적용만 조인다.
+   */
+  private subscribeAccountLimits(): void {
+    this.accountLimitsUnsubscribe?.()
+    this.accountLimitsUnsubscribe = AccountLimitsService.onChange((limits) => {
+      const cap = limits.maxConcurrentBets
+      const userValue = this.settings.maxConcurrentBets
+      const effective = this.getEffectiveMaxConcurrentBets()
+
+      // 사용자에게 보이는 신호 — 콘솔은 사용자가 못 본다. 설정창 숫자가 소리 없이 바뀌면 버그로 오해한다.
+      if (cap !== null && cap > 0 && effective !== userValue) {
+        const running = this.getActiveBettingCount()
+        // 진행 중인 방(마틴/결과 대기)은 자기 슬롯이라 상한과 무관하게 끝까지 간다 — 강제 취소는 손실이 된다.
+        this.state.statusMessage = running > effective
+          ? `관리자 설정: 동시 배팅 최대 ${effective}개 — 진행 중인 ${running}개가 끝나면 반영됩니다`
+          : `관리자 설정: 동시 배팅 최대 ${effective}개로 조정되었습니다`
+        console.log(`[AutoMode] 🔒 계정 동시배팅 상한 ${cap}개 적용 (사용자 설정 ${userValue} → 실제 ${effective}, 원본은 보존)`)
+      }
+      this.emitStateChange()
+    })
   }
 
   private normalizeCustomBetSettings(): void {
@@ -843,7 +899,7 @@ class AutoModeServiceImpl {
     })
 
     const currentBetCount = this.getActiveBettingCount()
-    const maxBets = this.settings.maxConcurrentBets
+    const maxBets = this.getEffectiveMaxConcurrentBets()
     const maxDisplay = maxBets > 0 ? maxBets : '∞'
 
     // 🆕 실제 락 나이(2026-05-31): bettingInProgressSince 기준 가장 오래된 락의 경과초.
@@ -878,6 +934,12 @@ class AutoModeServiceImpl {
     const prevVirtualMode = this.settings.isVirtualMode
 
     this.settings = { ...this.settings, ...newSettings }
+
+    // 🔒 계정 상한 클램프 — 진짜 방어선은 UI가 아니라 여기다(다이얼로그를 우회한 호출도 통과 못 하게).
+    if (newSettings.maxConcurrentBets !== undefined) {
+      this.settings.maxConcurrentBets = this.clampConcurrent(this.settings.maxConcurrentBets)
+    }
+
     const maxMartinBeforeNormalization = this.settings.maxMartin
     this.normalizeCustomBetSettings()
     const normalizedMaxMartinChanged = this.settings.maxMartin !== maxMartinBeforeNormalization
@@ -1400,7 +1462,8 @@ class AutoModeServiceImpl {
 
     // 🔥 DEBUG: 모든 BettingPhase 이벤트 로깅
     const activeBetCount = this.getActiveBettingCount()
-    const maxBetsDebug = this.settings.maxConcurrentBets > 0 ? this.settings.maxConcurrentBets : '∞'
+    const effectiveMax = this.getEffectiveMaxConcurrentBets()
+    const maxBetsDebug = effectiveMax > 0 ? effectiveMax : '∞'
     console.log(`[AutoMode] 🎯 onBettingPhase - room: ${roomNameForDebug}, phase: ${phase}, remainingSeconds: ${remainingSeconds}, enabled: ${this.settings.enabled}, isVirtual: ${this.settings.isVirtualMode}, activeRooms: ${this.activeBettingRoomIds.size}, filter: ${this.currentPatternFilter}, 동시배팅: ${activeBetCount}/${maxBetsDebug}`)
 
     if (!this.settings.enabled) {
@@ -1435,7 +1498,7 @@ class AutoModeServiceImpl {
     //    마틴 이어치기/결과 대기 방은 자기 슬롯이므로 제한에서 예외(반드시 이어쳐야 함).
     const existingForThrottle = this.state.roomStates.get(roomId)
     const isMartinOrWaitingRebet = !!existingForThrottle && this.isProgressionActive(roomId, existingForThrottle)
-    const PREDICTION_CONCURRENCY = Math.max(this.settings.maxConcurrentBets + 6, 8)
+    const PREDICTION_CONCURRENCY = Math.max(this.getEffectiveMaxConcurrentBets() + 6, 8)
     if (!isMartinOrWaitingRebet && this.bettingInProgress.size >= PREDICTION_CONCURRENCY) {
       // 다음 페이즈/1초 연속배팅 타이머에서 재시도된다(슬롯이 비고 예측 부하가 내려가면 진입).
       const nowThrottle = Date.now()
@@ -1637,7 +1700,7 @@ class AutoModeServiceImpl {
       //     (즉, 한 번 들어간 방은 승리·마틴 종료 전까지 슬롯을 계속 잡는다.)
       //   - 신규 방은 점유된 슬롯 수가 maxConcurrentBets 미만일 때만 진입.
       const currentBetCount = this.getActiveBettingCount()
-      const maxBets = this.settings.maxConcurrentBets
+      const maxBets = this.getEffectiveMaxConcurrentBets()
       const isCurrentlyInMartin = isInProgressionRecovery
 
       // 게이트 기준 변경(2026-05-31): getActiveBettingCount가 락(자기 자신)을 더 이상 세지 않으므로
@@ -2024,7 +2087,8 @@ class AutoModeServiceImpl {
       roomState.wasVirtualBet = this.settings.isVirtualMode
       roomState.placementStatus = undefined
 
-      const maxBetsLog = this.settings.maxConcurrentBets > 0 ? this.settings.maxConcurrentBets : '∞'
+      const effectiveMaxLog = this.getEffectiveMaxConcurrentBets()
+      const maxBetsLog = effectiveMaxLog > 0 ? effectiveMaxLog : '∞'
       console.log(`[AutoMode] 🎰 배팅 시작: ${room.koreanName} (활성=${this.getActiveBettingCount()}/${maxBetsLog}개)`)
       // 🔬 커스텀 금액 검증용: 실제 적용된 전략·단계·금액을 남긴다(전략=custom인데 금액이 시퀀스와 다르면 배열 확인).
       this.feDiag(`BET-AMT room=${room.koreanName} strat=${this.resolveRoomProgressionStrategy(roomState)} lv=${roomState.martinLevel} amt=${betAmount} custom=[${(this.settings.customBetAmounts ?? []).slice(0, 16).join(',')}]`)
@@ -3231,6 +3295,11 @@ class AutoModeServiceImpl {
     this.state.maxProfit = 0
     this.state.maxLoss = 0
     this.clearInactiveModeStats()
+    // 🔒 계정 상한 구독은 해제 후 즉시 다시 건다. dispose는 테스트 해체뿐 아니라 App.tsx 로그아웃에서도
+    //   불리므로, 해제만 하면 같은 프로세스에서 재로그인했을 때 상한 변경이 반영되지 않는다.
+    this.accountLimitsUnsubscribe?.()
+    this.accountLimitsUnsubscribe = null
+    this.subscribeAccountLimits()
   }
 }
 
