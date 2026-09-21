@@ -1,0 +1,16 @@
+/*
+ * 앱에 동봉한 Pretendard 가변 폰트 (SIL OFL 1.1 — ./fonts/LICENSE-Pretendard.txt).
+ *
+ * 왜 로컬 번들인가: Tauri 배포판은 CSP `style-src 'self'`·`default-src 'self'`로
+ * CDN 스타일시트와 폰트 파일을 모두 차단한다. 예전처럼 jsDelivr @import 로 불러오면
+ * `tauri dev`(CSP 미적용)에서만 Pretendard 가 보이고, 배포판은 시스템 폰트로 떨어진다.
+ * macOS 는 폴백이 Apple SD Gothic Neo 라 티가 안 나지만, Windows 는 맑은 고딕
+ * (굵기 Regular/Bold 두 단계, 좁은 숫자)으로 떨어져 가독성이 크게 나빠진다.
+ */
+@font-face {
+  font-family: 'Pretendard Variable';
+  font-weight: 45 920;
+  font-style: normal;
+  font-display: swap;
+  src: url('./fonts/PretendardVariable.woff2') format('woff2-variations');
+}

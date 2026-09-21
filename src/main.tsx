@@ -1,5 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import './styles/fonts.css'
 import App from './App'
 import './styles/visual-refresh.css'
 import { setupContainer } from './application/di'

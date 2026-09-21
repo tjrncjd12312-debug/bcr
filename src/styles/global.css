@@ -2,9 +2,8 @@
 /* Aesthetic: graphite workspace, warm yellow action, locked baccarat colors */
 /* Version: 6.0 - accessibility refresh */
 
-/* Pretendard: 한글·라틴 가독성 우선 (오토배팅 사용자층은 한국 고령층). Inter는 라틴 보조용 폴백. */
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* Pretendard: 한글·라틴 가독성 우선 (오토배팅 사용자층은 한국 고령층).
+ * 폰트는 CDN 이 아니라 앱에 동봉 — src/styles/fonts.css (배포판 CSP 가 외부 스타일·폰트를 차단하므로). */
 
 :root {
   /* ===== Background Hierarchy — Graphite, visibly separated ===== */
